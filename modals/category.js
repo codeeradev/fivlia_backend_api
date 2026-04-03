@@ -29,10 +29,11 @@ const categorySchema = new mongoose.Schema({
   categoryId:String,
   image: String,
   description:String,
+  typeId:{ type: mongoose.Schema.Types.ObjectId, ref: "type", required: true },
   subcat: [subCategorySchema],
   attribute:[{type:String}],
   filter: [{_id: { type: mongoose.Schema.Types.ObjectId },Filter_name: { type: String },
- selected: [{_id: { type: mongoose.Schema.Types.ObjectId },name: { type: String }}],
+  selected: [{_id: { type: mongoose.Schema.Types.ObjectId },name: { type: String }}],
  }],
   status:{type:Boolean,default:true}
 });

@@ -30,6 +30,6 @@ const getAccessToken = async () => {
     return null;
   }
 };
-getAccessToken();
+// getAccessToken();
 
 module.exports = getAccessToken;
