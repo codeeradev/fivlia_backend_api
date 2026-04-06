@@ -1,9 +1,9 @@
 // middleware/typeCategoryResolver.js
 
 const mongoose = require("mongoose");
-const Category = require("../models/Category");
+const Category = require("../modals/category");
 
-exports.typeCategoryResolver = async (req, res, next) => {
+const typeCategoryResolver = async (req, res, next) => {
   try {
     const { typeId } = req.query;
 
@@ -62,3 +62,5 @@ exports.typeCategoryResolver = async (req, res, next) => {
     });
   }
 };
+
+module.exports = typeCategoryResolver;
