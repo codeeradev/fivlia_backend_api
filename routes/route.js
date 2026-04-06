@@ -432,7 +432,7 @@ router.get("/users", users);
 router.get("/getCity", getCity);
 router.get("/getAviableCity", getAviableCity);
 router.get("/categories", getCategories);
-router.get("/getBrand", getBrand);
+router.get("/getBrand", typeCategoryResolver, getBrand);
 router.get("/getAttributes", getAttributes);
 router.get("/getAttributesId/:id", getAttributesId);
 router.get("/getProducts", verifyToken, getProduct);

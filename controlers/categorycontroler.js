@@ -36,7 +36,6 @@ exports.update = async (req, res) => {
     if (req.files?.file?.[0]?.path) {
       updateData.file = req.files.file[0].path;
     }
-    // console.log("req.files:", req.files);
     const updatedCategory = await Category.findByIdAndUpdate(
       req.params.id,
       updateData,
@@ -46,7 +45,6 @@ exports.update = async (req, res) => {
     if (!updatedCategory) {
       return res.status(404).json({ message: "Category not found" });
     }
-    // console.log("updateData:", updatedCategory);
 
     return res.json(updatedCategory);
   } catch (error) {
@@ -103,7 +101,6 @@ exports.banner = async (req, res) => {
     let cityIds = Array.isArray(city) ? city : [city];
 
     const cityDoc = await ZoneData.find({ _id: { $in: cityIds } });
-    // console.log(cityDoc);
 
     let foundCategory = null;
     let foundSubCategory = null;
@@ -230,7 +227,6 @@ exports.getBanner = async (req, res) => {
 
     const user = await User.findById(userId).lean();
     if (!user || !user.location?.latitude || !user.location?.longitude) {
-      // console.log("❌ User location missing or incomplete");
       return res.status(400).json({ message: "User location not found" });
     }
 
@@ -251,36 +247,62 @@ exports.getBanner = async (req, res) => {
         }
       });
     });
-    // console.log("📍 Active Zone IDs:", activeZoneIds);
 
     // 🔎 Apply base filters
-    const filters = { status: true };
+    const bannerQuery = {
+      status: true,
+    };
+
     if (type) {
-      const validTypes = ["offer", "normal"];
-      if (!validTypes.includes(type)) {
-        return res.status(400).json({
-          message: 'Invalid banner type. Must be "offer" or "normal".',
-        });
-      }
-      filters.type = type;
+      bannerQuery.type = type;
     }
 
-    if (req.categoryIds?.length) {
-      filters["mainCategory._id"] = {
-        $in: req.categoryIds.map((id) => new mongoose.Types.ObjectId(id)),
-      };
-    }
+    const brands = await Brand.find({ typeId: req.typeId })
+      .select("_id")
+      .lean();
+    const stores = await Store.find({ typeId: req.typeId })
+      .select("_id")
+      .lean();
 
-    const allBanners = await Banner.find(filters)
-      .lean()
-      .sort({ createdAt: -1 });
+    const brandIds = brands.map((b) => b._id);
+    const storeIds = stores.map((s) => s._id);
+
+    const categoryObjectIds = (req.categoryIds || []).map(
+      (id) => new mongoose.Types.ObjectId(id),
+    );
+
+    const allBanners = await Banner.find({
+      status: true,
+      ...(type && { type }),
+
+      $or: [
+        // CATEGORY banners
+        {
+          type2: "Category",
+          "mainCategory._id": { $in: categoryObjectIds },
+        },
+
+        // BRAND banners
+        {
+          type2: "Brand",
+          "brand._id": { $in: brandIds },
+        },
+
+        // STORE banners
+        {
+          type2: "Store",
+          storeId: { $in: storeIds },
+        },
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
     const matchedBanners = await getBannersWithinRadius(
       userLat,
       userLng,
       allBanners,
     );
-    // console.log(matchedBanners)
-    // console.log("🎯 All banners fetched:", allBanners.length);
 
     let finalBanners = [...matchedBanners];
 
@@ -804,8 +826,6 @@ exports.brand = async (req, res) => {
     const image = rawImagePath ? `/${rawImagePath}` : "";
 
     if (!image) {
-      // console.log(image);
-
       return res.status(400).json({ message: "Image is required" });
     }
     const brandId = await getNextBrandId();
@@ -828,7 +848,7 @@ exports.brand = async (req, res) => {
 
 exports.getBrand = async (req, res) => {
   try {
-    const { id, page = 1, limit } = req.query;
+    const { id, page = 1, limit, admin } = req.query;
     const skip = (page - 1) * limit;
     // 🔍 If specific brand ID
     if (id) {
@@ -940,8 +960,17 @@ exports.getBrand = async (req, res) => {
       });
     }
 
+    const brandFilter = {};
+
+    if (req.typeId && admin!== true) {
+      console.log("i runned")
+      brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
+    }
     // 🔁 For all brands (no products or stock)
-    const brands = await brand.find({}).sort({ createdAt: -1 }).lean();
+    const brands = await brand
+      .find(brandFilter)
+      .sort({ createdAt: -1 })
+      .lean();
 
     const allBrands = [];
     const featuredBrands = [];

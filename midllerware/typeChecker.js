@@ -15,11 +15,12 @@ const typeCategoryResolver = async (req, res, next) => {
       });
     }
 
-    const category = await Category.findOne({
+    const category = await Category.find({
       typeId: typeId,
       status: true,
-    }).lean();
-
+    })
+      .select("_id subcat")
+      .lean();
     if (!category) {
       return res.status(400).json({
         message: "Category not found",
@@ -31,21 +32,24 @@ const typeCategoryResolver = async (req, res, next) => {
     const allCategoryIds = new Set();
 
     // main category
-    categoryIds.add(category._id.toString());
-    allCategoryIds.add(category._id.toString());
+    category.forEach((category) => {
+      // main category
+      categoryIds.add(category._id.toString());
+      allCategoryIds.add(category._id.toString());
 
-    // sub categories
-    (category.subcat || []).forEach((sub) => {
-      if (sub?._id) {
-        subCategoryIds.add(sub._id.toString());
-        allCategoryIds.add(sub._id.toString());
-      }
-
-      // subsub categories
-      (sub.subsubcat || []).forEach((subsub) => {
-        if (subsub?._id) {
-          allCategoryIds.add(subsub._id.toString());
+      // sub categories
+      (category.subcat || []).forEach((sub) => {
+        if (sub?._id) {
+          subCategoryIds.add(sub._id.toString());
+          allCategoryIds.add(sub._id.toString());
         }
+
+        // subsub categories
+        (sub.subsubcat || []).forEach((subsub) => {
+          if (subsub?._id) {
+            allCategoryIds.add(subsub._id.toString());
+          }
+        });
       });
     });
 

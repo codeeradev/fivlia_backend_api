@@ -103,6 +103,7 @@ exports.createStore = async (req, res) => {
       ownerName,
       PhoneNumber,
       email,
+      typeId,
       password,
       status,
       Description,
@@ -219,6 +220,7 @@ exports.createStore = async (req, res) => {
       Description,
       Category: finalCategoryIds,
       image,
+      typeId,
       products: products.map((p) => p._id),
       fivliaAssured: isAssured,
     });
@@ -261,6 +263,7 @@ exports.storeEdit = async (req, res) => {
       openTime,
       closeTime,
       isAssured,
+      typeId,
       Category: categoryInput,
     } = req.body;
 
@@ -304,6 +307,7 @@ exports.storeEdit = async (req, res) => {
     if (Latitude) updateObj.Latitude = parseFloat(Latitude);
     if (Longitude) updateObj.Longitude = parseFloat(Longitude);
 
+    if (typeId) updateObj.typeId = typeId;
     // ✅ Owner info
     if (ownerName) updateObj.ownerName = ownerName;
 
