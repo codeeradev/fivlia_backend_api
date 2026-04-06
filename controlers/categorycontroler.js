@@ -257,7 +257,7 @@ exports.getBanner = async (req, res) => {
       bannerQuery.type = type;
     }
 
-    const brands = await Brand.find({ typeId: req.typeId })
+    const brands = await brand.find({ typeId: req.typeId })
       .select("_id")
       .lean();
     const stores = await Store.find({ typeId: req.typeId })
