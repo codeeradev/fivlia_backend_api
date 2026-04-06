@@ -5,6 +5,7 @@ const brandSchema = new mongoose.Schema({
    brandLogo:String,
    brandId:String,
    description:String,
-   featured:Boolean
+   featured:Boolean,
+   typeId:{ type: mongoose.Schema.Types.ObjectId, ref: "type", required: true },
 },{timestamps:true})
 module.exports=mongoose.model('brand',brandSchema)

@@ -265,6 +265,12 @@ exports.getBanner = async (req, res) => {
       filters.type = type;
     }
 
+    if (req.categoryIds?.length) {
+      filters["mainCategory._id"] = {
+        $in: req.categoryIds.map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+
     const allBanners = await Banner.find(filters)
       .lean()
       .sort({ createdAt: -1 });
@@ -686,6 +692,7 @@ exports.editMainCategory = async (req, res) => {
 };
 
 exports.getCategories = async (req, res) => {
+  "-> need change";
   try {
     const { id } = req.query;
     const allCategories = await Category.find().lean();
@@ -792,7 +799,7 @@ exports.getCategories = async (req, res) => {
 
 exports.brand = async (req, res) => {
   try {
-    const { brandName, description, featured } = req.body;
+    const { brandName, description, featured, typeId } = req.body;
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const image = rawImagePath ? `/${rawImagePath}` : "";
 
@@ -808,6 +815,7 @@ exports.brand = async (req, res) => {
       brandLogo: image,
       description,
       featured,
+      typeId,
     });
     return res.status(200).json({ message: "sucess", newBrand });
   } catch (error) {
@@ -961,15 +969,19 @@ exports.getBrand = async (req, res) => {
 exports.editBrand = async (req, res) => {
   try {
     const { id } = req.params;
-    const { brandName, description, featured } = req.body;
+    const { brandName, description, featured, typeId } = req.body;
 
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const image = rawImagePath ? `/${rawImagePath}` : "";
-    const edit = await brand.updateOne(
-      { _id: id },
-      { brandName, featured, description, brandLogo: image },
-      { new: true },
-    );
+
+    const updateData = {};
+    if (typeId !== undefined) updateData.typeId = typeId;
+    if (brandName !== undefined) updateData.brandName = brandName;
+    if (description !== undefined) updateData.description = description;
+    if (featured !== undefined) updateData.featured = featured;
+    if (image) updateData.brandLogo = image;
+
+    const edit = await brand.updateOne({ _id: id }, updateData, { new: true });
 
     return res.status(200).json({ message: "Done", edit });
   } catch (error) {
@@ -983,7 +995,22 @@ exports.editBrand = async (req, res) => {
 exports.editCat = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    let { name, description, filter, attribute, status, typeId } = req.body;
+
+    const image = req.file ? req.file.filename : undefined;
+
+    if (filter) {
+      filter = JSON.parse(filter);
+
+      filter = filter.map((f) => ({
+        _id: f._id,
+        selected: (f.selected || []).map((val) => ({
+          _id: val,
+        })),
+      }));
+    }
+
+    if (attribute) attribute = JSON.parse(attribute);
 
     const mainCat = await Category.findOne({
       $or: [{ _id: id }, { "subcat._id": id }, { "subcat.subsubcat._id": id }],
@@ -996,7 +1023,14 @@ exports.editCat = async (req, res) => {
     let updated = false;
 
     if (mainCat._id.toString() === id) {
-      mainCat.status = status;
+      if (name !== undefined) mainCat.name = name;
+      if (description !== undefined) mainCat.description = description;
+      if (image !== undefined) mainCat.image = image;
+      if (filter !== undefined) mainCat.filter = filter;
+      if (attribute !== undefined) mainCat.attribute = attribute;
+      if (typeId !== undefined) mainCat.typeId = typeId;
+      if (status !== undefined) mainCat.status = status;
+
       updated = true;
     } else {
       for (let sub of mainCat.subcat) {
@@ -1174,14 +1208,14 @@ exports.addFiltersToCategory = async (req, res) => {
 
 exports.addMainCategory = async (req, res) => {
   try {
-    const { name, description, attribute, filter } = req.body;
+    const { name, description, attribute, typeId, filter } = req.body;
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const imagePath = rawImagePath ? `/${rawImagePath}` : "";
 
-    if (!name || !description || !imagePath) {
+    if (!name || !description || !imagePath || !typeId) {
       return res
         .status(400)
-        .json({ message: "Name, description and image are required" });
+        .json({ message: "Name, description, image and type ID are required" });
     }
 
     let parsedFilters = [];
@@ -1248,6 +1282,7 @@ exports.addMainCategory = async (req, res) => {
       description,
       image: imagePath,
       subcat: [],
+      typeId,
       status: true,
       attribute: setAttributes.map((attr) => attr.Attribute_name),
       filter: parsedFilters,
@@ -1349,6 +1384,7 @@ exports.addSubSubCategory = async (req, res) => {
 };
 
 exports.getMainCategory = async (req, res) => {
+  "->need change";
   try {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;

@@ -286,7 +286,9 @@ const { getPlaceSuggestions } = require("../utils/olaAutocomplete.js");
 const { trackMapUsage } = require("../controlers/mapUsageController.js");
 const { getSellerReport } = require("../controlers/reportController.js");
 
+const { getTypes } = require("../controlers/typeControler.js")
 
+router.get("/get-types", getTypes);
 router.get("/get-frenchise-enquiry",  getFrenchise);
 // reports apis
 router.get("/get-seller-report",  getSellerReport);
@@ -423,7 +425,7 @@ router.get("/getDriver", getDriver);
 router.get("/getIntro", getIntro);
 router.get("/getAllZone", getAllZone);
 router.get("/getZone", getZone);
-router.get("/getBanner", verifyToken, getBanner);
+router.get("/getBanner", verifyToken, typeCategoryResolver, getBanner);
 router.get("/getAllBanner", getAllBanner);
 router.get("/users", users);
 router.get("/getCity", getCity);
