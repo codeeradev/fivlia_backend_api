@@ -3,6 +3,7 @@ const upload = require("../midllerware/multer");
 const uploadCsv = require("../midllerware/csvUpload.js");
 const router = express.Router();
 const verifyToken = require("../midllerware/authToken");
+const typeCategoryResolver = require("../midllerware/typeCategoryResolver.js");
 const attachStaffRole = require("../midllerware/attachStaffRole.js");
 const checkPermission = require("../midllerware/checkPermission.js");
 
