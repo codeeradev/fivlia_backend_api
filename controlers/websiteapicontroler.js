@@ -1668,6 +1668,16 @@ exports.getAllSellerProducts = async (req, res) => {
   }
 };
 
+const hasMatchingSellerCategory = (store = {}, categoryIdSet = new Set()) => {
+  if (!categoryIdSet.size) return false;
+
+  return (store.sellerCategories || []).some(
+    (sellerCategory) =>
+      sellerCategory?.categoryId &&
+      categoryIdSet.has(sellerCategory.categoryId.toString())
+  );
+};
+
 exports.getTopSeller = async (req, res) => {
   const { lat, lng } = req.query;
   try {
@@ -1677,39 +1687,73 @@ exports.getTopSeller = async (req, res) => {
       : [];
 
     if (!allowedStores.length) {
-      return { error: "No stores found within the radius" };
+      return res.status(200).json({
+        storeDetailsWithRatings: [],
+      });
     }
 
-    const storeDetailsWithRatings = [];
+    const requestedCategoryIds = new Set(
+      (req.categoryIds || [])
+        .filter(Boolean)
+        .map((id) => id.toString())
+    );
 
-    for (const store of allowedStores) {
-      // skip if autorised store
-      if (store.Authorized_Store == true) {
-        continue;
+    const filteredStores = allowedStores.filter((store) => {
+      if (store.Authorized_Store === true) {
+        return false;
       }
 
-      // skip if not approved store
-      if (store.approveStatus != "approved") {
-        continue;
+      if (store.approveStatus !== "approved") {
+        return false;
       }
 
-      // Fetch ratings for the store
-      const ratings = await Rating.find({ storeId: store._id });
+      if (!req.typeId) {
+        return true;
+      }
 
-      // Calculate average rating
-      const averageRating =
-        ratings.reduce((sum, rating) => sum + rating.rating, 0) /
-        ratings.length || 0;
+      return hasMatchingSellerCategory(store, requestedCategoryIds);
+    });
 
-      // Construct store details with average rating
-      storeDetailsWithRatings.push({
+    if (!filteredStores.length) {
+      return res.status(200).json({
+        storeDetailsWithRatings: [],
+      });
+    }
+
+    const ratings = await Rating.find({
+      storeId: { $in: filteredStores.map((store) => store._id) },
+    }).lean();
+
+    const ratingsByStore = ratings.reduce((acc, rating) => {
+      const storeId = rating.storeId?.toString();
+      if (!storeId) return acc;
+
+      if (!acc[storeId]) {
+        acc[storeId] = { total: 0, count: 0 };
+      }
+
+      acc[storeId].total += rating.rating || 0;
+      acc[storeId].count += 1;
+      return acc;
+    }, {});
+
+    const storeDetailsWithRatings = filteredStores.map((store) => {
+      const ratingSummary = ratingsByStore[store._id.toString()] || {
+        total: 0,
+        count: 0,
+      };
+      const averageRating = ratingSummary.count
+        ? ratingSummary.total / ratingSummary.count
+        : 0;
+
+      return {
         storeName: store.storeName,
         storeId: store._id,
         image: store.image,
         averageRating: averageRating.toFixed(1),
         isAssured: store.fivliaAssured || false,
-      });
-    }
+      };
+    });
 
     // Sort stores by averageRating in descending order (highest to lowest)
     storeDetailsWithRatings.sort((a, b) => b.averageRating - a.averageRating);
