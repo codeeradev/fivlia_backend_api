@@ -1,8 +1,6 @@
 const Store = require("../modals/store");
 const seller = require("../modals/sellerModals/seller");
 const Stock = require("../modals/StoreStock");
-const admin = require("../firebase/firebase");
-const request = require("request");
 const Products = require("../modals/Product");
 const OtpModel = require("../modals/otp");
 const { sendVerificationEmail } = require("../config/nodeMailer");
@@ -12,7 +10,6 @@ const { ZoneData } = require("../modals/cityZone"); // your Locations model
 const crypto = require("crypto");
 const store_transaction = require("../modals/storeTransaction");
 const { SettingAdmin } = require("../modals/setting");
-const { whatsappOtp } = require("../config/whatsappsender");
 const { sendMessages } = require("../utils/sendMessages");
 // const sendVerificationEmail = require("../config/nodeMailer");
 
@@ -103,7 +100,6 @@ exports.createStore = async (req, res) => {
       ownerName,
       PhoneNumber,
       email,
-      typeId,
       password,
       status,
       Description,
@@ -220,7 +216,6 @@ exports.createStore = async (req, res) => {
       Description,
       Category: finalCategoryIds,
       image,
-      typeId,
       products: products.map((p) => p._id),
       fivliaAssured: isAssured,
     });
@@ -263,7 +258,6 @@ exports.storeEdit = async (req, res) => {
       openTime,
       closeTime,
       isAssured,
-      typeId,
       Category: categoryInput,
     } = req.body;
 
@@ -306,8 +300,6 @@ exports.storeEdit = async (req, res) => {
     // ✅ Latitude & Longitude
     if (Latitude) updateObj.Latitude = parseFloat(Latitude);
     if (Longitude) updateObj.Longitude = parseFloat(Longitude);
-
-    if (typeId) updateObj.typeId = typeId;
     // ✅ Owner info
     if (ownerName) updateObj.ownerName = ownerName;
 

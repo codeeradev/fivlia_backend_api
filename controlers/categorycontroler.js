@@ -713,8 +713,7 @@ exports.editMainCategory = async (req, res) => {
   }
 };
 
-exports.getCategories = async (req, res) => {
-  "-> need change";
+exports.getCategories = async (req, res) => {   "-> need change"
   try {
     const { id } = req.query;
     const allCategories = await Category.find().lean();
@@ -963,7 +962,6 @@ exports.getBrand = async (req, res) => {
     const brandFilter = {};
 
     if (req.typeId && admin!== true) {
-      console.log("i runned")
       brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
     }
     // 🔁 For all brands (no products or stock)
@@ -1412,8 +1410,7 @@ exports.addSubSubCategory = async (req, res) => {
   }
 };
 
-exports.getMainCategory = async (req, res) => {
-  "->need change";
+exports.getMainCategory = async (req, res) => { "->need change"
   try {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;

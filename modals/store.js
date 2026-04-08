@@ -32,7 +32,7 @@ const storeScheema = new mongoose.Schema(
     aadharCard: [String],
     panCard: [String],
     sellFood: { type: Boolean },
-    typeId:{type: mongoose.Schema.Types.ObjectId, ref: "type", required: true},
+    // typeId:{type: mongoose.Schema.Types.ObjectId, ref: "type", required: true},
     businessType: { type: String },
     fsiNumber: String,
     gstNumber: String,

@@ -459,7 +459,7 @@ router.get("/getDetailsGst", getDetailsGst);
 router.get("/seller-products", getAllSellerProducts);
 router.get("/products-count", getCategoryCounts);
 router.post("/save-contact-us", contactUs);
-router.get("/top-seller", getTopSeller);
+router.get("/top-seller", typeCategoryResolver, getTopSeller);
 
 router.get("/getTax", getTax);
 router.get("/completedOrders/:mobileNumber", completedOrders);
