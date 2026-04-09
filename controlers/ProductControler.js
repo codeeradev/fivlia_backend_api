@@ -33,78 +33,6 @@ const {
   resolveVariantSimple,
 } = require("../utils/ProductBulkUploadFunctions");
 
-const toObjectId = (id) =>
-  mongoose.Types.ObjectId.isValid(id)
-    ? new mongoose.Types.ObjectId(id)
-    : null;
-
-const getRequestedTypeFilter = (req) => {
-  const typeObjectId = toObjectId(req.typeId);
-  return typeObjectId ? { typeId: typeObjectId } : {};
-};
-
-const matchesRequestedType = (product, req) => {
-  if (!req.typeId) return true;
-  return product?.typeId?.toString() === req.typeId.toString();
-};
-
-const getAllowedCategoryIdsForStores = async (allowedStores = [], req = {}) => {
-  const allCategoryIds = new Set();
-  const storeCategoryIds = allowedStores.flatMap((store) =>
-    Array.isArray(store.Category)
-      ? store.Category.map((id) => id?.toString())
-      : store.Category
-      ? [store.Category.toString()]
-      : []
-  );
-
-  if (storeCategoryIds.length < 1) {
-    allowedStores.forEach((store) => {
-      store.sellerCategories?.forEach((category) => {
-        if (category?.categoryId) {
-          allCategoryIds.add(category.categoryId.toString());
-        }
-        category.subCategories?.forEach((sub) => {
-          if (sub?.subCategoryId) {
-            allCategoryIds.add(sub.subCategoryId.toString());
-          }
-          sub.subSubCategories?.forEach((subsub) => {
-            if (subsub?.subSubCategoryId) {
-              allCategoryIds.add(subsub.subSubCategoryId.toString());
-            }
-          });
-        });
-      });
-    });
-  } else {
-    const uniqueCategoryIds = [...new Set(storeCategoryIds.filter(Boolean))];
-    const categories = await Category.find({
-      _id: { $in: uniqueCategoryIds },
-    }).lean();
-
-    for (const cat of categories) {
-      allCategoryIds.add(cat._id.toString());
-      (cat.subcat || []).forEach((sub) => {
-        if (sub?._id) allCategoryIds.add(sub._id.toString());
-        (sub.subsubcat || []).forEach((subsub) => {
-          if (subsub?._id) allCategoryIds.add(subsub._id.toString());
-        });
-      });
-    }
-  }
-
-  const resolvedCategoryIds = [...allCategoryIds];
-  if (!req.typeId) {
-    return resolvedCategoryIds;
-  }
-
-  const requestedTypeCategoryIds = new Set(
-    (req.allCategoryIds || []).filter(Boolean).map((id) => id.toString())
-  );
-
-  return resolvedCategoryIds.filter((id) => requestedTypeCategoryIds.has(id));
-};
-
 exports.addAtribute = async (req, res) => {
   try {
     const { Attribute_name, varient } = req.body;
@@ -120,6 +48,7 @@ exports.addAtribute = async (req, res) => {
     return res.status(500).json({ message: "An error occured" });
   }
 };
+
 exports.editAttributes = async (req, res) => {
   try {
     const { id } = req.params;
@@ -584,21 +513,48 @@ exports.getProduct = async (req, res) => {
     }
 
     const allowedStoreIds = allowedStores.map((s) => s._id.toString());
-    console.time("CATEGORY_RESOLUTION");
-    const categoryArray = await getAllowedCategoryIdsForStores(
-      allowedStores,
-      req
-    );
-    console.timeEnd("CATEGORY_RESOLUTION");
 
-    if (!categoryArray.length) {
-      return res.status(200).json({
-        message: "No matching products found for your location.",
-        products: [],
-        filter: [],
-        count: 0,
+    const allCategoryIds = new Set();
+    let storeCategoryIds = allowedStores.flatMap((store) =>
+      Array.isArray(store.Category)
+        ? store.Category.map((id) => id?.toString())
+        : store.Category
+        ? [store.Category.toString()]
+        : []
+    );
+    console.time("CATEGORY_RESOLUTION");
+
+    if (storeCategoryIds.length < 1) {
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          if (category?.categoryId) allCategoryIds.add(category.categoryId);
+          category.subCategories?.forEach((sub) => {
+            if (sub?.subCategoryId) allCategoryIds.add(sub.subCategoryId);
+            sub.subSubCategories?.forEach((subsub) => {
+              if (subsub?.subSubCategoryId)
+                allCategoryIds.add(subsub.subSubCategoryId);
+            });
+          });
+        });
       });
+    } else {
+      const uniqueCategoryIds = [...new Set(storeCategoryIds)];
+      const categories = await Category.find({
+        _id: { $in: uniqueCategoryIds },
+      }).lean();
+      for (const cat of categories) {
+        allCategoryIds.add(cat._id.toString());
+        (cat.subcat || []).forEach((sub) => {
+          if (sub?._id) allCategoryIds.add(sub._id.toString());
+          (sub.subsubcat || []).forEach((subsub) => {
+            if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+          });
+        });
+      }
     }
+
+    const categoryArray = [...allCategoryIds];
+    console.timeEnd("CATEGORY_RESOLUTION");
 
     console.time("STOCK_QUERY");
     const stockDocs = await Stock.find({
@@ -630,7 +586,6 @@ exports.getProduct = async (req, res) => {
 
     // ✅ Build product query (include all products in allowed categories, regardless of stock)
     let productQuery = {
-      ...getRequestedTypeFilter(req),
       $or: [
         { "category._id": { $in: categoryArray } },
         { "subCategory._id": { $in: categoryArray } },
@@ -639,7 +594,9 @@ exports.getProduct = async (req, res) => {
     };
 
     if (id) {
-      const stringIdsSet = new Set(categoryArray.map((id) => id.toString()));
+      const stringIdsSet = new Set(
+        [...allCategoryIds].map((id) => id.toString())
+      );
       if (!stringIdsSet.has(id)) {
         return res.status(200).json({
           message: "No matching products found for your location.",
@@ -820,15 +777,46 @@ exports.bestSelling = async (req, res) => {
       });
     }
 
-    const categoryArray = await getAllowedCategoryIdsForStores(allowedStores, req);
-    const allowedStoreIds = allowedStores.map((s) => s._id.toString());
+    const allCategoryIds = new Set();
+    let categoryIds = allowedStores.flatMap((store) =>
+      Array.isArray(store.Category) ? store.Category : [store.Category]
+    );
 
-    if (!categoryArray.length) {
-      return res.status(200).json({
-        message: "No best-selling products found for your location.",
-        best: [],
+    if (categoryIds.length < 1) {
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          const catId = category.categoryId;
+          if (catId) allCategoryIds.add(catId);
+          category.subCategories?.forEach((subCat) => {
+            const subCatId = subCat.subCategoryId;
+            if (subCatId) allCategoryIds.add(subCatId);
+            subCat.subSubCategories?.forEach((subSubCat) => {
+              const subSubCatId = subSubCat.subSubCategoryId;
+              if (subSubCatId) allCategoryIds.add(subSubCatId);
+            });
+          });
+        });
       });
+    } else {
+      const uniqueCatIds = [
+        ...new Set(categoryIds.filter(Boolean).map((id) => id.toString())),
+      ];
+      const categories = await Category.find({
+        _id: { $in: uniqueCatIds },
+      }).lean();
+      for (const category of categories) {
+        allCategoryIds.add(category._id.toString());
+        for (const sub of category.subcat || []) {
+          if (sub?._id) allCategoryIds.add(sub._id.toString());
+          for (const subsub of sub.subsubcat || []) {
+            if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+          }
+        }
+      }
     }
+
+    const categoryArray = Array.from(allCategoryIds);
+    const allowedStoreIds = allowedStores.map((s) => s._id.toString());
 
     // ✅ Fetch stock for allowed stores
     const stockDocs = await Stock.find({
@@ -861,12 +849,15 @@ exports.bestSelling = async (req, res) => {
 
     // ✅ Fetch best-selling products
     const bestProducts = await Products.find({
-      ...getRequestedTypeFilter(req),
-      _id: { $in: Array.from(stockProductIds) },
-      $or: [
-        { "category._id": { $in: categoryArray } },
-        { "subCategory._id": { $in: categoryArray } },
-        { "subSubCategory._id": { $in: categoryArray } },
+      $and: [
+        { _id: { $in: Array.from(stockProductIds) } },
+        {
+          $or: [
+            { "category._id": { $in: categoryArray } },
+            { "subCategory._id": { $in: categoryArray } },
+            { "subSubCategory._id": { $in: categoryArray } },
+          ],
+        },
       ],
     })
       .sort({ purchases: -1 })
@@ -990,29 +981,48 @@ exports.searchProduct = async (req, res) => {
       ? stores.matchedStores
       : [];
 
-    if (!allowedStores.length) {
-      return res.status(200).json({
-        message: "Search results fetched successfully.",
-        products: [],
-        sellers: [],
-        count: 0,
-      });
-    }
-
     const allowedStoreIds = allowedStores.map((s) => s._id.toString());
 
-    const categoryIds = await getAllowedCategoryIdsForStores(allowedStores, req);
+    // 3️⃣ Collect all allowed category IDs
+    const allCategoryIds = new Set();
+    const storeCategoryIds = allowedStores.flatMap((store) =>
+      Array.isArray(store.Category)
+        ? store.Category.map((id) => id?.toString())
+        : store.Category
+        ? [store.Category.toString()]
+        : []
+    );
 
-    if (!categoryIds.length) {
-      return res.status(200).json({
-        message: "Search results fetched successfully.",
-        products: [],
-        sellers: [],
-        count: 0,
+    if (storeCategoryIds.length < 1) {
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          if (category?.categoryId) allCategoryIds.add(category.categoryId);
+          category.subCategories?.forEach((sub) => {
+            if (sub?.subCategoryId) allCategoryIds.add(sub.subCategoryId);
+            sub.subSubCategories?.forEach((subsub) => {
+              if (subsub?.subSubCategoryId)
+                allCategoryIds.add(subsub.subSubCategoryId);
+            });
+          });
+        });
       });
+    } else {
+      const uniqueCategoryIds = [...new Set(storeCategoryIds)];
+      const categories = await Category.find({
+        _id: { $in: uniqueCategoryIds },
+      }).lean();
+      for (const cat of categories) {
+        allCategoryIds.add(cat._id.toString());
+        (cat.subcat || []).forEach((sub) => {
+          if (sub?._id) allCategoryIds.add(sub._id.toString());
+          (sub.subsubcat || []).forEach((subsub) => {
+            if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+          });
+        });
+      }
     }
 
-    const categoryArray = categoryIds.map(
+    const categoryArray = [...allCategoryIds].map(
       (id) => new mongoose.Types.ObjectId(id)
     );
 
@@ -1073,7 +1083,6 @@ exports.searchProduct = async (req, res) => {
     pipeline.push({
       $match: {
         online_visible: true,
-        ...getRequestedTypeFilter(req),
         _id: {
           $in: Array.from(stockProductIds).map(
             (id) => new mongoose.Types.ObjectId(id)
@@ -1223,15 +1232,46 @@ exports.getFeatureProduct = async (req, res) => {
 
     const allowedStoreIds = allowedStores.map((store) => store._id.toString());
 
-    const categoryArray = await getAllowedCategoryIdsForStores(allowedStores, req);
+    // ✅ Collect all category IDs
+    const allCategoryIds = new Set();
+    let storeCategoryIds = allowedStores.flatMap((store) =>
+      Array.isArray(store.Category)
+        ? store.Category.map((id) => id?.toString())
+        : store.Category
+        ? [store.Category.toString()]
+        : []
+    );
 
-    if (!categoryArray.length) {
-      return res.status(200).json({
-        message: "No feature products found for your location.",
-        products: [],
-        count: 0,
+    if (storeCategoryIds.length < 1) {
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          if (category?.categoryId) allCategoryIds.add(category.categoryId);
+          category.subCategories?.forEach((sub) => {
+            if (sub?.subCategoryId) allCategoryIds.add(sub.subCategoryId);
+            sub.subSubCategories?.forEach((subsub) => {
+              if (subsub?.subSubCategoryId)
+                allCategoryIds.add(subsub.subSubCategoryId);
+            });
+          });
+        });
       });
+    } else {
+      const uniqueCategoryIds = [...new Set(storeCategoryIds)];
+      const categories = await Category.find({
+        _id: { $in: uniqueCategoryIds },
+      }).lean();
+      for (const cat of categories) {
+        allCategoryIds.add(cat._id.toString());
+        (cat.subcat || []).forEach((sub) => {
+          if (sub?._id) allCategoryIds.add(sub._id.toString());
+          (sub.subsubcat || []).forEach((subsub) => {
+            if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+          });
+        });
+      }
     }
+
+    const categoryArray = [...allCategoryIds];
 
     // ✅ Fetch stock for allowed stores
     const stockDocs = await Stock.find({
@@ -1250,7 +1290,6 @@ exports.getFeatureProduct = async (req, res) => {
 
     // ✅ Fetch featured products
     const products = await Products.find({
-      ...getRequestedTypeFilter(req),
       feature_product: true,
       $or: [
         { "category._id": { $in: categoryArray } },
@@ -2004,13 +2043,6 @@ exports.getRelatedProducts = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    if (!matchesRequestedType(product, req)) {
-      return res.status(200).json({
-        message: "Related Product",
-        relatedProducts: [],
-      });
-    }
-
     // Determine which category level to use
     let relatedCategoryIds = [];
     if (
@@ -2066,7 +2098,6 @@ exports.getRelatedProducts = async (req, res) => {
 
     // --- Get related candidates
     const candidates = await Products.find({
-      ...getRequestedTypeFilter(req),
       _id: { $ne: productId },
       $or: [
         { "subSubCategory._id": { $in: relatedCategoryIds } },
@@ -2310,6 +2341,7 @@ exports.adminProducts = async (req, res) => {
       tax: 1,
       status: 1,
       createdAt: 1,
+      typeId: 1,
     };
 
     // Get paginated products
@@ -2467,13 +2499,6 @@ exports.checkSimilarProduct = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    if (!matchesRequestedType(product, req)) {
-      return res.status(200).json({
-        message: "No matching products found for selected type.",
-        products: [],
-      });
-    }
-
     const finalProducts = [];
 
     // ✅ Loop through allowed store IDs and build products if stock exists
@@ -2587,10 +2612,6 @@ exports.getSingleProduct = async (req, res) => {
     product = await Products.findOne({ slug: slug }).lean();
 
     if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
-
-    if (!matchesRequestedType(product, req)) {
       return res.status(404).json({ message: "Product not found" });
     }
 
