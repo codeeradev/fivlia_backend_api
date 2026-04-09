@@ -257,7 +257,8 @@ exports.getBanner = async (req, res) => {
       bannerQuery.type = type;
     }
 
-    const brands = await brand.find({ typeId: req.typeId })
+    const brands = await brand
+      .find({ typeId: req.typeId })
       .select("_id")
       .lean();
     const stores = await Store.find({ typeId: req.typeId })
@@ -713,7 +714,8 @@ exports.editMainCategory = async (req, res) => {
   }
 };
 
-exports.getCategories = async (req, res) => {   "-> need change"
+exports.getCategories = async (req, res) => {
+  "-> need change";
   try {
     const { id } = req.query;
     const allCategories = await Category.find().lean();
@@ -961,14 +963,11 @@ exports.getBrand = async (req, res) => {
 
     const brandFilter = {};
 
-    if (req.typeId && admin!== true) {
+    if (req.typeId && admin !== true) {
       brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
     }
     // 🔁 For all brands (no products or stock)
-    const brands = await brand
-      .find(brandFilter)
-      .sort({ createdAt: -1 })
-      .lean();
+    const brands = await brand.find(brandFilter).sort({ createdAt: -1 }).lean();
 
     const allBrands = [];
     const featuredBrands = [];
@@ -1410,10 +1409,37 @@ exports.addSubSubCategory = async (req, res) => {
   }
 };
 
-exports.getMainCategory = async (req, res) => { "->need change"
+exports.getMainCategory = async (req, res) => {
+  "->need change";
   try {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;
+
+    if (req.typeId) {
+      const categories = await Category.find(
+        { _id: { $in: req.categoryIds } },
+        { subcat: 1 },
+      ).lean();
+
+      const subCategories = [];
+
+      categories.forEach((cat) => {
+        (cat.subcat || []).forEach((sub) => {
+          if (req.subCategoryIds.includes(sub._id.toString())) {
+            subCategories.push(sub);
+          }
+        });
+      });
+
+      return res.status(200).send({
+        message: "Success",
+        typeId: req.typeId,
+        limit,
+        currentPage: page,
+        totalSubCategories: subCategories.length,
+        result: subCategories,
+      });      
+    }
 
     // Get total categories for pagination
     const totalCategories = await Category.countDocuments();

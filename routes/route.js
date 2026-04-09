@@ -480,7 +480,7 @@ router.get("/getAddress", verifyToken, getAddress);
 router.get("/getStore", getStore);
 router.get("/relatedProduct/:productId", verifyToken, typeCategoryResolver, getRelatedProducts);
 router.get("/getFilter", getFilter);
-router.get("/getMainCategory", getMainCategory);
+router.get("/getMainCategory", typeCategoryResolver, getMainCategory);
 router.get("/getDeliveryEstimate", verifyToken, getDeliveryEstimate);
 router.get("/getDeliveryEstimateForWebsite", getDeliveryEstimateForWebsite);
 router.get("/send-test-notification", test);
