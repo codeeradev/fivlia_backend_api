@@ -28,6 +28,10 @@ const Charity = require("../modals/Charity");
 const CharityContent = require("../modals/charityContent");
 const Franchise = require("../modals/franchise");
 const Coupon = require("../modals/sellerCoupon");
+const {
+  filterProductsByRequestedType,
+  resolveRequestedTypeId,
+} = require("../utils/productTypeFilter");
 
 exports.forwebbestselling = async (req, res) => {
   try {
@@ -231,10 +235,15 @@ exports.forwebbestselling = async (req, res) => {
       return bQty - aQty;
     });
 
+    const filteredBestProducts = filterProductsByRequestedType(
+      enrichedBestProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Success",
-      best: enrichedBestProducts,
-      count: enrichedBestProducts.length,
+      best: filteredBestProducts,
+      count: filteredBestProducts.length,
     });
   } catch (error) {
     console.error("❌ bestSelling error:", error);
@@ -831,10 +840,15 @@ exports.forwebgetFeatureProduct = async (req, res) => {
       return bQty - aQty;
     });
 
+    const filteredProducts = filterProductsByRequestedType(
+      enrichedFeatureProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Feature products fetched successfully.",
-      products: enrichedFeatureProducts,
-      count: enrichedFeatureProducts.length,
+      products: filteredProducts,
+      count: filteredProducts.length,
     });
   } catch (error) {
     //console.error("❌ forwebgetFeatureProduct error:", error);
@@ -1062,11 +1076,13 @@ exports.forwebsearchProduct = async (req, res) => {
     }
 
     // Return with same structure (keys/values) as before
+    const filteredProducts = filterProductsByRequestedType(products, req);
+
     return res.status(200).json({
       message: "Search results fetched successfully.",
-      products,
+      products: filteredProducts,
       sellers,
-      count: products.length,
+      count: filteredProducts.length,
     });
   } catch (error) {
     console.error("Search API error:", error);
@@ -1181,9 +1197,14 @@ exports.forwebgetRelatedProducts = async (req, res) => {
       }
     }
 
+    const filteredRelatedProducts = filterProductsByRequestedType(
+      relatedProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Related Product",
-      relatedProducts,
+      relatedProducts: filteredRelatedProducts,
     });
   } catch (err) {
     console.error("❌ Error fetching related products (web):", err);
@@ -1524,6 +1545,8 @@ exports.getAllSellerProducts = async (req, res) => {
   const { id, page, limit } = req.query;
   const skip = (page - 1) * limit;
   try {
+    const requestedTypeId = resolveRequestedTypeId(req);
+
     // 1. Fetch Stock data for the seller using sellerId
     const stockData = await Stock.find({ storeId: id }).lean();
 
@@ -1559,6 +1582,10 @@ exports.getAllSellerProducts = async (req, res) => {
     }
 
     const productFilter = { _id: { $in: productIds } };
+
+    if (mongoose.Types.ObjectId.isValid(requestedTypeId)) {
+      productFilter.typeId = new mongoose.Types.ObjectId(requestedTypeId);
+    }
 
     const total = await Products.countDocuments(productFilter);
 
@@ -1650,11 +1677,16 @@ exports.getAllSellerProducts = async (req, res) => {
       sellerImages.unshift(activeOffer.sliderImage);
     }
 
+    const filteredProductsWithStock = filterProductsByRequestedType(
+      productsWithStock,
+      req
+    );
+
     return res.status(200).json({
       sellerImage: sellerImages,
       seller: seller,
       categories: categories,
-      products: productsWithStock,
+      products: filteredProductsWithStock,
       offerApplied: !!activeOffer,
       offer: activeOffer?.offer ?? null, // 👈 ADD THIS
       total,

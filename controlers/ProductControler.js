@@ -32,6 +32,9 @@ const {
   buildLocationArray,
   resolveVariantSimple,
 } = require("../utils/ProductBulkUploadFunctions");
+const {
+  filterProductsByRequestedType,
+} = require("../utils/productTypeFilter");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -711,7 +714,9 @@ exports.getProduct = async (req, res) => {
     });
 
     // ✅ Pagination
-    const paginatedProducts = enrichedProducts.slice(
+    const filteredProducts = filterProductsByRequestedType(enrichedProducts, req);
+
+    const paginatedProducts = filteredProducts.slice(
       skip,
       skip + Number(limit)
     );
@@ -730,10 +735,10 @@ exports.getProduct = async (req, res) => {
       message: "Products fetched successfully.",
       filter,
       products: paginatedProducts,
-      count: enrichedProducts.length,
+      count: filteredProducts.length,
       page: Number(page),
       limit: Number(limit),
-      totalPages: Math.ceil(enrichedProducts.length / limit),
+      totalPages: Math.ceil(filteredProducts.length / Number(limit)),
     });
   } catch (error) {
     console.error("❌ getProduct error:", error);
@@ -943,10 +948,15 @@ exports.bestSelling = async (req, res) => {
       enrichedBestProducts.push(enrichedProduct);
     }
 
+    const filteredBestProducts = filterProductsByRequestedType(
+      enrichedBestProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Success",
-      best: enrichedBestProducts,
-      count: enrichedBestProducts.length,
+      best: filteredBestProducts,
+      count: filteredBestProducts.length,
     });
   } catch (error) {
     console.error("❌ bestSelling error:", error);
@@ -1183,11 +1193,13 @@ exports.searchProduct = async (req, res) => {
       seller.averageRating = Number(avg.toFixed(1));
     });
 
+    const filteredProducts = filterProductsByRequestedType(products, req);
+
     return res.status(200).json({
       message: "Search results fetched successfully.",
-      products,
+      products: filteredProducts,
       sellers,
-      count: products.length,
+      count: filteredProducts.length,
     });
   } catch (error) {
     console.error("Server error:", error);
@@ -1394,7 +1406,9 @@ exports.getFeatureProduct = async (req, res) => {
     }
 
     // ✅ Pagination
-    const paginatedProducts = enrichedProducts.slice(
+    const filteredProducts = filterProductsByRequestedType(enrichedProducts, req);
+
+    const paginatedProducts = filteredProducts.slice(
       skip,
       skip + Number(limit)
     );
@@ -1402,8 +1416,8 @@ exports.getFeatureProduct = async (req, res) => {
     return res.status(200).json({
       message: "Feature products fetched successfully.",
       products: paginatedProducts,
-      count: enrichedProducts.length,
-      totalPages: Math.ceil(enrichedProducts.length / limit),
+      count: filteredProducts.length,
+      totalPages: Math.ceil(filteredProducts.length / Number(limit)),
       currentPage: Number(page),
       limit: Number(limit),
     });
@@ -2183,9 +2197,14 @@ exports.getRelatedProducts = async (req, res) => {
       }
     }
 
+    const filteredRelatedProducts = filterProductsByRequestedType(
+      relatedProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Related Product",
-      relatedProducts,
+      relatedProducts: filteredRelatedProducts,
     });
   } catch (err) {
     console.error("❌ Error fetching related products:", err);
@@ -2564,9 +2583,11 @@ exports.checkSimilarProduct = async (req, res) => {
       finalProducts.push(finalProduct);
     }
 
+    const filteredProducts = filterProductsByRequestedType(finalProducts, req);
+
     return res.status(200).json({
       message: "Similar product(s) from other sellers fetched successfully",
-      products: finalProducts,
+      products: filteredProducts,
     });
   } catch (error) {
     console.error("❌ Error in checkSimilarProduct:", error);

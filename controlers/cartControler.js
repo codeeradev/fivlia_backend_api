@@ -15,18 +15,24 @@ const {
   resolveDeliveryRatesForMode,
 } = require("../utils/deliveryCharge");
 const {
+  filterProductsByRequestedType,
+  resolveRequestedTypeId,
+} = require("../utils/productTypeFilter");
+const {
   isWithinZone,
   getZoneWindowConfig,
   getCurrentZoneWindowMode,
 } = require("../config/google");
 
 const getRequestedTypeFilter = (req) => {
-  if (!mongoose.Types.ObjectId.isValid(req.typeId)) {
+  const requestedTypeId = resolveRequestedTypeId(req);
+
+  if (!mongoose.Types.ObjectId.isValid(requestedTypeId)) {
     return {};
   }
 
   return {
-    typeId: new mongoose.Types.ObjectId(req.typeId),
+    typeId: new mongoose.Types.ObjectId(requestedTypeId),
   };
 };
 
@@ -536,9 +542,14 @@ exports.recommedProduct = async (req, res) => {
       { $project: { maxQuantity: 0 } }, // remove temporary field
     ]);
 
+    const filteredRecommendedProducts = filterProductsByRequestedType(
+      recommendedProducts,
+      req
+    );
+
     return res.status(200).json({
       message: "Recommended products fetched successfully",
-      relatedProducts: recommendedProducts,
+      relatedProducts: filteredRecommendedProducts,
     });
   } catch (error) {
     console.error("❌ Error in recommedProduct:", error);
