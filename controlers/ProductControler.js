@@ -187,6 +187,7 @@ exports.addProduct = async (req, res) => {
       unit,
       mrp,
       sell_price,
+      typeId,
       filter,
       returnProduct,
       isVeg,
@@ -435,6 +436,7 @@ exports.addProduct = async (req, res) => {
       ...(sellerId && { sellerId }),
       ...(returnProduct && { returnProduct: returnProductData }),
       ...(ribbon && { ribbon }),
+      ...(typeId && { typeId }),
       ...(unit && typeof unit === "string" && { unit: { name: unit } }),
       ...(brandObj && {
         brand_Name: { _id: brandObj._id, name: brandObj.brandName },
@@ -1426,6 +1428,7 @@ exports.unit = async (req, res) => {
       .json({ message: "An error occured!", error: error.message });
   }
 };
+
 exports.getUnit = async (req, res) => {
   try {
     const Units = await Unit.find();
@@ -1588,6 +1591,7 @@ exports.updateProduct = async (req, res) => {
       minQuantity,
       maxQuantity,
       ratings,
+      typeId,
       unit,
       mrp,
       sell_price,
@@ -1955,6 +1959,7 @@ exports.updateProduct = async (req, res) => {
       ...(productName && { productName }),
       ...(description && { description }),
       ...(rating && { rating }),
+      ...(typeId && { typeId }),
       ...(image && { productThumbnailUrl: image }),
       ...(MultipleImage.length && { productImageUrl: MultipleImage }),
       ...(productCategories.length && { category: productCategories }),

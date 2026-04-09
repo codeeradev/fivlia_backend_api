@@ -130,6 +130,7 @@ const productSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    typeId:{type: mongoose.Schema.Types.ObjectId, ref: "Types" },
   },
   { timestamps: true }
 );
