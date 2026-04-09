@@ -20,6 +20,16 @@ const {
   getCurrentZoneWindowMode,
 } = require("../config/google");
 
+const getRequestedTypeFilter = (req) => {
+  if (!mongoose.Types.ObjectId.isValid(req.typeId)) {
+    return {};
+  }
+
+  return {
+    typeId: new mongoose.Types.ObjectId(req.typeId),
+  };
+};
+
 exports.addCart = async (req, res) => {
   try {
     const userId = req.user;
@@ -379,6 +389,7 @@ exports.deleteCart = async (req, res) => {
 exports.recommedProduct = async (req, res) => {
   try {
     const userId = req.user._id;
+    const requestedTypeFilter = getRequestedTypeFilter(req);
 
     // 1️⃣ Get cart items
     const cartItems = await Cart.find({ userId }).lean();
@@ -390,10 +401,14 @@ exports.recommedProduct = async (req, res) => {
 
     const cartProducts = await Products.find({
       _id: { $in: cartProductIds },
+      ...requestedTypeFilter,
     }).lean();
 
     if (!cartProducts.length) {
-      return res.status(304).json({ message: "Cart products not found" });
+      return res.status(200).json({
+        message: "No recommended products found",
+        relatedProducts: [],
+      });
     }
 
     // 2️⃣ Get seller of first cart item
@@ -446,6 +461,7 @@ exports.recommedProduct = async (req, res) => {
     console.log("allowedCategoryIds", allowedCategoryIds);
     // 4️⃣ Build query to exclude products already in cart
     const matchQuery = {
+      ...requestedTypeFilter,
       _id: { $nin: cartProductIds },
       $or: [
         // { "subSubCategory._id": { $in: allowedCategoryIds } },
