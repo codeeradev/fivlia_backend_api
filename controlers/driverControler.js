@@ -624,7 +624,55 @@ exports.transactionList = async (req, res) => {
 exports.cancelOrders = async (req, res) => {
   try {
     const { driverId } = req.params;
-    const Canceled = await Assign.find({ driverId, orderStatus: "Rejected" });
+    const canceledAssignments = await Assign.find({
+      driverId,
+      orderStatus: "Rejected",
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const orderIds = canceledAssignments
+      .map((assignment) => assignment.orderId)
+      .filter(Boolean);
+
+    const orders = orderIds.length
+      ? await Order.find({ orderId: { $in: orderIds } })
+          .select(
+            "orderId items totalPrice deliveryCharges orderStatus createdAt",
+          )
+          .lean()
+      : [];
+
+    const orderMap = new Map(
+      orders.map((orderData) => [orderData.orderId, orderData]),
+    );
+
+    const Canceled = canceledAssignments.map((assignment) => {
+      const orderData = orderMap.get(assignment.orderId);
+
+      return {
+        ...assignment,
+        orderDetails: orderData
+          ? {
+              orderId: orderData.orderId,
+              createdAt: orderData.createdAt,
+              orderStatus: orderData.orderStatus,
+              totalPrice: orderData.totalPrice,
+              deliveryCharges: orderData.deliveryCharges,
+              items: (orderData.items || []).map((item) => ({
+                productId: item.productId,
+                varientId: item.varientId,
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price,
+                image: item.image,
+                gst: item.gst,
+              })),
+            }
+          : null,
+      };
+    });
+
     return res.status(200).json({ message: "Canceled Orders", Canceled });
   } catch (error) {
     console.error(error);
