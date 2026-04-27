@@ -35,6 +35,7 @@
     "pdfkit": "^0.17.1",
     "qrcode": "^1.5.4",
     "razorpay": "^2.9.6",
+    "redis": "^5.12.1",
     "request": "^2.88.2",
     "router": "^2.2.0",
     "slugify": "^1.6.6",

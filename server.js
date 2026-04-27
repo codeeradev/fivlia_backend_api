@@ -8,6 +8,9 @@ const http = require("http");
 const socketIo = require("socket.io");
 const registerDriverSocket = require("./socket/socket");
 const cors = require("cors");
+const {resumePendingDispatch} = require("./utils/resumePendingOrders");
+
+// require("./utils/telegram_logs");
 // const { initAgenda } = require('./config/agenda'); // ✅ your agenda setup
 require("./jobs/orderNotificationRetry");
 
@@ -44,8 +47,9 @@ const startServer = async () => {
 
   const PORT = process.env.PORT || 8080;
   const host = process.env.HOST || "localhost";
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`Server running at http://${host}:${PORT}`);
+    await resumePendingDispatch();
   });
 };
 

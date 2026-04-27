@@ -38,6 +38,12 @@ const {
   resolveDeliveryRatesForMode,
 } = require("../utils/deliveryCharge");
 const {
+  buildPlatformPushConfig,
+  CUSTOM_PUSH_SOUND,
+  DEFAULT_PUSH_SOUND,
+} = require("../utils/pushSoundConfig");
+
+const {
   generateAndSendThermalInvoice,
   generateStoreInvoiceId,
 } = require("../config/invoice");
@@ -52,6 +58,8 @@ const {
   verifyRazorpayPayment,
   getCommison,
 } = require("../utils/razorpayService");
+
+const telegramOrderLog = require("../utils/telegram_logs");
 
 const MAX_DISTANCE_METERS = 5000;
 const MAX_ATTEMPTS = 10; // retry 10 times (for example, every 30s = 5 minutes total)
@@ -373,6 +381,15 @@ exports.placeOrder = async (req, res) => {
         console.log(`${nextOrderId} stock deducted cart deleted`);
       }
       const sellerDoc = await Store.findById(storeId);
+    
+      await telegramOrderLog("📦 ORDER PLACED", {
+        orderId: newOrder.orderId,
+        userId: userId,
+        storeId: storeId,
+        storeName: sellerDoc?.storeName,
+        amount: newOrder.totalPrice,
+        paymentMode: "Cash On Delivery",
+      });
 
       if (sellerDoc) {
         await notifySeller(
@@ -384,6 +401,12 @@ exports.placeOrder = async (req, res) => {
         console.log(
           `${nextOrderId} notification started for seller-> ${sellerDoc.storeName}`,
         );
+
+        await telegramOrderLog("🏪 STORE NOTIFIED", {
+          orderId: newOrder.orderId,
+          storeId: sellerDoc._id,
+          storeName: sellerDoc.storeName,
+        });
         // repeatNotifyStore(newOrder.orderId, sellerDoc);
 
         const sellerSocket = sellerSocketMap.get(sellerDoc._id.toString());
@@ -415,7 +438,7 @@ exports.placeOrder = async (req, res) => {
           `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
           "/orders",
           {},
-          "default",
+          CUSTOM_PUSH_SOUND,
         );
       }
 
@@ -538,6 +561,13 @@ exports.verifyPayment = async (req, res) => {
 
     const finalOrder = await Order.create(orderData);
 
+    await telegramOrderLog("📦 ORDER PLACED", {
+      orderId: finalOrder.orderId,
+      userId: finalOrder.userId,
+      storeId: finalOrder.storeId,
+      amount: finalOrder.totalPrice,
+    });
+
     for (const item of tempOrder.items) {
       await stock.updateOne(
         {
@@ -578,7 +608,7 @@ exports.verifyPayment = async (req, res) => {
           `Order #${finalOrder.orderId} worth ₹${finalOrder.totalPrice} placed.`,
           "/orders",
           {},
-          "default",
+          CUSTOM_PUSH_SOUND,
         );
       }
 
@@ -882,7 +912,7 @@ exports.orderStatus = async (req, res) => {
               driverMobile: driverDoc.address?.mobileNo || "",
               storeName: storeData?.storeName || "Fivlia",
             },
-            "default",
+            DEFAULT_PUSH_SOUND,
           );
         }
 
@@ -897,7 +927,7 @@ exports.orderStatus = async (req, res) => {
               orderId: orderDoc.orderId,
               driverName: driverDoc.driverName,
             },
-            "default",
+            CUSTOM_PUSH_SOUND,
           );
         }
       }
@@ -915,6 +945,23 @@ exports.orderStatus = async (req, res) => {
     const updatedOrder = await Order.findByIdAndUpdate(id, updateData, {
       new: true,
     });
+
+    await telegramOrderLog("📦 ORDER STATUS UPDATED", {
+      orderId: updatedOrder.orderId,
+      status,
+      storeId: updatedOrder.storeId,
+    });
+
+    if (status === "Cancelled") {
+      const deleteAssignments = await Assign.deleteMany({
+        orderId: updatedOrder.orderId,
+        orderStatus: "Accepted",
+      });
+      console.log(
+        `Deleted ${deleteAssignments.deletedCount} Accepted assignments for cancelled order ${updatedOrder.orderId}`,
+      );
+    }
+
     if (!updatedOrder)
       return res.status(404).json({ message: "Order not found" });
     if (status === "Accepted") {
@@ -1028,7 +1075,7 @@ exports.orderStatus = async (req, res) => {
             `Driver delivered order #${updatedOrder.orderId}.`,
             "/dashboard1",
             { orderId: updatedOrder.orderId },
-            "default",
+            CUSTOM_PUSH_SOUND,
           );
         }
 
@@ -1057,7 +1104,7 @@ exports.orderStatus = async (req, res) => {
           orderId: updatedOrder.orderId,
           statusCode: statusInfo.statusCode,
         },
-        "default",
+        DEFAULT_PUSH_SOUND,
       );
     }
 
