@@ -2161,6 +2161,7 @@ exports.getRelatedProducts = async (req, res) => {
       query.isVeg = 1;
     }
 
+    
     const candidates = await Products.find(query).limit(20).lean();
 
     // --- Score & sort candidates
