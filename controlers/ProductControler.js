@@ -32,9 +32,7 @@ const {
   buildLocationArray,
   resolveVariantSimple,
 } = require("../utils/ProductBulkUploadFunctions");
-const {
-  filterProductsByRequestedType,
-} = require("../utils/productTypeFilter");
+const { filterProductsByRequestedType } = require("../utils/productTypeFilter");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -137,7 +135,7 @@ exports.AddVarient = async (req, res) => {
 
     // Check if variant already exists
     const existingIndex = varients.findIndex(
-      (v) => v.name.toLowerCase() === name.toLowerCase()
+      (v) => v.name.toLowerCase() === name.toLowerCase(),
     );
 
     if (existingIndex !== -1) {
@@ -237,7 +235,7 @@ exports.addProduct = async (req, res) => {
 
         for (const selId of selectedIds) {
           const selectedObj = filterDoc.Filter.find(
-            (f) => f._id.toString() === selId
+            (f) => f._id.toString() === selId,
           );
           if (selectedObj) {
             selectedArray.push({
@@ -304,7 +302,7 @@ exports.addProduct = async (req, res) => {
               for (let zoneObj of loc.zone) {
                 const zoneName = zoneObj.name;
                 const zoneMatch = cityData.zones.find(
-                  (zone) => zone.address === zoneName
+                  (zone) => zone.address === zoneName,
                 );
                 if (zoneMatch) {
                   matchedZones.push({
@@ -326,7 +324,7 @@ exports.addProduct = async (req, res) => {
 
     const categoryIds = categories.filter((c) => /^[0-9a-fA-F]{24}$/.test(c));
     const categoryNames = categories.filter(
-      (c) => !/^[0-9a-fA-F]{24}$/.test(c)
+      (c) => !/^[0-9a-fA-F]{24}$/.test(c),
     );
 
     const foundCategories = await Category.find({
@@ -341,7 +339,7 @@ exports.addProduct = async (req, res) => {
     const foundSubCategory =
       subCategory &&
       foundCategories[0]?.subcat?.find(
-        (sub) => sub.name === subCategory || sub._id.toString() === subCategory
+        (sub) => sub.name === subCategory || sub._id.toString() === subCategory,
       );
 
     const foundSubSubCategory =
@@ -349,7 +347,7 @@ exports.addProduct = async (req, res) => {
       foundSubCategory?.subsubcat?.find(
         (subsub) =>
           subsub.name === subSubCategory ||
-          subsub._id.toString() === subSubCategory
+          subsub._id.toString() === subSubCategory,
       );
 
     let returnProductData = null;
@@ -479,7 +477,7 @@ exports.addProduct = async (req, res) => {
 
 exports.getProduct = async (req, res) => {
   try {
-    const { id, page = 1, limit = 100 } = req.query;
+    const { id, page = 1, limit = 100, vegMode } = req.query;
     const skip = (page - 1) * limit;
     const userId = req.user._id;
 
@@ -522,8 +520,8 @@ exports.getProduct = async (req, res) => {
       Array.isArray(store.Category)
         ? store.Category.map((id) => id?.toString())
         : store.Category
-        ? [store.Category.toString()]
-        : []
+          ? [store.Category.toString()]
+          : [],
     );
     console.time("CATEGORY_RESOLUTION");
 
@@ -596,9 +594,14 @@ exports.getProduct = async (req, res) => {
       ],
     };
 
+    const isVegMode = vegMode === "true";
+    if (isVegMode) {
+      productQuery.isVeg = 1;
+    }
+
     if (id) {
       const stringIdsSet = new Set(
-        [...allCategoryIds].map((id) => id.toString())
+        [...allCategoryIds].map((id) => id.toString()),
       );
       if (!stringIdsSet.has(id)) {
         return res.status(200).json({
@@ -675,7 +678,7 @@ exports.getProduct = async (req, res) => {
       // ✅ Build inventory (zero if no variantOptions matched)
       finalProduct.inventory = product.variants.map((variant) => {
         const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString()
+          (opt) => opt.variantId.toString() === variant._id.toString(),
         );
         return {
           variantId: variant._id,
@@ -686,7 +689,7 @@ exports.getProduct = async (req, res) => {
       // ✅ Override variant prices if stock exists
       product.variants.forEach((variant) => {
         const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString()
+          (opt) => opt.variantId.toString() === variant._id.toString(),
         );
         if (match) {
           variant.sell_price = match.price;
@@ -714,11 +717,14 @@ exports.getProduct = async (req, res) => {
     });
 
     // ✅ Pagination
-    const filteredProducts = filterProductsByRequestedType(enrichedProducts, req);
+    const filteredProducts = filterProductsByRequestedType(
+      enrichedProducts,
+      req,
+    );
 
     const paginatedProducts = filteredProducts.slice(
       skip,
-      skip + Number(limit)
+      skip + Number(limit),
     );
 
     // ✅ Filters
@@ -751,8 +757,10 @@ exports.getProduct = async (req, res) => {
 
 exports.bestSelling = async (req, res) => {
   try {
+    const { vegMode } = req.query;
     const userId = req.user._id;
     // console.log("🔐 Authenticated User ID:", userId);
+    const isVegMode = vegMode === "true";
 
     // ✅ Get user location from DB
     const user = await User.findById(userId).lean();
@@ -784,7 +792,7 @@ exports.bestSelling = async (req, res) => {
 
     const allCategoryIds = new Set();
     let categoryIds = allowedStores.flatMap((store) =>
-      Array.isArray(store.Category) ? store.Category : [store.Category]
+      Array.isArray(store.Category) ? store.Category : [store.Category],
     );
 
     if (categoryIds.length < 1) {
@@ -848,12 +856,12 @@ exports.bestSelling = async (req, res) => {
     // ✅ Only include products that have stock
     const stockProductIds = new Set(
       stockDocs.flatMap((doc) =>
-        (doc.stock || []).map((item) => item.productId.toString())
-      )
+        (doc.stock || []).map((item) => item.productId.toString()),
+      ),
     );
 
     // ✅ Fetch best-selling products
-    const bestProducts = await Products.find({
+    const query = {
       $and: [
         { _id: { $in: Array.from(stockProductIds) } },
         {
@@ -864,7 +872,14 @@ exports.bestSelling = async (req, res) => {
           ],
         },
       ],
-    })
+    };
+
+    // ✅ Veg filter (DB level)
+    if (isVegMode) {
+      query.isVeg = 1;
+    }
+
+    const bestProducts = await Products.find(query)
       .sort({ purchases: -1 })
       .limit(10)
       .lean();
@@ -919,7 +934,7 @@ exports.bestSelling = async (req, res) => {
       // Inventory mapping
       enrichedProduct.inventory = product.variants.map((variant) => {
         const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString()
+          (opt) => opt.variantId.toString() === variant._id.toString(),
         );
         return { variantId: variant._id, quantity: match ? match.quantity : 0 };
       });
@@ -927,7 +942,7 @@ exports.bestSelling = async (req, res) => {
       // Update variant prices
       product.variants.forEach((variant) => {
         const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString()
+          (opt) => opt.variantId.toString() === variant._id.toString(),
         );
         if (match) {
           variant.sell_price = match.price;
@@ -950,7 +965,7 @@ exports.bestSelling = async (req, res) => {
 
     const filteredBestProducts = filterProductsByRequestedType(
       enrichedBestProducts,
-      req
+      req,
     );
 
     return res.status(200).json({
@@ -969,8 +984,10 @@ exports.bestSelling = async (req, res) => {
 
 exports.searchProduct = async (req, res) => {
   try {
-    const { name } = req.query;
+    const { name, vegMode } = req.query;
     const userId = req.user._id || req.user;
+
+    const isVegMode = vegMode === "true";
 
     // 1️⃣ Get user location
     const user = await User.findById(userId).lean();
@@ -999,8 +1016,8 @@ exports.searchProduct = async (req, res) => {
       Array.isArray(store.Category)
         ? store.Category.map((id) => id?.toString())
         : store.Category
-        ? [store.Category.toString()]
-        : []
+          ? [store.Category.toString()]
+          : [],
     );
 
     if (storeCategoryIds.length < 1) {
@@ -1033,7 +1050,7 @@ exports.searchProduct = async (req, res) => {
     }
 
     const categoryArray = [...allCategoryIds].map(
-      (id) => new mongoose.Types.ObjectId(id)
+      (id) => new mongoose.Types.ObjectId(id),
     );
 
     // 6️⃣ Fetch stock from allowed stores
@@ -1051,8 +1068,8 @@ exports.searchProduct = async (req, res) => {
     // Only products that have stock
     const stockProductIds = new Set(
       stockDocs.flatMap((doc) =>
-        (doc.stock || []).map((item) => item.productId.toString())
-      )
+        (doc.stock || []).map((item) => item.productId.toString()),
+      ),
     );
 
     // 5️⃣ Build aggregation pipeline using Atlas Search if name exists
@@ -1090,21 +1107,26 @@ exports.searchProduct = async (req, res) => {
       });
     }
 
-    pipeline.push({
-      $match: {
-        online_visible: true,
-        _id: {
-          $in: Array.from(stockProductIds).map(
-            (id) => new mongoose.Types.ObjectId(id)
-          ),
-        },
-        $or: [
-          { "category._id": { $in: categoryArray } },
-          { "subCategory._id": { $in: categoryArray } },
-          { "subSubCategory._id": { $in: categoryArray } },
-        ],
+    const matchStage = {
+      online_visible: true,
+      _id: {
+        $in: Array.from(stockProductIds).map(
+          (id) => new mongoose.Types.ObjectId(id),
+        ),
       },
-    });
+      $or: [
+        { "category._id": { $in: categoryArray } },
+        { "subCategory._id": { $in: categoryArray } },
+        { "subSubCategory._id": { $in: categoryArray } },
+      ],
+    };
+
+    // ✅ Veg filter
+    if (isVegMode) {
+      matchStage.isVeg = 1;
+    }
+
+    pipeline.push({ $match: matchStage });
 
     pipeline.push({ $limit: 100 });
 
@@ -1212,9 +1234,11 @@ exports.searchProduct = async (req, res) => {
 exports.getFeatureProduct = async (req, res) => {
   try {
     const userId = req.user._id; // Token logic untouched
-    const { page = 1, limit = 80 } = req.query;
+    const { page = 1, limit = 80, vegMode } = req.query;
+
     const skip = (page - 1) * limit;
 
+    const isVegMode = vegMode === "true";
     // ✅ Get user location
     const user = await User.findById(userId).lean();
     if (!user || !user.location?.latitude || !user.location?.longitude) {
@@ -1250,8 +1274,8 @@ exports.getFeatureProduct = async (req, res) => {
       Array.isArray(store.Category)
         ? store.Category.map((id) => id?.toString())
         : store.Category
-        ? [store.Category.toString()]
-        : []
+          ? [store.Category.toString()]
+          : [],
     );
 
     if (storeCategoryIds.length < 1) {
@@ -1301,15 +1325,21 @@ exports.getFeatureProduct = async (req, res) => {
     }
 
     // ✅ Fetch featured products
-    const products = await Products.find({
+    const query = {
       feature_product: true,
       $or: [
         { "category._id": { $in: categoryArray } },
         { "subCategory._id": { $in: categoryArray } },
         { "subSubCategory._id": { $in: categoryArray } },
       ],
-    }).lean();
+    };
 
+    // ✅ Veg filter (DB level)
+    if (isVegMode) {
+      query.isVeg = 1;
+    }
+
+    const products = await Products.find(query).lean();
     // ✅ Store lookup map
     const storeMap = {};
     allowedStores.forEach((store) => {
@@ -1371,7 +1401,7 @@ exports.getFeatureProduct = async (req, res) => {
         storeName: bestVariant.storeName,
         inventory: product.variants.map((variant) => {
           const match = variantOptions.find(
-            (opt) => opt.variantId.toString() === variant._id.toString()
+            (opt) => opt.variantId.toString() === variant._id.toString(),
           );
           return {
             variantId: variant._id,
@@ -1384,7 +1414,7 @@ exports.getFeatureProduct = async (req, res) => {
       // ✅ Override variant prices
       product.variants.forEach((variant) => {
         const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString()
+          (opt) => opt.variantId.toString() === variant._id.toString(),
         );
         if (match) {
           variant.sell_price = match.price;
@@ -1406,11 +1436,14 @@ exports.getFeatureProduct = async (req, res) => {
     }
 
     // ✅ Pagination
-    const filteredProducts = filterProductsByRequestedType(enrichedProducts, req);
+    const filteredProducts = filterProductsByRequestedType(
+      enrichedProducts,
+      req,
+    );
 
     const paginatedProducts = filteredProducts.slice(
       skip,
-      skip + Number(limit)
+      skip + Number(limit),
     );
 
     return res.status(200).json({
@@ -1656,7 +1689,7 @@ exports.updateProduct = async (req, res) => {
         } catch (err) {
           console.error(
             `❌ Error uploading ${key} to Cloudinary:`,
-            err.message
+            err.message,
           );
         }
       }
@@ -1681,7 +1714,7 @@ exports.updateProduct = async (req, res) => {
               } catch (innerErr) {
                 console.warn(
                   "❗ Error parsing filter inner string:",
-                  innerErr.message
+                  innerErr.message,
                 );
               }
             }
@@ -1689,7 +1722,7 @@ exports.updateProduct = async (req, res) => {
         } catch (outerErr) {
           console.warn(
             "❗ Error parsing filter outer string:",
-            outerErr.message
+            outerErr.message,
           );
         }
       } else if (Array.isArray(req.body.filter)) {
@@ -1723,7 +1756,7 @@ exports.updateProduct = async (req, res) => {
             continue;
           }
           const selectedObj = filterDoc.Filter.find(
-            (f) => f._id.toString() === selId.toString()
+            (f) => f._id.toString() === selId.toString(),
           );
           if (selectedObj) {
             selectedArray.push({
@@ -1732,7 +1765,7 @@ exports.updateProduct = async (req, res) => {
             });
           } else {
             console.warn(
-              `❗ Selected filter ID ${selId} not found in filter ${filterDoc.Filter_name}`
+              `❗ Selected filter ID ${selId} not found in filter ${filterDoc.Filter_name}`,
             );
           }
         }
@@ -1807,8 +1840,8 @@ exports.updateProduct = async (req, res) => {
 
           const matchedZones = cityData.zones.filter((z) =>
             zoneAddresses.some(
-              (addr) => addr.toLowerCase() === z.address.trim().toLowerCase()
-            )
+              (addr) => addr.toLowerCase() === z.address.trim().toLowerCase(),
+            ),
           );
 
           if (matchedZones.length === 0) {
@@ -1864,7 +1897,7 @@ exports.updateProduct = async (req, res) => {
 
     const categoryIds = categories.filter((c) => /^[0-9a-fA-F]{24}$/.test(c));
     const categoryNames = categories.filter(
-      (c) => !/^[0-9a-fA-F]{24}$/.test(c)
+      (c) => !/^[0-9a-fA-F]{24}$/.test(c),
     );
 
     const foundCategories = await Category.find({
@@ -1879,7 +1912,7 @@ exports.updateProduct = async (req, res) => {
     let foundSubCategory = null;
     if (subCategory && foundCategories.length > 0) {
       foundSubCategory = foundCategories[0].subcat?.find(
-        (sub) => sub.name === subCategory || sub._id.toString() === subCategory
+        (sub) => sub.name === subCategory || sub._id.toString() === subCategory,
       );
     }
 
@@ -1888,7 +1921,7 @@ exports.updateProduct = async (req, res) => {
       foundSubSubCategory = foundSubCategory.subsubcat?.find(
         (subsub) =>
           subsub.name === subSubCategory ||
-          subsub._id.toString() === subSubCategory
+          subsub._id.toString() === subSubCategory,
       );
     }
 
@@ -2036,7 +2069,10 @@ exports.updateProduct = async (req, res) => {
 exports.getRelatedProducts = async (req, res) => {
   try {
     const { productId } = req.params;
+    const { vegMode } = req.query;
     const userId = req.user?._id;
+
+    const isVegMode = vegMode === "true";
 
     if (!productId) {
       return res.status(400).json({ message: "Product ID is required" });
@@ -2048,7 +2084,7 @@ exports.getRelatedProducts = async (req, res) => {
       userId
         ? getStoresWithinRadius(
             req.user.location.latitude,
-            req.user.location.longitude
+            req.user.location.longitude,
           )
         : Promise.resolve({ matchedStores: [] }),
     ]);
@@ -2111,16 +2147,21 @@ exports.getRelatedProducts = async (req, res) => {
     }
 
     // --- Get related candidates
-    const candidates = await Products.find({
+    const query = {
       _id: { $ne: productId },
       $or: [
         { "subSubCategory._id": { $in: relatedCategoryIds } },
         { "subCategory._id": { $in: relatedCategoryIds } },
         { "category._id": { $in: relatedCategoryIds } },
       ],
-    })
-      .limit(20)
-      .lean();
+    };
+
+    // ✅ Veg filter
+    if (isVegMode) {
+      query.isVeg = 1;
+    }
+
+    const candidates = await Products.find(query).limit(20).lean();
 
     // --- Score & sort candidates
     const relatedProducts = candidates
@@ -2128,19 +2169,19 @@ exports.getRelatedProducts = async (req, res) => {
         let score = 0;
         if (
           (p.subSubCategory || []).some((c) =>
-            relatedCategoryIds.includes(String(c._id))
+            relatedCategoryIds.includes(String(c._id)),
           )
         )
           score = 3;
         else if (
           (p.subCategory || []).some((c) =>
-            relatedCategoryIds.includes(String(c._id))
+            relatedCategoryIds.includes(String(c._id)),
           )
         )
           score = 2;
         else if (
           (p.category || []).some((c) =>
-            relatedCategoryIds.includes(String(c._id))
+            relatedCategoryIds.includes(String(c._id)),
           )
         )
           score = 1;
@@ -2182,7 +2223,7 @@ exports.getRelatedProducts = async (req, res) => {
           }
           if (stockEntry?.quantity > 0 && stockEntry?.storeId) {
             const store = allowedStores.find(
-              (s) => s._id.toString() === stockEntry.storeId.toString()
+              (s) => s._id.toString() === stockEntry.storeId.toString(),
             );
             if (store) {
               relProduct.soldBy = store.soldBy;
@@ -2199,7 +2240,7 @@ exports.getRelatedProducts = async (req, res) => {
 
     const filteredRelatedProducts = filterProductsByRequestedType(
       relatedProducts,
-      req
+      req,
     );
 
     return res.status(200).json({
@@ -2259,7 +2300,7 @@ exports.updateStock = async (req, res) => {
       const index = storeStock.stock.findIndex(
         (s) =>
           s.productId.toString() === productId &&
-          s.variantId.toString() === item.variantId
+          s.variantId.toString() === item.variantId,
       );
 
       if (index !== -1) {
@@ -2456,7 +2497,7 @@ exports.checkSimilarProduct = async (req, res) => {
     // ✅ Exclude sellerid if provided
     if (sellerid) {
       allowedStores = allowedStores.filter(
-        (store) => store._id.toString() !== sellerid.toString()
+        (store) => store._id.toString() !== sellerid.toString(),
       );
     }
 
@@ -2471,7 +2512,7 @@ exports.checkSimilarProduct = async (req, res) => {
 
     // ✅ Build store map for quick access
     const storeMap = Object.fromEntries(
-      allowedStores.map((s) => [s._id.toString(), s])
+      allowedStores.map((s) => [s._id.toString(), s]),
     );
 
     // ✅ Fetch only stock entries for given product and allowed stores
@@ -2541,7 +2582,7 @@ exports.checkSimilarProduct = async (req, res) => {
 
       const updatedVariants = product.variants.map((variant) => {
         const match = variantsWithStock.find(
-          (v) => v.variantId.toString() === variant._id.toString()
+          (v) => v.variantId.toString() === variant._id.toString(),
         );
         return {
           ...variant,
@@ -2614,7 +2655,7 @@ exports.getSingleProduct = async (req, res) => {
     // ✅ Step 2: Get stores near user
     const { matchedStores = [] } = await getStoresWithinRadius(
       userLat,
-      userLng
+      userLng,
     );
     if (!matchedStores.length) {
       return res.status(200).json({
@@ -2625,7 +2666,7 @@ exports.getSingleProduct = async (req, res) => {
 
     const allowedStoreIds = matchedStores.map((s) => s._id.toString());
     const storeMap = Object.fromEntries(
-      matchedStores.map((s) => [s._id.toString(), s])
+      matchedStores.map((s) => [s._id.toString(), s]),
     );
 
     // ✅ Step 3: Find product (by ID or slug)
@@ -2695,7 +2736,7 @@ exports.getSingleProduct = async (req, res) => {
         : null,
       inventory: (product.variants || []).map((variant) => {
         const match = variantOptions.find(
-          (v) => v.variantId.toString() === variant._id.toString()
+          (v) => v.variantId.toString() === variant._id.toString(),
         );
         return {
           variantId: variant._id,
@@ -2797,8 +2838,8 @@ exports.bulkProductUpload = async (req, res) => {
         // load existing names
         const existingNames = new Set(
           (await Products.find({}, "productName")).map((p) =>
-            (p.productName || "").toLowerCase()
-          )
+            (p.productName || "").toLowerCase(),
+          ),
         );
 
         let rowNumber = 1;
