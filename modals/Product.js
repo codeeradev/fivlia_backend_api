@@ -55,6 +55,7 @@ const productSchema = new mongoose.Schema(
     tax: String,
     minQuantity: Number,
     type: String,
+    productType: {type:String, enum: ["gym", "healthy", "snacks"], default: "snacks"},
     maxQuantity: Number,
     unit: {
       _id: {

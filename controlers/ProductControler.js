@@ -194,6 +194,7 @@ exports.addProduct = async (req, res) => {
       returnProduct,
       isVeg,
       sellerId,
+      productType,
     } = req.body;
 
     const MultipleImage =
@@ -422,6 +423,7 @@ exports.addProduct = async (req, res) => {
       ...(productName && { productName }),
       ...(description && { description }),
       ...(rating && { rating }),
+      ...(productType && { productType }),
       ...(image && { productThumbnailUrl: image }),
       ...(MultipleImage.length && { productImageUrl: MultipleImage }),
       ...(productCategories.length && { category: productCategories }),
@@ -477,7 +479,7 @@ exports.addProduct = async (req, res) => {
 
 exports.getProduct = async (req, res) => {
   try {
-    const { id, page = 1, limit = 100, vegMode } = req.query;
+    const { id, page = 1, limit = 100, vegMode, productType } = req.query;
     const skip = (page - 1) * limit;
     const userId = req.user._id;
 
@@ -597,6 +599,10 @@ exports.getProduct = async (req, res) => {
     const isVegMode = vegMode === "true";
     if (isVegMode) {
       productQuery.isVeg = 1;
+    }
+
+    if (productType) {
+      productQuery.productType = productType;
     }
 
     if (id) {
@@ -757,7 +763,7 @@ exports.getProduct = async (req, res) => {
 
 exports.bestSelling = async (req, res) => {
   try {
-    const { vegMode } = req.query;
+    const { vegMode, productType } = req.query;
     const userId = req.user._id;
     // console.log("🔐 Authenticated User ID:", userId);
     const isVegMode = vegMode === "true";
@@ -879,6 +885,11 @@ exports.bestSelling = async (req, res) => {
       query.isVeg = 1;
     }
 
+    // ✅ Product type filter (DB level)
+    if (productType) {
+      query.productType = productType;
+    }
+
     const bestProducts = await Products.find(query)
       .sort({ purchases: -1 })
       .limit(10)
@@ -984,7 +995,7 @@ exports.bestSelling = async (req, res) => {
 
 exports.searchProduct = async (req, res) => {
   try {
-    const { name, vegMode } = req.query;
+    const { name, vegMode, productType } = req.query;
     const userId = req.user._id || req.user;
 
     const isVegMode = vegMode === "true";
@@ -1126,6 +1137,10 @@ exports.searchProduct = async (req, res) => {
       matchStage.isVeg = 1;
     }
 
+    if(productType) {
+      matchStage.productType = productType;
+    }
+
     pipeline.push({ $match: matchStage });
 
     pipeline.push({ $limit: 100 });
@@ -1234,7 +1249,7 @@ exports.searchProduct = async (req, res) => {
 exports.getFeatureProduct = async (req, res) => {
   try {
     const userId = req.user._id; // Token logic untouched
-    const { page = 1, limit = 80, vegMode } = req.query;
+    const { page = 1, limit = 80, vegMode, productType } = req.query;
 
     const skip = (page - 1) * limit;
 
@@ -1337,6 +1352,11 @@ exports.getFeatureProduct = async (req, res) => {
     // ✅ Veg filter (DB level)
     if (isVegMode) {
       query.isVeg = 1;
+    }
+
+    // ✅ Product type filter (DB level)
+    if (productType) {
+      query.productType = productType;
     }
 
     const products = await Products.find(query).lean();
@@ -1645,6 +1665,7 @@ exports.updateProduct = async (req, res) => {
       sell_price,
       status,
       returnProduct,
+      productType
     } = req.body;
 
     const MultipleImage =
@@ -2042,6 +2063,7 @@ exports.updateProduct = async (req, res) => {
       ...(mrp && { mrp }),
       ...(status && { status }),
       ...(sell_price && { sell_price }),
+      ...(productType && { productType }),
     };
 
     // console.log("🧾 Update data:", JSON.stringify(updateData, null, 2));
