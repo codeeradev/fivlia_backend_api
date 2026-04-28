@@ -820,6 +820,64 @@ exports.getCategories = async (req, res) => {
   }
 };
 
+
+exports.EditSubCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description } = req.body;
+
+    const image = `/${req.files.image?.[0].key}`;
+
+    // find parent category containing this subcategory
+    const parentCategory = await Category.findOne({
+      "subcat._id": new mongoose.Types.ObjectId(id),
+    });
+
+    if (!parentCategory) {
+      return res.status(404).json({
+        success: false,
+        message: "Subcategory not found",
+      });
+    }
+
+    const updateData = {};
+
+    if (name) updateData["subcat.$.name"] = name;
+    if (description) updateData["subcat.$.description"] = description;
+    if (image) updateData["subcat.$.image"] = image;
+
+    const updated = await Category.updateOne(
+      {
+        _id: parentCategory._id,
+        "subcat._id": new mongoose.Types.ObjectId(id),
+      },
+      {
+        $set: updateData,
+      },
+    );
+
+    if (updated.modifiedCount === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No changes detected",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Subcategory updated successfully",
+    });
+  } catch (error) {
+    console.error("Edit Category Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error updating subcategory",
+      error: error.message,
+    });
+  }
+};
+
 exports.brand = async (req, res) => {
   try {
     const { brandName, description, featured, typeId } = req.body;
