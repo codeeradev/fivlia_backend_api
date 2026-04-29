@@ -24,6 +24,11 @@ const {
   getCurrentZoneWindowMode,
 } = require("../config/google");
 
+const {
+  getActiveStoreOffer,
+  applyStoreOfferToPrice,
+} = require("../utils/storeOffer");
+
 const getRequestedTypeFilter = (req) => {
   const requestedTypeId = resolveRequestedTypeId(req);
 
@@ -150,6 +155,17 @@ exports.addCart = async (req, res) => {
     if (!price || !mrp) {
       return res.status(400).json({
         message: "Price/MRP could not be determined for the selected variant.",
+      });
+    }
+
+    const activeOffer = await getActiveStoreOffer(storeId);
+    const finalPrice = activeOffer
+      ? applyStoreOfferToPrice(price, activeOffer.offer)
+      : Math.round(Number(price));
+
+    if (finalPrice == null) {
+      return res.status(400).json({
+        message: "Price could not be determined for the selected variant.",
       });
     }
 
@@ -420,6 +436,9 @@ exports.recommedProduct = async (req, res) => {
     // 2️⃣ Get seller of first cart item
     const firstCartItem = cartItems[0];
     const seller = await Store.findById(firstCartItem.storeId).lean();
+
+    const activeOffer = await getActiveStoreOffer(seller._id);
+
     if (!seller) {
       return res.status(404).json({ message: "Seller not found" });
     }
@@ -544,12 +563,30 @@ exports.recommedProduct = async (req, res) => {
 
     const filteredRecommendedProducts = filterProductsByRequestedType(
       recommendedProducts,
-      req
+      req,
     );
+
+    const finalProducts = filteredRecommendedProducts.map((product) => {
+      if (!product.inventory) return product;
+
+      product.inventory = product.inventory.map((item) => {
+        const finalPrice = applyStoreOfferToPrice(
+          item.price,
+          activeOffer?.offer,
+        );
+
+        return {
+          ...item,
+          price: finalPrice ?? item.price,
+        };
+      });
+
+      return product;
+    });
 
     return res.status(200).json({
       message: "Recommended products fetched successfully",
-      relatedProducts: filteredRecommendedProducts,
+      relatedProducts: finalProducts,
     });
   } catch (error) {
     console.error("❌ Error in recommedProduct:", error);
@@ -558,5 +595,3 @@ exports.recommedProduct = async (req, res) => {
       .json({ message: "An error occurred!", error: error.message });
   }
 };
-
-
