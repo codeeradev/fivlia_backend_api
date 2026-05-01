@@ -1723,6 +1723,52 @@ exports.getTopSeller = async (req, res) => {
       });
     }
 
+      const storeIds = allowedStores.map((s) => s._id);
+
+    const topOffers = await Stock.aggregate([
+      {
+        $match: {
+          storeId: { $in: storeIds },
+        },
+      },
+      {
+        $unwind: "$stock",
+      },
+      {
+        $match: {
+          "stock.mrp": { $gt: 0 },
+          "stock.price": { $gt: 0 },
+        },
+      },
+      {
+        $addFields: {
+          discount: {
+            $multiply: [
+              {
+                $divide: [
+                  { $subtract: ["$stock.mrp", "$stock.price"] },
+                  "$stock.mrp",
+                ],
+              },
+              100,
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$storeId",
+          maxDiscount: { $max: "$discount" },
+        },
+      },
+    ]);
+
+    const offerMap = {};
+
+    topOffers.forEach((o) => {
+      offerMap[o._id.toString()] = o.maxDiscount.toFixed(1);
+    });
+
     const requestedCategoryIds = new Set(
       (req.categoryIds || []).filter(Boolean).map((id) => id.toString()),
     );
@@ -1795,6 +1841,9 @@ exports.getTopSeller = async (req, res) => {
         averageRating: averageRating.toFixed(1),
         isAssured: store.fivliaAssured || false,
         activeOffer, // 👈 added
+        topProductOffer: offerMap[store._id.toString()]
+          ? `${offerMap[store._id.toString()]}% OFF`
+          : null,
       };
     });
 
