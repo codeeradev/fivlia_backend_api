@@ -1723,7 +1723,7 @@ exports.getTopSeller = async (req, res) => {
       });
     }
 
-      const storeIds = allowedStores.map((s) => s._id);
+    const storeIds = allowedStores.map((s) => s._id);
 
     const topOffers = await Stock.aggregate([
       {
@@ -1834,6 +1834,9 @@ exports.getTopSeller = async (req, res) => {
 
       const activeOffer = offerByStore[store._id.toString()] || null;
 
+      const actualCount = ratings.length;
+      const ratingCount = actualCount === 0 ? 10 : actualCount;
+
       return {
         storeName: store.storeName,
         storeId: store._id,
@@ -1841,6 +1844,7 @@ exports.getTopSeller = async (req, res) => {
         averageRating: averageRating.toFixed(1),
         isAssured: store.fivliaAssured || false,
         activeOffer, // 👈 added
+        ratingCount: ratingCount,
         topProductOffer: offerMap[store._id.toString()]
           ? `${offerMap[store._id.toString()]}% OFF`
           : null,
