@@ -140,6 +140,7 @@ const {
   storeEdit,
   getStoreTransaction,
   getStoreCategory,
+  getStoreByCategory
 } = require("../controlers/storeControler");
 
 const {
@@ -443,6 +444,7 @@ router.get("/adminTranaction", adminTranaction);
 router.get("/getFeatureProduct", verifyToken, typeCategoryResolver, getFeatureProduct);
 router.get("/getStoreTransaction/:storeId", getStoreTransaction);
 router.get("/getStoreCategory", getStoreCategory);
+router.get("/getStoreByCategory/:categoryId", verifyToken, getStoreByCategory);
 router.get("/getDriverRequest", getDriverRequest);
 router.post("/get-driver-referral-seller", getDriverReferralSeller);
 router.post("/rate-driver", saveDriverRating);

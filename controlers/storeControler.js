@@ -3,12 +3,14 @@ const seller = require("../modals/sellerModals/seller");
 const Stock = require("../modals/StoreStock");
 const Products = require("../modals/Product");
 const OtpModel = require("../modals/otp");
+const User = require("../modals/User");
 const { sendVerificationEmail } = require("../config/nodeMailer");
 const { otpTemplate } = require("../utils/emailTemplates");
 const CategoryModel = require("../modals/category");
 const { ZoneData } = require("../modals/cityZone"); // your Locations model
 const crypto = require("crypto");
 const store_transaction = require("../modals/storeTransaction");
+const {getStoresWithinRadius} = require("../config/google");
 const { SettingAdmin } = require("../modals/setting");
 const { sendMessages } = require("../utils/sendMessages");
 // const sendVerificationEmail = require("../config/nodeMailer");
@@ -580,6 +582,38 @@ exports.getStoreCategory = async (req, res) => {
     return res
       .status(200)
       .json({ message: "Store Category", category, page, limit, count });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+exports.getStoreByCategory = async (req, res) => {
+  try {
+    const userId = req.user;
+    const { categoryId } = req.params;
+
+    const user = await User.findById(userId).lean();
+    if (!user || !user.location?.latitude || !user.location?.longitude) {
+      return res.status(400).json({ message: "User location not found" });
+    }
+
+    const userLat = user.location.latitude;
+    const userLng = user.location.longitude;
+
+const storeData = await getStoresWithinRadius(userLat, userLng);
+
+const storeIds = storeData.matchedStores.map((s) => s._id);
+    // 🔥 Apply BOTH filters
+    const stores = await Store.find({
+      _id: { $in: storeIds },
+      "sellerCategories.subCategories.subCategoryId": categoryId,
+    }).lean();
+
+    return res.status(200).json({
+      message: "Stores in category within range",
+      stores,
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Server error" });
