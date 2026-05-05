@@ -600,125 +600,145 @@ exports.recommedProduct = async (req, res) => {
 
 exports.getOffers = async (req, res) => {
   try {
-    const { cartId } = req.params;
+    let { cartIds } = req.body; // array expect karo
 
-    const cartItem = await Cart.findById(cartId).lean();
-
-    if (!cartItem) {
-      return res.status(404).json({ message: "Cart item not found." });
+    if (!Array.isArray(cartIds) || cartIds.length === 0) {
+      return res.status(400).json({ message: "cartIds array required" });
     }
 
-    const storeId = cartItem.storeId;
-    const productId = cartItem.productId;
+    const carts = await Cart.find({ _id: { $in: cartIds } }).lean();
 
-    let productOffer = await getActiveProductOffer(
+    if (!carts.length) {
+      return res.status(404).json({ message: "No carts found" });
+    }
+
+    const storeId = carts[0].storeId; // assume same store
+    const productIds = carts.map(c => c.productId);
+
+    const offers = await getActiveProductOffer(
       storeId,
       new Date(),
-      productId,
+      productIds
     );
 
-    if (!productOffer) {
-      return res.status(200).json({
-        message: "No active product offer found.",
-        productOffer: null,
+    // 🧠 Map offers per product
+    const offerMap = {};
+    offers.forEach(offer => {
+      offer.productId.forEach(pid => {
+        if (!offerMap[pid]) offerMap[pid] = [];
+        offerMap[pid].push({
+          _id: offer._id,
+          title: offer.title,
+          offer: offer.offer,
+        });
       });
-    }
-
-    productOffer = {
-      _id: productOffer._id,
-      title: productOffer.title,
-      offer: productOffer.offer,
-    }
+    });
 
     return res.status(200).json({
       message: "Offers fetched successfully",
-      cartCoupon: cartItem.couponId || null,
-      isCouponApplied: cartItem.isCouponApplied || false,
-      productOffer,
+      carts: carts.map(cart => ({
+        cartId: cart._id,
+        productId: cart.productId,
+        cartCoupon: cart.couponId || null,
+        isCouponApplied: cart.isCouponApplied || false,
+        offers: offerMap[cart.productId] || [],
+      })),
     });
+
   } catch (error) {
     console.error("❌ Error in getOffers:", error);
-    return res
-      .status(500)
-      .json({ message: "An error occurred!", error: error.message });
+    return res.status(500).json({
+      message: "An error occurred!",
+      error: error.message,
+    });
   }
 };
 
 exports.applyCoupon = async (req, res) => {
   try {
     const { removeOffer } = req.query;
-    const { cartId, couponId } = req.body;
+    const { cartIds, couponId } = req.body;
 
-    const cart = await Cart.findById(cartId);
-    if (!cart) {
-      return res.status(404).json({ message: "Cart not found" });
+    if (!Array.isArray(cartIds) || cartIds.length === 0) {
+      return res.status(400).json({ message: "cartIds array required" });
     }
 
+    const carts = await Cart.find({ _id: { $in: cartIds } });
+
+    if (!carts.length) {
+      return res.status(404).json({ message: "No carts found" });
+    }
+
+    // 🔴 REMOVE FLOW
     if (removeOffer === "true" || removeOffer === true) {
-      cart.couponId = null;
-      cart.discountAmount = 0;
-      cart.price = cart.originalPrice;
-      cart.originalPrice = null;
-      cart.isCouponApplied = false;
-      await cart.save();
+      for (let cart of carts) {
+        cart.couponId = null;
+        cart.discountAmount = 0;
+        cart.price = cart.originalPrice || cart.price;
+        cart.originalPrice = null;
+        cart.isCouponApplied = false;
+        await cart.save();
+      }
+
       return res.status(200).json({
-        message: "Coupon removed successfully",
-        cart,
+        message: "Coupons removed successfully",
+        carts,
       });
     }
 
     const coupon = await Coupon.findById(couponId);
+
     if (!coupon || !coupon.status || coupon.approvalStatus !== "approved") {
       return res.status(400).json({ message: "Invalid coupon" });
     }
 
-    // 🔴 Check expiry
     if (coupon.expireDate && coupon.expireDate < new Date()) {
       return res.status(400).json({ message: "Coupon expired" });
     }
 
-    // 🔴 Check product match (important)
-    if (
-      coupon.productId &&
-      coupon.productId.toString() !== cart.productId.toString()
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Coupon not valid for this product" });
-    }
-
-    if (cart.isCouponApplied === true) {
-      return res.status(400).json({
-        message:
-          "A coupon is already applied to this cart item. Please remove it before applying a new one.",
-      });
-    }
-    // 🔥 Calculate discount (assuming %)
-    let discount = 0;
-    const basePrice = cart.price;
-
     const percent = Number(coupon.offer);
-
     if (isNaN(percent)) {
       return res.status(400).json({ message: "Invalid coupon value" });
     }
 
-    discount = (basePrice * percent) / 100;
+    const updatedCarts = [];
 
-    const finalPrice = Math.max(0, basePrice - discount);
+    for (let cart of carts) {
+      // 🔥 skip if already applied
+      if (cart.isCouponApplied) continue;
 
-    // ✅ Update cart
-    cart.couponId = coupon._id;
-    cart.discountAmount = discount;
-    cart.originalPrice = cart.price;
-    cart.price = finalPrice;
-    cart.isCouponApplied = true;
-    await cart.save();
+      // 🔥 match productId inside coupon.productId array
+      const isValidProduct =
+        coupon.productId &&
+        coupon.productId.some(
+          pid => pid.toString() === cart.productId.toString()
+        );
+
+      if (!isValidProduct) continue;
+
+      const basePrice = cart.price;
+      const discount = (basePrice * percent) / 100;
+      const finalPrice = Math.max(0, basePrice - discount);
+
+      cart.couponId = coupon._id;
+      cart.discountAmount = discount;
+      cart.originalPrice = cart.price;
+      cart.price = finalPrice;
+      cart.isCouponApplied = true;
+
+      await cart.save();
+      updatedCarts.push(cart);
+    }
 
     return res.status(200).json({
       message: "Coupon applied successfully",
-      cart,
+      appliedOn: updatedCarts.map(c => c._id),
+      skipped: carts
+        .filter(c => !updatedCarts.find(u => u._id.equals(c._id)))
+        .map(c => c._id),
+      carts: updatedCarts,
     });
+
   } catch (error) {
     console.error("❌ Error applying coupon:", error);
     return res.status(500).json({ message: "Server error" });

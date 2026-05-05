@@ -1,13 +1,13 @@
 const Coupon = require("../modals/sellerCoupon");
 
-async function getActiveProductOffer(storeId, now = new Date(), productId) {
-  if (!storeId) return null;
+async function getActiveProductOffer(storeId, now, productIds = []) {
+  if (!storeId || !productIds.length) return [];
 
-  return Coupon.findOne({
+  return Coupon.find({
     storeId,
     status: true,
     approvalStatus: "approved",
-    productId,
+    productId: { $in: productIds }, // 🔥 array support
     expireDate: { $gte: now },
     $or: [
       { fromTo: { $exists: false } },
