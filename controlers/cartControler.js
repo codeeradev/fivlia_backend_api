@@ -7,6 +7,7 @@ const stock = require("../modals/StoreStock");
 const mongoose = require("mongoose");
 const haversine = require("haversine-distance");
 const Address = require("../modals/Address");
+const Coupon = require("../modals/sellerCoupon");
 const { SettingAdmin } = require("../modals/setting");
 const {
   getDistanceKm,
@@ -593,5 +594,128 @@ exports.recommedProduct = async (req, res) => {
     return res
       .status(500)
       .json({ message: "An error occurred!", error: error.message });
+  }
+};
+
+exports.getOffers = async (req, res) => {
+  try {
+    const { cartId } = req.params;
+
+    const cartItem = await Cart.findById(cartId).lean();
+
+    if (!cartItem) {
+      return res.status(404).json({ message: "Cart item not found." });
+    }
+
+    const storeId = cartItem.storeId;
+    const productId = cartItem.productId;
+
+    const productOffer = await getActiveProductOffer(
+      storeId,
+      new Date(),
+      productId,
+    );
+
+    if (!productOffer) {
+      return res.status(200).json({
+        message: "No active product offer found.",
+        productOffer: null,
+      });
+    }
+
+    return res.status(200).json({
+      message: "Offers fetched successfully",
+      cartCoupon: cartItem.couponId || null,
+      isCouponApplied: cartItem.isCouponApplied || false,
+      productOffer,
+    });
+  } catch (error) {
+    console.error("❌ Error in getOffers:", error);
+    return res
+      .status(500)
+      .json({ message: "An error occurred!", error: error.message });
+  }
+};
+
+exports.applyCoupon = async (req, res) => {
+  try {
+    const { removeOffer } = req.query;
+    const { cartId, couponId } = req.body;
+
+    const cart = await Cart.findById(cartId);
+    if (!cart) {
+      return res.status(404).json({ message: "Cart not found" });
+    }
+
+    if (removeOffer === "true" || removeOffer === true) {
+      cart.couponId = null;
+      cart.discountAmount = 0;
+      cart.price = cart.originalPrice;
+      cart.originalPrice = null;
+      cart.isCouponApplied = false;
+      await cart.save();
+      return res.status(200).json({
+        message: "Coupon removed successfully",
+        cart,
+      });
+    }
+
+    const coupon = await Coupon.findById(couponId);
+    if (!coupon || !coupon.status || coupon.approvalStatus !== "approved") {
+      return res.status(400).json({ message: "Invalid coupon" });
+    }
+
+    // 🔴 Check expiry
+    if (coupon.expireDate && coupon.expireDate < new Date()) {
+      return res.status(400).json({ message: "Coupon expired" });
+    }
+
+    // 🔴 Check product match (important)
+    if (
+      coupon.productId &&
+      coupon.productId.toString() !== cart.productId.toString()
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Coupon not valid for this product" });
+    }
+
+    if (cart.isCouponApplied === true) {
+      return res.status(400).json({
+        message:
+          "A coupon is already applied to this cart item. Please remove it before applying a new one.",
+      });
+    }
+    // 🔥 Calculate discount (assuming %)
+    let discount = 0;
+    const basePrice = cart.price;
+
+    // percent
+    if (coupon.offer.includes("%")) {
+      const percent = parseFloat(coupon.offer);
+      discount = (basePrice * percent) / 100;
+    } else {
+      // flat
+      discount = parseFloat(coupon.offer);
+    }
+
+    // 🔥 final per unit price
+    const finalPrice = basePrice - discount;
+
+    // ✅ Update cart
+    cart.couponId = coupon._id;
+    cart.discountAmount = discount;
+    cart.originalPrice = cart.price;
+    cart.price = finalPrice;
+    cart.isCouponApplied = true;
+    await cart.save();
+
+    return res.status(200).json({
+      message: "Coupon applied successfully",
+      cart,
+    });
+  } catch (error) {
+    console.error("❌ Error applying coupon:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };

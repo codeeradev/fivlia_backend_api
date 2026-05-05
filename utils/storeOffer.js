@@ -1,5 +1,24 @@
 const Coupon = require("../modals/sellerCoupon");
 
+async function getActiveProductOffer(storeId, now = new Date(), productId) {
+  if (!storeId) return null;
+
+  return Coupon.findOne({
+    storeId,
+    status: true,
+    approvalStatus: "approved",
+    productId,
+    expireDate: { $gte: now },
+    $or: [
+      { fromTo: { $exists: false } },
+      { fromTo: null },
+      { fromTo: { $lte: now } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+}
+
 async function getActiveStoreOffer(storeId, now = new Date()) {
   if (!storeId) return null;
 
@@ -36,4 +55,5 @@ function applyStoreOfferToPrice(price, offer) {
 module.exports = {
   getActiveStoreOffer,
   applyStoreOfferToPrice,
+  getActiveProductOffer
 };

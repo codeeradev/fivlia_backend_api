@@ -13,6 +13,13 @@ const cartSchema = new mongoose.Schema(
     varientId: { type: mongoose.Schema.ObjectId },
     userId: { type: mongoose.Schema.ObjectId, ref: "Login" },
     paymentOption: { type: Boolean },
+
+    //new keys for coupon
+    couponId: { type: mongoose.Schema.ObjectId, ref: "coupon" },
+    discountAmount: Number,
+    finalPrice: Number,
+    originalPrice: Number,
+    isCouponApplied: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

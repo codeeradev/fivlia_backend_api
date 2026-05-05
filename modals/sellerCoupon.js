@@ -7,6 +7,7 @@ const couponSchema = new mongoose.Schema(
     offer: String,
     title: String,
     limit: Number,
+    productId: { type: mongoose.Schema.ObjectId, ref: "products" },
     status: { type: Boolean, default: true },
     approvalStatus: {
       type: String,

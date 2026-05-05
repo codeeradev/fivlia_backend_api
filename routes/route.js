@@ -205,6 +205,8 @@ const {
   quantity,
   deleteCart,
   recommedProduct,
+  getOffers,
+  applyCoupon
 } = require("../controlers/cartControler");
 
 const {
@@ -417,6 +419,9 @@ router.get("/getSellerRequest", getSellerRequest);
 router.get("/getCategoryProduct", getCategoryProduct);
 
 router.get("/recommedProduct", verifyToken, typeCategoryResolver, recommedProduct);
+router.get("/get-offers/:cartId", getOffers);
+router.post("/apply-coupon", applyCoupon);
+
 router.get("/getSmsType", getSmsType);
 router.get("/getDashboardStats", getDashboardStats);
 router.get("/getWithdrawalRequest", getWithdrawalRequest);
