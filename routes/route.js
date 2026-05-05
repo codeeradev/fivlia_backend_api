@@ -419,7 +419,7 @@ router.get("/getSellerRequest", getSellerRequest);
 router.get("/getCategoryProduct", getCategoryProduct);
 
 router.get("/recommedProduct", verifyToken, typeCategoryResolver, recommedProduct);
-router.get("/get-offers", getOffers);
+router.post("/get-offers", getOffers);
 router.post("/apply-coupon", applyCoupon);
 
 router.get("/getSmsType", getSmsType);
