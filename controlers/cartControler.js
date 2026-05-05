@@ -690,18 +690,16 @@ exports.applyCoupon = async (req, res) => {
     let discount = 0;
     const basePrice = cart.price;
 
-    // percent
-    if (coupon.offer.includes("%")) {
-      const percent = parseFloat(coupon.offer);
-      discount = (basePrice * percent) / 100;
-    } else {
-      // flat
-      discount = parseFloat(coupon.offer);
+    const percent = Number(coupon.offer);
+
+    if (isNaN(percent)) {
+      return res.status(400).json({ message: "Invalid coupon value" });
     }
 
-    // 🔥 final per unit price
-    const finalPrice = basePrice - discount;
+    discount = (basePrice * percent) / 100;
 
+    const finalPrice = Math.max(0, basePrice - discount);
+    
     // ✅ Update cart
     cart.couponId = coupon._id;
     cart.discountAmount = discount;
