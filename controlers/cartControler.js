@@ -611,7 +611,7 @@ exports.getOffers = async (req, res) => {
     const storeId = cartItem.storeId;
     const productId = cartItem.productId;
 
-    const productOffer = await getActiveProductOffer(
+    let productOffer = await getActiveProductOffer(
       storeId,
       new Date(),
       productId,
@@ -622,6 +622,12 @@ exports.getOffers = async (req, res) => {
         message: "No active product offer found.",
         productOffer: null,
       });
+    }
+
+    productOffer = {
+      _id: productOffer._id,
+      title: productOffer.title,
+      offer: productOffer.offer,
     }
 
     return res.status(200).json({
