@@ -13,6 +13,7 @@ const store_transaction = require("../modals/storeTransaction");
 const { getStoresWithinRadius } = require("../config/google");
 const { SettingAdmin } = require("../modals/setting");
 const { sendMessages } = require("../utils/sendMessages");
+const Rating = require("../modals/rating");
 // const sendVerificationEmail = require("../config/nodeMailer");
 
 exports.storeLogin = async (req, res) => {
