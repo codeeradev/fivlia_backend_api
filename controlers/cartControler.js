@@ -8,6 +8,7 @@ const mongoose = require("mongoose");
 const haversine = require("haversine-distance");
 const Address = require("../modals/Address");
 const Coupon = require("../modals/sellerCoupon");
+const {getActiveProductOffer} = require("../utils/storeOffer");
 const { SettingAdmin } = require("../modals/setting");
 const {
   getDistanceKm,
@@ -699,7 +700,7 @@ exports.applyCoupon = async (req, res) => {
     discount = (basePrice * percent) / 100;
 
     const finalPrice = Math.max(0, basePrice - discount);
-    
+
     // ✅ Update cart
     cart.couponId = coupon._id;
     cart.discountAmount = discount;
