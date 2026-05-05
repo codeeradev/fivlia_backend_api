@@ -599,33 +599,71 @@ exports.getStoreByCategory = async (req, res) => {
       return res.status(400).json({ message: "User location not found" });
     }
 
-    const userLat = user.location.latitude;
-    const userLng = user.location.longitude;
+    const { latitude: userLat, longitude: userLng } = user.location;
 
     const storeData = await getStoresWithinRadius(userLat, userLng);
-
     const storeIds = storeData.matchedStores.map((s) => s._id);
 
-    if (all === "true" || all === true) {
-      const stores = await Store.find({
-        _id: { $in: storeIds },
-      }).lean();
+    // ✅ Fetch filtered stores
+    const stores = await Store.find({
+      _id: { $in: storeIds },
+      ...(all === "true"
+        ? {}
+        : {
+            "sellerCategories.subCategories.subCategoryId": categoryId,
+          }),
+    })
+      .select("_id storeName image fivliaAssured")
+      .lean();
 
+    if (!stores.length) {
       return res.status(200).json({
         message: "Stores in category within range",
-        stores,
+        stores: [],
       });
     }
 
-    // 🔥 Apply BOTH filters
-    const stores = await Store.find({
-      _id: { $in: storeIds },
-      "sellerCategories.subCategories.subCategoryId": categoryId,
+    // ✅ Fetch ratings
+    const ratings = await Rating.find({
+      storeId: { $in: stores.map((s) => s._id) },
     }).lean();
+
+    // ✅ Group ratings
+    const ratingsByStore = ratings.reduce((acc, r) => {
+      const id = r.storeId.toString();
+
+      if (!acc[id]) {
+        acc[id] = { total: 0, count: 0 };
+      }
+
+      acc[id].total += r.rating || 0;
+      acc[id].count += 1;
+
+      return acc;
+    }, {});
+
+    // ✅ Final response
+    const finalStores = stores.map((store) => {
+      const stats = ratingsByStore[store._id.toString()] || {
+        total: 0,
+        count: 0,
+      };
+
+      const avg = stats.count ? stats.total / stats.count : 0;
+
+      return {
+        storeId: store._id,
+        storeName: store.storeName,
+        image: store.image,
+        isAssured: store.fivliaAssured || false,
+        averageRating: avg.toFixed(1),
+        ratingCount: stats.count,
+      };
+    });
 
     return res.status(200).json({
       message: "Stores in category within range",
-      stores,
+      stores: finalStores,
     });
   } catch (error) {
     console.error(error);
