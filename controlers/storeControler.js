@@ -10,7 +10,7 @@ const CategoryModel = require("../modals/category");
 const { ZoneData } = require("../modals/cityZone"); // your Locations model
 const crypto = require("crypto");
 const store_transaction = require("../modals/storeTransaction");
-const {getStoresWithinRadius} = require("../config/google");
+const { getStoresWithinRadius } = require("../config/google");
 const { SettingAdmin } = require("../modals/setting");
 const { sendMessages } = require("../utils/sendMessages");
 // const sendVerificationEmail = require("../config/nodeMailer");
@@ -591,6 +591,7 @@ exports.getStoreCategory = async (req, res) => {
 exports.getStoreByCategory = async (req, res) => {
   try {
     const userId = req.user;
+    const { all } = req.query;
     const { categoryId } = req.params;
 
     const user = await User.findById(userId).lean();
@@ -601,9 +602,21 @@ exports.getStoreByCategory = async (req, res) => {
     const userLat = user.location.latitude;
     const userLng = user.location.longitude;
 
-const storeData = await getStoresWithinRadius(userLat, userLng);
+    const storeData = await getStoresWithinRadius(userLat, userLng);
 
-const storeIds = storeData.matchedStores.map((s) => s._id);
+    const storeIds = storeData.matchedStores.map((s) => s._id);
+
+    if (all === "true" || all === true) {
+      const stores = await Store.find({
+        _id: { $in: storeIds },
+      }).lean();
+
+      return res.status(200).json({
+        message: "Stores in category within range",
+        stores,
+      });
+    }
+
     // 🔥 Apply BOTH filters
     const stores = await Store.find({
       _id: { $in: storeIds },
