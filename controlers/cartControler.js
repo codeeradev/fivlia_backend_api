@@ -8,7 +8,7 @@ const mongoose = require("mongoose");
 const haversine = require("haversine-distance");
 const Address = require("../modals/Address");
 const Coupon = require("../modals/sellerCoupon");
-const {getActiveProductOffer} = require("../utils/storeOffer");
+const { getActiveProductOffer } = require("../utils/storeOffer");
 const { SettingAdmin } = require("../modals/setting");
 const {
   getDistanceKm,
@@ -613,18 +613,14 @@ exports.getOffers = async (req, res) => {
     }
 
     const storeId = carts[0].storeId; // assume same store
-    const productIds = carts.map(c => c.productId);
+    const productIds = carts.map((c) => c.productId);
 
-    const offers = await getActiveProductOffer(
-      storeId,
-      new Date(),
-      productIds
-    );
+    const offers = await getActiveProductOffer(storeId, new Date(), productIds);
 
     // 🧠 Map offers per product
     const offerMap = {};
-    offers.forEach(offer => {
-      offer.productId.forEach(pid => {
+    offers.forEach((offer) => {
+      offer.productId.forEach((pid) => {
         if (!offerMap[pid]) offerMap[pid] = [];
         offerMap[pid].push({
           _id: offer._id,
@@ -634,9 +630,20 @@ exports.getOffers = async (req, res) => {
       });
     });
 
+    const isCouponApplied = carts.some((cart) => cart.isCouponApplied === true);
+
+    // TRUE if any product has offer
+    const hasOffer = carts.some((cart) => {
+      const key = cart.productId.toString();
+      return offerMap[key] && offerMap[key].length > 0;
+    });
+
     return res.status(200).json({
       message: "Offers fetched successfully",
-      carts: carts.map(cart => ({
+      isCouponApplied,
+      noOffer: !hasOffer,
+
+      carts: carts.map((cart) => ({
         cartId: cart._id,
         productId: cart.productId,
         cartCoupon: cart.couponId || null,
@@ -644,7 +651,6 @@ exports.getOffers = async (req, res) => {
         offers: offerMap[cart.productId] || [],
       })),
     });
-
   } catch (error) {
     console.error("❌ Error in getOffers:", error);
     return res.status(500).json({
@@ -711,7 +717,7 @@ exports.applyCoupon = async (req, res) => {
       const isValidProduct =
         coupon.productId &&
         coupon.productId.some(
-          pid => pid.toString() === cart.productId.toString()
+          (pid) => pid.toString() === cart.productId.toString(),
         );
 
       if (!isValidProduct) continue;
@@ -732,13 +738,12 @@ exports.applyCoupon = async (req, res) => {
 
     return res.status(200).json({
       message: "Coupon applied successfully",
-      appliedOn: updatedCarts.map(c => c._id),
+      appliedOn: updatedCarts.map((c) => c._id),
       skipped: carts
-        .filter(c => !updatedCarts.find(u => u._id.equals(c._id)))
-        .map(c => c._id),
+        .filter((c) => !updatedCarts.find((u) => u._id.equals(c._id)))
+        .map((c) => c._id),
       carts: updatedCarts,
     });
-
   } catch (error) {
     console.error("❌ Error applying coupon:", error);
     return res.status(500).json({ message: "Server error" });
