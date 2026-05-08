@@ -381,7 +381,7 @@ exports.placeOrder = async (req, res) => {
         console.log(`${nextOrderId} stock deducted cart deleted`);
       }
       const sellerDoc = await Store.findById(storeId);
-    
+
       await telegramOrderLog("📦 ORDER PLACED", {
         orderId: newOrder.orderId,
         userId: userId,
@@ -1814,6 +1814,100 @@ exports.getTempOrders = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch temp orders",
+    });
+  }
+};
+
+exports.getRepeatedOrders = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // ✅ User ke orders fetch karo
+    const orders = await Order.find({ userId }).select("storeId");
+
+    // ✅ Store IDs extract
+    const storeIds = orders.map((order) => order.storeId.toString());
+
+    // ✅ Count repeated stores
+    const storeCount = {};
+
+    storeIds.forEach((id) => {
+      storeCount[id] = (storeCount[id] || 0) + 1;
+    });
+
+    // ✅ Sirf repeated stores
+    const repeatedStoreIds = Object.keys(storeCount).filter(
+      (id) => storeCount[id] > 1,
+    );
+
+    if (!repeatedStoreIds.length) {
+      return res.status(200).json({
+        success: true,
+        totalRepeatedSellers: 0,
+        sellers: [],
+      });
+    }
+
+    // ✅ Stores fetch
+    const sellers = await Store.find({
+      _id: { $in: repeatedStoreIds },
+    })
+      .select("_id storeName image fivliaAssured")
+      .lean();
+
+    // ✅ Ratings fetch
+    const ratings = await Rating.find({
+      storeId: { $in: repeatedStoreIds },
+    }).lean();
+
+    // ✅ Group ratings
+    const ratingsByStore = ratings.reduce((acc, r) => {
+      const id = r.storeId.toString();
+
+      if (!acc[id]) {
+        acc[id] = {
+          total: 0,
+          count: 0,
+        };
+      }
+
+      acc[id].total += r.rating || 0;
+      acc[id].count += 1;
+
+      return acc;
+    }, {});
+
+    // ✅ Final sellers response
+    const sellersWithCount = sellers.map((seller) => {
+      const stats = ratingsByStore[seller._id.toString()] || {
+        total: 0,
+        count: 0,
+      };
+
+      const avg = stats.count ? stats.total / stats.count : 0;
+
+      return {
+        storeId: seller._id,
+        storeName: seller.storeName,
+        image: seller.image,
+        isAssured: seller.fivliaAssured || false,
+        averageRating: avg.toFixed(1),
+        ratingCount: stats.count,
+        totalOrders: storeCount[seller._id.toString()],
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      totalRepeatedSellers: sellersWithCount.length,
+      sellers: sellersWithCount,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
     });
   }
 };

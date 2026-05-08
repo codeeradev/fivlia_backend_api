@@ -194,7 +194,8 @@ const {
   bulkOrder,
   getBulkOrders,
   updateBulkOrders,
-  markAllRead
+  markAllRead,
+  getRepeatedOrders
 } = require("../controlers/orderControler");
 
 const {
@@ -558,6 +559,7 @@ router.put("/editPage/:id", editPage);
 router.put("/updatePageStatus/:id", updatePageStatus);
 router.put("/editNotification/:id", upload, editNotification);
 router.put("/markAllRead", markAllRead);
+router.get("/get-repeated-orders", verifyToken, getRepeatedOrders);
 router.delete("/deleteNotification/:id", deleteNotification);
 
 router.post("/edit-category/:id", upload, EditSubCategory);
