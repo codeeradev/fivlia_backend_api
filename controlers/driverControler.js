@@ -592,6 +592,7 @@ exports.driverWallet = async (req, res) => {
     });
 
     if (checkTransaction) {
+      console.log(`Payout already processed for this order:${order.orderId}`);
       return res
         .status(200)
         .json({ message: "Payout already processed for this order" });
