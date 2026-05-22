@@ -10,7 +10,7 @@ const registerDriverSocket = require("./socket/socket");
 const cors = require("cors");
 const {resumePendingDispatch} = require("./utils/resumePendingOrders");
 
-// require("./utils/telegram_logs");
+require("./utils/telegram_logs");
 // const { initAgenda } = require('./config/agenda'); // ✅ your agenda setup
 require("./jobs/orderNotificationRetry");
 
