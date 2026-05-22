@@ -263,6 +263,8 @@ exports.driverOrderStatus = async (req, res) => {
         const storeBefore = await Store.findById(order.storeId).lean();
         const store = storeBefore; // just renaming for clarity
 
+        const setting = await SettingAdmin.findOne().lean();
+
         const totalCommission = order.items.reduce((sum, item) => {
           const itemTotal = item.price * item.quantity;
           const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
@@ -272,9 +274,26 @@ exports.driverOrderStatus = async (req, res) => {
         const itemTotal = order.items.reduce((sum, item) => {
           return sum + item.price * item.quantity;
         }, 0);
+
+        // 1. Apply the extra 5% tax only for food sellers and keep old commission flow unchanged.
+        const isFoodSellerTaxApplicable =
+          !store.Authorized_Store &&
+          (store?.sellFood === true ||
+            String(store?.businessType || "")
+              .trim()
+              .toUpperCase() === "FSSAI");
+
+        const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
+
+        const foodSellerTaxAmount = isFoodSellerTaxApplicable
+          ? (itemTotal * foodSellerTaxPercent) / 100
+          : 0;
+
+        const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
+
         let creditToStore = itemTotal;
         if (!store.Authorized_Store) {
-          creditToStore = itemTotal - totalCommission; // deduct commission
+          creditToStore = itemTotal - totalAdminDeduction; // deduct commission + food seller tax
         }
 
         // ===> Update Store Wallet
@@ -293,17 +312,19 @@ exports.driverOrderStatus = async (req, res) => {
           storeId: order.storeId,
           description: store.Authorized_Store
             ? "Full amount credited (Authorized Store)"
-            : `Credited after commission cut (${totalCommission} deducted)`,
+            : foodSellerTaxAmount > 0
+              ? `Credited after commission + food seller tax cut (${totalCommission.toFixed(2)} commission and ${foodSellerTaxAmount.toFixed(2)} tax deducted)`
+              : `Credited after commission cut (${totalCommission.toFixed(2)} deducted)`,
         });
         // console.log(data)
-        // ===> Update Admin Wallet only if commission > 0
-        if (!store.Authorized_Store && totalCommission > 0) {
+        // 2. Credit admin with the old commission plus the new food-seller tax in the same settlement step.
+        if (!store.Authorized_Store && totalAdminDeduction > 0) {
           const lastAmount = await admin_transaction
             .findById("68ea20d2c05a14a96c12788d")
             .lean();
           const updatedWallet = await admin_transaction.findByIdAndUpdate(
             "68ea20d2c05a14a96c12788d",
-            { $inc: { wallet: totalCommission } },
+            { $inc: { wallet: totalAdminDeduction } },
             { new: true },
           );
 
@@ -311,11 +332,61 @@ exports.driverOrderStatus = async (req, res) => {
             currentAmount: updatedWallet.wallet,
             lastAmount: lastAmount.wallet,
             type: "Credit",
-            amount: totalCommission,
+            amount: totalAdminDeduction,
             orderId: order.orderId,
-            description: "Commission credited to Admin wallet",
+            description:
+              foodSellerTaxAmount > 0
+                ? "Commission and food seller tax credited to Admin wallet"
+                : "Commission credited to Admin wallet",
           });
         }
+
+        const payout = order.deliveryPayout || 0;
+        const deliveryChargeRaw = order.deliveryCharges || 0;
+        const taxedAmount = Math.max(0, deliveryChargeRaw - payout);
+
+        if (!payout) {
+          console.warn("problem is drvier payout order status change");
+        }
+
+        // If you have order.driver.driverId, use that for more reliability
+        const updatedDriver = await driver.findOneAndUpdate(
+          { "address.mobileNo": order.driver.mobileNumber },
+          { $inc: { wallet: payout } },
+          { new: true },
+        );
+        if (!updatedDriver) {
+          console.warn(
+            "Driver not found while updating driver wallet order status change",
+          );
+        }
+
+        await Transaction.create({
+          driverId: updatedDriver._id,
+          type: "credit",
+          amount: payout,
+          orderId: order._id,
+          description: `Payout for Order #${order.orderId}`,
+        });
+
+        const lastAmount = await admin_transaction
+          .findById("68ea20d2c05a14a96c12788d")
+          .lean();
+
+        const updatedWallet = await admin_transaction.findByIdAndUpdate(
+          "68ea20d2c05a14a96c12788d",
+          { $inc: { wallet: taxedAmount } },
+          { new: true },
+        );
+
+        await admin_transaction.create({
+          currentAmount: updatedWallet.wallet,
+          lastAmount: lastAmount.wallet,
+          type: "Credit",
+          amount: taxedAmount,
+          orderId: order.orderId,
+          description: "Delivery Charge GST credited to Admin wallet",
+        });
 
         // ===> Generate Store Invoice ID
         const storeInvoiceId = await generateStoreInvoiceId(order.storeId);
@@ -328,6 +399,9 @@ exports.driverOrderStatus = async (req, res) => {
             storeInvoiceId,
             feeInvoiceId,
             deliverStatus: true,
+            // 3. Save the food-seller tax snapshot so seller invoice always matches the delivered settlement.
+            foodSellerTaxPercent,
+            foodSellerTaxAmount,
           },
           { new: true },
         );
@@ -342,11 +416,6 @@ exports.driverOrderStatus = async (req, res) => {
         await OtpModel.deleteOne({ _id: otpRecord._id });
         await Assign.deleteOne({ orderId: orderId, orderStatus: "Accepted" });
 
-        // if (activeIntervals.has(orderId)) {
-        //   clearInterval(activeIntervals.get(orderId));
-        //   activeIntervals.delete(orderId);
-        //   console.log(`🛑 Stopped location interval for order ${orderId}`);
-        // }
         // ✅ Generate Thermal Invoice
         try {
           await generateAndSendThermalInvoice(orderId);
@@ -362,12 +431,11 @@ exports.driverOrderStatus = async (req, res) => {
                 title: "Order Delivered 🎉",
                 body: `Your order #${orderId} has been delivered successfully.`,
               },
-              android: {
-                notification: {
-                  channelId: "default_channel",
-                  sound: "default",
-                },
-              },
+              ...buildPlatformPushConfig(
+                "Order Delivered 🎉",
+                `Your order #${orderId} has been delivered successfully.`,
+                DEFAULT_PUSH_SOUND,
+              ),
               data: {
                 type: "delivered",
                 orderId: orderId.toString(),
@@ -387,12 +455,11 @@ exports.driverOrderStatus = async (req, res) => {
                 title: "Order Delivered 🎉",
                 body: `Driver delivered order #${orderId}.`,
               },
-              android: {
-                notification: {
-                  channelId: "default_channel",
-                  sound: "default",
-                },
-              },
+              ...buildPlatformPushConfig(
+                "Order Delivered 🎉",
+                `Driver delivered order #${orderId}.`,
+                CUSTOM_PUSH_SOUND,
+              ),
               data: {
                 type: "delivered",
                 orderId: orderId.toString(),
