@@ -109,7 +109,7 @@ exports.getFoodSeller = async (req, res) => {
       Authorized_Store: false,
     })
       .select(
-        "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes",
+        "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
       )
       .lean();
 
