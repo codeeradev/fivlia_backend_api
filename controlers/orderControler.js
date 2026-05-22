@@ -19,7 +19,7 @@ const sendNotification = require("../firebase/pushnotification");
 const Store = require("../modals/store");
 const Rating = require("../modals/rating");
 const DriverRating = require("../modals/DriverRating");
-
+const Transaction = require("../modals/driverModals/transaction");
 const AdminStaff = require("../modals/roleBase/adminStaff");
 const {
   getStoresWithinRadius,
@@ -994,6 +994,7 @@ exports.orderStatus = async (req, res) => {
         const storeBefore = await Store.findById(updatedOrder.storeId).lean();
         const store = storeBefore;
 
+        const setting = await SettingAdmin.findOne().lean();
         // 🧮 Calculate Commission from Items
         const totalCommission = updatedOrder.items.reduce((sum, item) => {
           const itemTotal = item.price * item.quantity;
@@ -1005,10 +1006,26 @@ exports.orderStatus = async (req, res) => {
           return sum + item.price * item.quantity;
         }, 0);
 
+        // 1. Apply the extra 5% tax only for food sellers and keep the existing commission logic as-is.
+        const isFoodSellerTaxApplicable =
+          !store.Authorized_Store &&
+          (store?.sellFood === true ||
+            String(store?.businessType || "")
+              .trim()
+              .toUpperCase() === "FSSAI");
+
+        const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
+
+        const foodSellerTaxAmount = isFoodSellerTaxApplicable
+          ? (itemTotal * foodSellerTaxPercent) / 100
+          : 0;
+
+        const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
+
         // 🏦 Credit Store Wallet
         let creditToStore = itemTotal;
         if (!store.Authorized_Store) {
-          creditToStore = itemTotal - totalCommission;
+          creditToStore = itemTotal - totalAdminDeduction;
         }
 
         const storeData = await Store.findByIdAndUpdate(
@@ -1027,19 +1044,19 @@ exports.orderStatus = async (req, res) => {
           storeId: updatedOrder.storeId,
           description: store.Authorized_Store
             ? "Full amount credited (Authorized Store)"
-            : `Credited after commission cut (${totalCommission.toFixed(
-                2,
-              )} deducted)`,
+            : foodSellerTaxAmount > 0
+              ? `Credited after commission + food seller tax cut (${totalCommission.toFixed(2)} commission and ${foodSellerTaxAmount.toFixed(2)} tax deducted)`
+              : `Credited after commission cut (${totalCommission.toFixed(2)} deducted)`,
         });
 
-        // 🏛️ Credit Admin Wallet (only if commission exists)
-        if (!store.Authorized_Store && totalCommission > 0) {
+        // 2. Credit admin with the old commission plus the new food-seller tax in one delivered settlement.
+        if (!store.Authorized_Store && totalAdminDeduction > 0) {
           const lastAmount = await admin_transaction
             .findById("68ea20d2c05a14a96c12788d")
             .lean();
           const updatedWallet = await admin_transaction.findByIdAndUpdate(
             "68ea20d2c05a14a96c12788d",
-            { $inc: { wallet: totalCommission } },
+            { $inc: { wallet: totalAdminDeduction } },
             { new: true },
           );
 
@@ -1047,11 +1064,61 @@ exports.orderStatus = async (req, res) => {
             currentAmount: updatedWallet.wallet,
             lastAmount: lastAmount.wallet,
             type: "Credit",
-            amount: totalCommission,
+            amount: totalAdminDeduction,
             orderId: updatedOrder.orderId,
-            description: "Commission credited to Admin wallet",
+            description:
+              foodSellerTaxAmount > 0
+                ? "Commission and food seller tax credited to Admin wallet"
+                : "Commission credited to Admin wallet",
           });
         }
+
+        const payout = updatedOrder.deliveryPayout || 0;
+        const deliveryChargeRaw = updatedOrder.deliveryCharges || 0;
+        const taxedAmount = Math.max(0, deliveryChargeRaw - payout);
+
+        if (!payout) {
+          console.warn("problem is drvier payout order status change");
+        }
+
+        // If you have order.driver.driverId, use that for more reliability
+        const updatedDriver = await driver.findOneAndUpdate(
+          { "address.mobileNo": updatedOrder.driver.mobileNumber },
+          { $inc: { wallet: payout } },
+          { new: true },
+        );
+        if (!updatedDriver) {
+          console.warn(
+            "Driver not found while updating driver wallet order status change",
+          );
+        }
+
+        await Transaction.create({
+          driverId: updatedDriver._id,
+          type: "credit",
+          amount: payout,
+          orderId: updatedOrder._id,
+          description: `Payout for Order #${updatedOrder.orderId}`,
+        });
+
+        const lastAmount = await admin_transaction
+          .findById("68ea20d2c05a14a96c12788d")
+          .lean();
+
+        const updatedWallet = await admin_transaction.findByIdAndUpdate(
+          "68ea20d2c05a14a96c12788d",
+          { $inc: { wallet: taxedAmount } },
+          { new: true },
+        );
+
+        await admin_transaction.create({
+          currentAmount: updatedWallet.wallet,
+          lastAmount: lastAmount.wallet,
+          type: "Credit",
+          amount: taxedAmount,
+          orderId: updatedOrder.orderId,
+          description: "Delivery Charge GST credited to Admin wallet",
+        });
 
         let storeInvoiceId;
         let feeInvoiceId;
@@ -1071,17 +1138,27 @@ exports.orderStatus = async (req, res) => {
           feeInvoiceId,
           deliverBy: "admin",
           deliverStatus: true,
+          // 3. Save the food-seller tax snapshot so invoice data stays locked after delivery.
+          foodSellerTaxPercent,
+          foodSellerTaxAmount,
         });
 
         if (store?.fcmTokenMobile) {
-          await sendNotification(
-            store.fcmTokenMobile,
-            "Order Delivered 🎉",
-            `Driver delivered order #${updatedOrder.orderId}.`,
-            "/dashboard1",
-            { orderId: updatedOrder.orderId },
-            CUSTOM_PUSH_SOUND,
-          );
+          try {
+            await sendNotification(
+              store.fcmTokenMobile,
+              "Order Delivered 🎉",
+              `Driver delivered order #${updatedOrder.orderId}.`,
+              "/dashboard1",
+              { orderId: updatedOrder.orderId },
+              CUSTOM_PUSH_SOUND,
+            );
+          } catch (err) {
+            console.warn(
+              "⚠️ Store delivered notification failed order status change:",
+              err.response?.data?.error?.message || err.message,
+            );
+          }
         }
 
         try {

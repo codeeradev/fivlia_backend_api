@@ -35,6 +35,8 @@ const orderSchema = new mongoose.Schema(
     note: String,
     driver: { driverId: String, name: String, mobileNumber: String },
     deliverStatus: { type: Boolean, default: false },
+    foodSellerTaxPercent: { type: Number, default: 0 },
+    foodSellerTaxAmount: { type: Number, default: 0 },
     notifyAttempts: {
       type: Number,
       default: 0,
