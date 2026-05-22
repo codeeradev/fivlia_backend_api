@@ -79,6 +79,7 @@ const TempOrderSchema = new mongoose.Schema(
     deliveryCharges: Number,
     deliveryDistanceKm: Number,
     platformFee: Number,
+    instructions: String,
     cartIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "carts" }],
   },
   { timestamps: true },

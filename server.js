@@ -34,11 +34,13 @@ const io = socketIo(server, {
 registerDriverSocket(io);
 
 const routes = require("./routes/route");
+const foodRoutes = require("./routes/foodRoute");
 app.get("/", (req, res) => {
   res.send("Fivlia api is running ...");
 });
 app.use("/fivlia", routes);
 app.use("/", routes);
+app.use("/food", foodRoutes);
 
 const startServer = async () => {
   const mongoConnection = await connectDb();

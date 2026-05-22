@@ -165,7 +165,7 @@ const notifySeller = async (
 
 exports.placeOrder = async (req, res) => {
   try {
-    const { cartIds, addressId, storeId, paymentMode } = req.body;
+    const { cartIds, addressId, instructions, storeId, paymentMode } = req.body;
 
     if (!cartIds?.length || !addressId || !storeId) {
       console.log(
@@ -353,6 +353,7 @@ exports.placeOrder = async (req, res) => {
         paymentStatus: "Successful",
         cashOnDelivery,
         totalPrice,
+        instructions,
         userId,
         storeId,
         deliveryPayout: totalDeliveryCharge,
@@ -471,6 +472,7 @@ exports.placeOrder = async (req, res) => {
         addressId,
         totalPrice,
         storeId,
+        instructions,
         paymentStatus: "Pending",
         cashOnDelivery,
         cartIds,
@@ -547,6 +549,7 @@ exports.verifyPayment = async (req, res) => {
       userId: tempOrder.userId,
       cashOnDelivery: tempOrder.cashOnDelivery,
       totalPrice: tempOrder.totalPrice,
+      instructions: tempOrder.instructions,
       deliveryCharges: tempOrder.deliveryCharges,
       platformFee: tempOrder.platformFee,
       gst: tempOrder.gst || "",
