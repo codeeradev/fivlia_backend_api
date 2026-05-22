@@ -1830,7 +1830,7 @@ exports.getTopSeller = async (req, res) => {
 
       const averageRating = ratingSummary.count
         ? ratingSummary.total / ratingSummary.count
-        : 0;
+        : 5;
 
       const activeOffer = offerByStore[store._id.toString()] || null;
 
@@ -1846,7 +1846,7 @@ exports.getTopSeller = async (req, res) => {
         activeOffer, // 👈 added
         ratingCount: ratingCount,
         topProductOffer: offerMap[store._id.toString()]
-          ? `${offerMap[store._id.toString()]}% OFF`
+          ? `${offerMap[store._id.toString()]}`
           : null,
       };
     });

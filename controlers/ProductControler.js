@@ -195,6 +195,7 @@ exports.addProduct = async (req, res) => {
       isVeg,
       sellerId,
       productType,
+      foodTypeId
     } = req.body;
 
     const MultipleImage =
@@ -459,6 +460,7 @@ exports.addProduct = async (req, res) => {
       ...(finalVariants.length && { variants: finalVariants }),
       ...(ratings && { ratings }),
       ...(mrp && { mrp }),
+          foodTypeId,
       ...(isVeg && { isVeg }),
       ...(sell_price && { sell_price }),
       ...(sellerId && {
@@ -1665,7 +1667,8 @@ exports.updateProduct = async (req, res) => {
       sell_price,
       status,
       returnProduct,
-      productType
+      productType,
+      foodTypeId
     } = req.body;
 
     const MultipleImage =
@@ -2029,6 +2032,7 @@ exports.updateProduct = async (req, res) => {
       ...(description && { description }),
       ...(rating && { rating }),
       ...(typeId && { typeId }),
+      ...(foodTypeId && { foodTypeId }),
       ...(image && { productThumbnailUrl: image }),
       ...(MultipleImage.length && { productImageUrl: MultipleImage }),
       ...(productCategories.length && { category: productCategories }),
