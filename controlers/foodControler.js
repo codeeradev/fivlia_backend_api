@@ -139,9 +139,7 @@ exports.getFoodSeller = async (req, res) => {
     const finalFoods = foods.map((food) => {
       const matchedSellers = sellers
         .filter((seller) =>
-          seller.foodTypes?.some(
-            (id) => id.toString() === food._id.toString(),
-          ),
+          seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
         )
         .map((store) => {
           const stats = ratingsByStore[store._id.toString()] || {
@@ -149,21 +147,16 @@ exports.getFoodSeller = async (req, res) => {
             count: 0,
           };
 
-          const avg = stats.count
-            ? stats.total / stats.count
-            : 0;
+          const avg = stats.count ? stats.total / stats.count : 0;
 
           return {
             storeId: store._id,
             storeName: store.storeName,
             image: store.image,
             referralCode: store.referralCode,
-            advertisementImages:
-              store.advertisementImages,
-            sellerFreeDeliveryEnabled:
-              store.sellerFreeDeliveryEnabled,
-            sellerFreeDeliveryLimit:
-              store.sellerFreeDeliveryLimit,
+            advertisementImages: store.advertisementImages,
+            sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+            sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
             fullAddress: store.fullAddress,
             averageRating: avg.toFixed(1),
             ratingCount: stats.count,
@@ -176,12 +169,31 @@ exports.getFoodSeller = async (req, res) => {
       };
     });
 
-    return res.status(200).json(finalFoods);
+    const allSellers = sellers.map((store) => {
+      const stats = ratingsByStore[store._id.toString()] || {
+        total: 0,
+        count: 0,
+      };
+
+      const avg = stats.count ? stats.total / stats.count : 0;
+
+      return {
+        storeId: store._id,
+        storeName: store.storeName,
+        image: store.image,
+        referralCode: store.referralCode,
+        advertisementImages: store.advertisementImages,
+        sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+        sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+        fullAddress: store.fullAddress,
+        averageRating: avg.toFixed(1),
+        ratingCount: stats.count,
+      };
+    });
+
+    return res.status(200).json({finalFoods, allSellers});
   } catch (error) {
-    console.error(
-      "Error fetching foods with sellers:",
-      error,
-    );
+    console.error("Error fetching foods with sellers:", error);
 
     return res.status(500).json({
       message: "Internal server error",
