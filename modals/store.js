@@ -132,6 +132,7 @@ const storeScheema = new mongoose.Schema(
     ],
     foodTypes: [{ type: mongoose.Schema.Types.ObjectId, ref: "FoodType" }],
     referralCode: { type: String, default: null },
+    isVeg: { type: String, enum: ["veg", "non-veg"], default: "non-veg" },
   },
   { timestamps: true }
 );
