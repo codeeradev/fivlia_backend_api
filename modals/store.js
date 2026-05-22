@@ -130,6 +130,7 @@ const storeScheema = new mongoose.Schema(
         ],
       },
     ],
+    foodTypes: [{ type: mongoose.Schema.Types.ObjectId, ref: "FoodType" }],
     referralCode: { type: String, default: null },
   },
   { timestamps: true }

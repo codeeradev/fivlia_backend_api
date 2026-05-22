@@ -5,7 +5,7 @@ const verifyToken = require("../midllerware/authToken");
 const typeCategoryResolver = require("../midllerware/typeChecker.js");
 
 //admin api 
-const { addFood, getActiveFoods, getAllFoods, updateFood, deleteFood, getFoodSeller } = require("../controlers/foodControler");
+const { addFood, getActiveFoods, getAllFoods, updateFood, deleteFood, getFoodSeller, addFoodToSeller, removeFoodFromSeller } = require("../controlers/foodControler");
 //
 
 
@@ -15,5 +15,7 @@ router.get("/get-active-food", getActiveFoods);
 router.post("/update-food/:id", upload, updateFood);
 router.delete("/delete-food/:id", deleteFood);
 router.get("/get-food-seller", getFoodSeller);
+router.post("/add-food-to-seller", addFoodToSeller);
+router.post("/remove-food-from-seller", removeFoodFromSeller);
 
 module.exports = router;

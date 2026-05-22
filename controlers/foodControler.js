@@ -93,26 +93,40 @@ exports.deleteFood = async (req, res) => {
 
 exports.getFoodSeller = async (req, res) => {
   try {
-    console.log("Fetching food sellers...");
+    console.log("Fetching foods with sellers...");
+
+    // ✅ Get all active foods
+    const foods = await foodTypeModel
+      .find({ status: true })
+      .select("-__v -createdAt -updatedAt -orderCount")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // ✅ Get sellers
     const sellers = await Seller.find({
       $or: [{ sellFood: true }, { businessType: "FSSAI" }],
       status: true,
       Authorized_Store: false,
-    }).select(
-      "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress",
-    );
+    })
+      .select(
+        "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes",
+      )
+      .lean();
 
-    console.log("Fetched food sellers...", sellers);
+    // ✅ Ratings
     const ratings = await Rating.find({
       storeId: { $in: sellers.map((s) => s._id) },
     }).lean();
 
-    // ✅ Group ratings
+    // ✅ Rating map
     const ratingsByStore = ratings.reduce((acc, r) => {
       const id = r.storeId.toString();
 
       if (!acc[id]) {
-        acc[id] = { total: 0, count: 0 };
+        acc[id] = {
+          total: 0,
+          count: 0,
+        };
       }
 
       acc[id].total += r.rating || 0;
@@ -122,31 +136,121 @@ exports.getFoodSeller = async (req, res) => {
     }, {});
 
     // ✅ Final response
-    const finalStores = sellers.map((store) => {
-      const stats = ratingsByStore[store._id.toString()] || {
-        total: 0,
-        count: 0,
-      };
+    const finalFoods = foods.map((food) => {
+      const matchedSellers = sellers
+        .filter((seller) =>
+          seller.foodTypes?.some(
+            (id) => id.toString() === food._id.toString(),
+          ),
+        )
+        .map((store) => {
+          const stats = ratingsByStore[store._id.toString()] || {
+            total: 0,
+            count: 0,
+          };
 
-      const avg = stats.count ? stats.total / stats.count : 0;
+          const avg = stats.count
+            ? stats.total / stats.count
+            : 0;
+
+          return {
+            storeId: store._id,
+            storeName: store.storeName,
+            image: store.image,
+            referralCode: store.referralCode,
+            advertisementImages:
+              store.advertisementImages,
+            sellerFreeDeliveryEnabled:
+              store.sellerFreeDeliveryEnabled,
+            sellerFreeDeliveryLimit:
+              store.sellerFreeDeliveryLimit,
+            fullAddress: store.fullAddress,
+            averageRating: avg.toFixed(1),
+            ratingCount: stats.count,
+          };
+        });
 
       return {
-        storeId: store._id,
-        storeName: store.storeName,
-        image: store.image,
-        referralCode: store.referralCode,
-        advertisementImages: store.advertisementImages,
-        sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-        sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-        fullAddress: store.fullAddress,
-        averageRating: avg.toFixed(1),
-        ratingCount: stats.count,
+        ...food,
+        sellers: matchedSellers,
       };
     });
 
-    return res.status(200).json(finalStores);
+    return res.status(200).json(finalFoods);
   } catch (error) {
-    console.error("Error fetching food sellers:", error);
+    console.error(
+      "Error fetching foods with sellers:",
+      error,
+    );
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
+  }
+};
+
+exports.addFoodToSeller = async (req, res) => {
+  try {
+    const { sellerId, foodId } = req.body;
+
+    const seller = await Seller.findOne({
+      _id: sellerId,
+      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
+      status: true,
+      Authorized_Store: false,
+    });
+
+    if (!seller) {
+      return res.status(404).json({ message: "Seller not found" });
+    }
+
+    if (seller.foodTypes.includes(foodId)) {
+      return res
+        .status(400)
+        .json({ message: "Food type already added to this seller" });
+    }
+
+    seller.foodTypes = foodId;
+    await seller.save();
+
+    return res
+      .status(200)
+      .json({ message: "Food type added to seller successfully" });
+  } catch (error) {
+    console.error("Error adding food type to seller:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.removeFoodFromSeller = async (req, res) => {
+  try {
+    const { sellerId, foodId } = req.body;
+
+    const seller = await Seller.findOne(sellerId, {
+      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
+      status: true,
+      Authorized_Store: false,
+    });
+    if (!seller) {
+      return res.status(404).json({ message: "Seller not found" });
+    }
+
+    if (!seller.foodTypes.includes(foodId)) {
+      return res
+        .status(400)
+        .json({ message: "Food type not associated with this seller" });
+    }
+
+    seller.foodTypes = seller.foodTypes.filter(
+      (id) => id.toString() !== foodId,
+    );
+    await seller.save();
+
+    return res
+      .status(200)
+      .json({ message: "Food type removed from seller successfully" });
+  } catch (error) {
+    console.error("Error removing food type from seller:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };

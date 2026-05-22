@@ -132,6 +132,7 @@ const productSchema = new mongoose.Schema(
       default: null,
     },
     typeId:{type: mongoose.Schema.Types.ObjectId, ref: "Types" },
+    foodTypeId:{type: mongoose.Schema.Types.ObjectId, ref: "FoodType" },
   },
   { timestamps: true }
 );

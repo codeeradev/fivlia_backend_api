@@ -779,6 +779,8 @@ exports.verifyOtpSeller = async (req, res) => {
         message: "Login successful",
         sellerId: sellerDoc._id,
         storeName: sellerDoc.storeName,
+        sellFood: sellerDoc.sellFood,
+        businessType: sellerDoc.businessType,
         token: jwttoken,
         activeDevices: sellerDoc.devices.map((d) => ({
           deviceId: d.deviceId,
