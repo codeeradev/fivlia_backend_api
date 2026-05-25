@@ -920,12 +920,12 @@ exports.withdrawalRequest = async (req, res) => {
       type: "debit",
     });
 
-    if (withdrawal) {
-      // Update existing pending request
-      withdrawal.amount += amount;
-      withdrawal.description = `Withdrawal request of ₹${withdrawal.amount} by driver`;
-      await withdrawal.save();
-    } else {
+    // if (withdrawal) {
+    //   // Update existing pending request
+    //   withdrawal.amount += amount;
+    //   withdrawal.description = `Withdrawal request of ₹${withdrawal.amount} by driver`;
+    //   await withdrawal.save();
+    // } else {
       // Create new withdrawal request
       withdrawal = await Transaction.create({
         driverId: driverData._id,
@@ -934,7 +934,7 @@ exports.withdrawalRequest = async (req, res) => {
         description: `Withdrawal request of ₹${amount} by driver`,
         status: "Pending",
       });
-    }
+    // }
 
     return res.status(200).json({
       message: "Withdrawal request submitted successfully",
