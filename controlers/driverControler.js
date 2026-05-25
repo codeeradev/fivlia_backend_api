@@ -906,10 +906,16 @@ exports.withdrawalRequest = async (req, res) => {
 
     const totalPending = pendingWithdrawals[0]?.totalPending || 0;
 
+    const availableBalance = driverData.wallet - totalPending;
+
     // Check if requested amount + pending exceeds wallet
     if (amount + totalPending > driverData.wallet) {
       return res.status(400).json({
-        message: "Insufficient wallet balance considering pending withdrawals",
+        message: `Withdrawal failed. ₹${totalPending.toFixed(
+          2,
+        )} is already pending. You can currently withdraw up to ₹${availableBalance.toFixed(
+          2,
+        )}.`,
       });
     }
 
@@ -926,14 +932,14 @@ exports.withdrawalRequest = async (req, res) => {
     //   withdrawal.description = `Withdrawal request of ₹${withdrawal.amount} by driver`;
     //   await withdrawal.save();
     // } else {
-      // Create new withdrawal request
-      withdrawal = await Transaction.create({
-        driverId: driverData._id,
-        amount,
-        type: "debit",
-        description: `Withdrawal request of ₹${amount} by driver`,
-        status: "Pending",
-      });
+    // Create new withdrawal request
+    withdrawal = await Transaction.create({
+      driverId: driverData._id,
+      amount,
+      type: "debit",
+      description: `Withdrawal request of ₹${amount} by driver`,
+      status: "Pending",
+    });
     // }
 
     return res.status(200).json({
