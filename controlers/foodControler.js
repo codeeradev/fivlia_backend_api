@@ -93,8 +93,24 @@ exports.deleteFood = async (req, res) => {
 
 exports.getFoodSeller = async (req, res) => {
   try {
+    const { veg, filter } = req.query;
     console.log("Fetching foods with sellers...");
 
+    const sellerQuery = {
+      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
+      status: true,
+      Authorized_Store: false,
+    };
+
+    // only apply veg filter when veg=true
+    if (veg === "true") {
+      sellerQuery.isVeg = "veg";
+    }
+
+    // apply filter only for valid values
+    if (["gym", "snack", "healthy"].includes(filter)) {
+      sellerQuery.filter = filter;
+    }
     // ✅ Get all active foods
     const foods = await foodTypeModel
       .find({ status: true })
@@ -103,11 +119,7 @@ exports.getFoodSeller = async (req, res) => {
       .lean();
 
     // ✅ Get sellers
-    const sellers = await Seller.find({
-      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
-      status: true,
-      Authorized_Store: false,
-    })
+    const sellers = await Seller.find(sellerQuery)
       .select(
         "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
       )
@@ -193,7 +205,7 @@ exports.getFoodSeller = async (req, res) => {
       };
     });
 
-    return res.status(200).json({finalFoods, allSellers});
+    return res.status(200).json({ finalFoods, allSellers });
   } catch (error) {
     console.error("Error fetching foods with sellers:", error);
 

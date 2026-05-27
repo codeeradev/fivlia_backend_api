@@ -39,6 +39,8 @@ exports.addSeller = async (req, res) => {
       businessType,
       fullAddress,
       referralCode,
+      filter,
+      isVeg,
     } = req.body;
 
     const sellerData = await seller.findOne({
@@ -137,8 +139,10 @@ exports.addSeller = async (req, res) => {
       Longitude,
       sellFood,
       businessType,
+      filter,
       fullAddress,
       referralCode: updatedReferralCode,
+      isVeg,
     });
 
     const message = `Dear Customer Your Fivlia Registration OTP code is ${otp}. Valid for 5 minutes. Do not share with others Fivlia - Delivery in Minutes!`;
@@ -867,6 +871,8 @@ exports.editSellerProfile = async (req, res) => {
       openTime,
       status,
       closeTime,
+      filter,
+      isVeg,
       // {bankName, accountHolder, accountNumber, ifsc, branch}
     } = req.body;
 
@@ -876,6 +882,7 @@ exports.editSellerProfile = async (req, res) => {
 
     if (storeName) updateFields.storeName = storeName;
     if (ownerName) updateFields.ownerName = ownerName;
+    if (filter) updateFields.filter = filter;
     if (email) updateFields.email = email;
     if (invoicePrefix) {
       // Check if the prefix is already used by another seller
@@ -913,6 +920,7 @@ exports.editSellerProfile = async (req, res) => {
     if (password) updateFields.password = password;
     if (openTime) updateFields.openTime = openTime;
     if (closeTime) updateFields.closeTime = closeTime;
+    if (isVeg !== undefined) updateFields.isVeg = isVeg;
     if (status !== undefined) updateFields.status = status;
     if (bankDetails) {
       // Parse bankDetails if it comes as JSON string (from form-data)
