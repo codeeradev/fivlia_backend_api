@@ -507,6 +507,110 @@ exports.placeOrder = async (req, res) => {
   }
 };
 
+const crypto = require("crypto");
+
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+    const signature = req.headers["x-razorpay-signature"];
+
+    // VERIFY SIGNATURE
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(req.body)
+      .digest("hex");
+
+    if (signature !== expectedSignature) {
+      console.log("❌ Invalid webhook signature");
+
+      return res.status(400).json({
+        success: false,
+      });
+    }
+
+    // PARSE BODY
+    const body = JSON.parse(req.body.toString());
+
+    console.log("✅ Webhook:", body.event);
+
+    // ONLY HANDLE payment.captured
+    if (body.event !== "payment.captured") {
+      return res.status(200).json({
+        success: true,
+      });
+    }
+
+    const payment = body.payload.payment.entity;
+
+    const paymentId = payment.id;
+
+    const razorpayOrderId = payment.order_id;
+
+    console.log("💰 Captured payment:", paymentId);
+
+    // FIND TEMP ORDER
+    const tempOrder = await TempOrder.findOne({
+      razorpayOrderId,
+    });
+
+    if (!tempOrder) {
+      console.log("⚠️ Temp order not found");
+
+      return res.status(200).json({
+        success: true,
+      });
+    }
+
+    // CHECK IF ORDER ALREADY EXISTS
+    const existingOrder = await Order.findOne({
+      transactionId: paymentId,
+    });
+
+    if (existingOrder) {
+      console.log("✅ Order already exists");
+
+      return res.status(200).json({
+        success: true,
+      });
+    }
+
+    console.log("🚑 Recovering missed payment via webhook");
+
+    // REUSE EXISTING FLOW
+    const fakeReq = {
+      body: {
+        tempOrderId: tempOrder._id,
+        transactionId: paymentId,
+        paymentStatus: true,
+      },
+    };
+
+    const fakeRes = {
+      status: (code) => ({
+        json: (data) => {
+          console.log("Webhook verifyPayment response:", code, data);
+        },
+      }),
+    };
+
+    // CALL EXISTING API FLOW
+    await exports.verifyPayment(fakeReq, fakeRes);
+
+    console.log("✅ Webhook recovery completed");
+
+    return res.status(200).json({
+      success: true,
+    });
+  } catch (err) {
+    console.log("❌ Webhook Error:", err);
+
+    return res.status(200).json({
+      success: true,
+    });
+  }
+};
+
 exports.verifyPayment = async (req, res) => {
   try {
     const { tempOrderId, paymentStatus, transactionId } = req.body;
@@ -526,7 +630,7 @@ exports.verifyPayment = async (req, res) => {
       tempOrderId,
       {
         transactionId: transactionId || paymentResult?.raw?.id || "",
-        paymentStatus: paymentResult.success ? "Successful" : "Payment Failed",
+        paymentStatus: paymentResult.success ? "Successful" : "Verification Pending",
 
         razorpayStatus: paymentResult.status,
         razorpayResponse: paymentResult.raw || {},
@@ -538,7 +642,7 @@ exports.verifyPayment = async (req, res) => {
       return res.status(200).json({
         status: false,
         message:
-          "Payment failed or cancelled. Order saved with status Cancelled.",
+          "Payment verification pending.",
       });
     }
 
