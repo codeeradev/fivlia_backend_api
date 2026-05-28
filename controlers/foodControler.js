@@ -134,6 +134,53 @@ exports.getFoodSeller = async (req, res) => {
       storeId: { $in: sellers.map((s) => s._id) },
     }).lean();
 
+    // ✅ Top product offers
+    const sellerIds = sellers.map((s) => s._id);
+
+    const topOffers = await Stock.aggregate([
+      {
+        $match: {
+          storeId: { $in: sellerIds },
+        },
+      },
+      {
+        $unwind: "$stock",
+      },
+      {
+        $match: {
+          "stock.mrp": { $gt: 0 },
+          "stock.price": { $gt: 0 },
+        },
+      },
+      {
+        $addFields: {
+          discount: {
+            $multiply: [
+              {
+                $divide: [
+                  { $subtract: ["$stock.mrp", "$stock.price"] },
+                  "$stock.mrp",
+                ],
+              },
+              100,
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$storeId",
+          maxDiscount: { $max: "$discount" },
+        },
+      },
+    ]);
+
+    const offerMap = {};
+
+    topOffers.forEach((o) => {
+      offerMap[o._id.toString()] = o.maxDiscount.toFixed(1);
+    });
+
     // ✅ Rating map
     const ratingsByStore = ratings.reduce((acc, r) => {
       const id = r.storeId.toString();
@@ -168,6 +215,9 @@ exports.getFoodSeller = async (req, res) => {
           return {
             storeId: store._id,
             storeName: store.storeName,
+            topProductOffer: offerMap[store._id.toString()]
+              ? `${offerMap[store._id.toString()]}`
+              : null,
             image: store.image,
             referralCode: store.referralCode,
             advertisementImages: store.advertisementImages,
@@ -197,6 +247,9 @@ exports.getFoodSeller = async (req, res) => {
       return {
         storeId: store._id,
         storeName: store.storeName,
+        topProductOffer: offerMap[store._id.toString()]
+          ? `${offerMap[store._id.toString()]}`
+          : null,
         image: store.image,
         referralCode: store.referralCode,
         advertisementImages: store.advertisementImages,
