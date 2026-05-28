@@ -4,13 +4,16 @@ const Rating = require("../modals/rating");
 
 exports.addFood = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, filter } = req.body;
     const image = `/${req.files?.image?.[0]?.key}`;
+
+    const parsedFilter = filter ? JSON.parse(filter) : [];
 
     const newFood = await foodTypeModel.create({
       name,
       description,
       image,
+      filter: parsedFilter,
     });
 
     return res
@@ -51,11 +54,12 @@ exports.getActiveFoods = async (req, res) => {
 exports.updateFood = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description } = req.body;
+    const { name, description, filter } = req.body;
 
     const updateData = {};
     if (name) updateData.name = name;
     if (description) updateData.description = description;
+    if (filter) updateData.filter = JSON.parse(filter);
     if (req.files?.image?.[0]?.key)
       updateData.image = `/${req.files.image[0].key}`;
 

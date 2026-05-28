@@ -5,6 +5,7 @@ const foodTypeSchema = new mongoose.Schema({
   description: { type: String },
   image: { type: String },
   orderCount: { type: Number, default: 0 },
+  filter: [{ type: String }],
   status: { type: Boolean, default: true },
 }, { timestamps: true });
 
