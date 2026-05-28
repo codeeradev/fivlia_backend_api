@@ -99,46 +99,77 @@ exports.deleteFood = async (req, res) => {
 exports.getFoodSeller = async (req, res) => {
   try {
     const { veg, filter } = req.query;
+
     console.log("Fetching foods with sellers...");
 
+    // =========================================================
+    // SELLER QUERY
+    // =========================================================
     const sellerQuery = {
       $or: [{ sellFood: true }, { businessType: "FSSAI" }],
       status: true,
       Authorized_Store: false,
     };
 
-    // only apply veg filter when veg=true
+    // veg filter
     if (veg === "true") {
       sellerQuery.isVeg = "veg";
     }
 
-    // apply filter only for valid values
-    if (["gym", "snack", "healthy", "50%off"].includes(filter)) {
+    // custom filters
+    if (["gym", "snack", "healthy"].includes(filter)) {
       sellerQuery.filter = filter;
     }
-    // ✅ Get all active foods
+
+    // =========================================================
+    // GET ALL ACTIVE FOODS
+    // =========================================================
     const foods = await foodTypeModel
       .find({ status: true })
       .select("-__v -createdAt -updatedAt -orderCount")
       .sort({ createdAt: -1 })
       .lean();
 
-    // ✅ Get sellers
-    const sellers = await Seller.find(sellerQuery)
+    // =========================================================
+    // GET SELLERS
+    // =========================================================
+    let sellers = await Seller.find(sellerQuery)
       .select(
         "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
       )
       .lean();
 
-    // ✅ Ratings
-    const ratings = await Rating.find({
-      storeId: { $in: sellers.map((s) => s._id) },
-    }).lean();
-
-    // ✅ Top product offers
     const sellerIds = sellers.map((s) => s._id);
 
-    // ✅ Top product offers + total items
+    // =========================================================
+    // RATINGS
+    // =========================================================
+    const ratings = await Rating.find({
+      storeId: { $in: sellerIds },
+    }).lean();
+
+    // =========================================================
+    // RATINGS MAP
+    // =========================================================
+    const ratingsByStore = ratings.reduce((acc, r) => {
+      const id = r.storeId.toString();
+
+      if (!acc[id]) {
+        acc[id] = {
+          total: 0,
+          count: 0,
+        };
+      }
+
+      acc[id].total += r.rating || 0;
+      acc[id].count += 1;
+
+      return acc;
+    }, {});
+
+    // =========================================================
+    // TOP OFFERS + ITEM COUNT
+    // =========================================================
     const topOffers = await Stock.aggregate([
       {
         $match: {
@@ -183,7 +214,9 @@ exports.getFoodSeller = async (req, res) => {
       },
     ]);
 
-    // ✅ Offer map
+    // =========================================================
+    // OFFER + ITEM MAP
+    // =========================================================
     const offerMap = {};
     const itemCountMap = {};
 
@@ -192,32 +225,36 @@ exports.getFoodSeller = async (req, res) => {
       itemCountMap[o._id.toString()] = o.totalItems;
     });
 
-    // ==========================================================
-    // ✅ IF 50%off FILTER THEN ONLY 50%+ SELLERS
-    // ==========================================================
-    let filteredSellers = sellers;
-
+    // =========================================================
+    // 50% OFF FILTER
+    // =========================================================
     if (filter === "50%off") {
-      filteredSellers = sellers.filter((seller) => {
+      sellers = sellers.filter((seller) => {
         const offer = offerMap[seller._id.toString()] || 0;
 
         return offer >= 50;
       });
-
-      // highest offer first
-      filteredSellers.sort((a, b) => {
-        const offerA = offerMap[a._id.toString()] || 0;
-        const offerB = offerMap[b._id.toString()] || 0;
-
-        return offerB - offerA;
-      });
     }
 
-    // ✅ Final response
+    // =========================================================
+    // SORT SELLERS BY OFFER DESC
+    // =========================================================
+    sellers.sort((a, b) => {
+      const offerA = offerMap[a._id.toString()] || 0;
+      const offerB = offerMap[b._id.toString()] || 0;
+
+      return offerB - offerA;
+    });
+
+    // =========================================================
+    // FINAL FOODS
+    // =========================================================
     const finalFoods = foods.map((food) => {
-      const matchedSellers = filteredSellers
+      const matchedSellers = sellers
         .filter((seller) =>
-          seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
+          seller.foodTypes?.some(
+            (id) => id.toString() === food._id.toString(),
+          ),
         )
         .map((store) => {
           const stats = ratingsByStore[store._id.toString()] || {
@@ -240,18 +277,21 @@ exports.getFoodSeller = async (req, res) => {
             image: store.image,
             referralCode: store.referralCode,
             advertisementImages: store.advertisementImages,
-            sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-            sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+            sellerFreeDeliveryEnabled:
+              store.sellerFreeDeliveryEnabled,
+            sellerFreeDeliveryLimit:
+              store.sellerFreeDeliveryLimit,
             isVeg: store.isVeg,
             fullAddress: store.fullAddress,
+
             averageRating: avg.toFixed(1),
             ratingCount: stats.count,
           };
         })
-        // highest offer first
         .sort((a, b) => {
           return (
-            Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
+            Number(b.topProductOffer || 0) -
+            Number(a.topProductOffer || 0)
           );
         });
 
@@ -261,8 +301,10 @@ exports.getFoodSeller = async (req, res) => {
       };
     });
 
-    // ✅ All sellers
-    const allSellers = filteredSellers
+    // =========================================================
+    // ALL SELLERS
+    // =========================================================
+    const allSellers = sellers
       .map((store) => {
         const stats = ratingsByStore[store._id.toString()] || {
           total: 0,
@@ -284,20 +326,28 @@ exports.getFoodSeller = async (req, res) => {
           image: store.image,
           referralCode: store.referralCode,
           advertisementImages: store.advertisementImages,
-          sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-          sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+          sellerFreeDeliveryEnabled:
+            store.sellerFreeDeliveryEnabled,
+          sellerFreeDeliveryLimit:
+            store.sellerFreeDeliveryLimit,
           isVeg: store.isVeg,
           fullAddress: store.fullAddress,
+
           averageRating: avg.toFixed(1),
           ratingCount: stats.count,
         };
       })
-      // highest offer first
       .sort((a, b) => {
-        return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
+        return (
+          Number(b.topProductOffer || 0) -
+          Number(a.topProductOffer || 0)
+        );
       });
 
-    return res.status(200).json({ finalFoods, allSellers });
+    return res.status(200).json({
+      finalFoods,
+      allSellers,
+    });
   } catch (error) {
     console.error("Error fetching foods with sellers:", error);
 
