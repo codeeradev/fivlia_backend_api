@@ -1762,11 +1762,16 @@ exports.getTopSeller = async (req, res) => {
           totalItems: { $sum: 1 },
         },
       },
+      {
+        $sort: {
+          maxDiscount: -1,
+        },
+      },
     ]);
 
     const offerMap = {};
     const itemCountMap = {};
-    
+
     topOffers.forEach((o) => {
       offerMap[o._id.toString()] = o.maxDiscount.toFixed(1);
       itemCountMap[o._id.toString()] = o.totalItems;
