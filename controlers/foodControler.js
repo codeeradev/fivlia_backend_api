@@ -1,6 +1,7 @@
 const foodTypeModel = require("../modals/foodType");
 const Seller = require("../modals/store");
 const Rating = require("../modals/rating");
+const Stock = require("../models/stockModel");
 
 exports.addFood = async (req, res) => {
   try {
