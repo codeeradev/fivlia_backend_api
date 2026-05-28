@@ -1759,14 +1759,17 @@ exports.getTopSeller = async (req, res) => {
         $group: {
           _id: "$storeId",
           maxDiscount: { $max: "$discount" },
+          totalItems: { $sum: 1 },
         },
       },
     ]);
 
     const offerMap = {};
-
+    const itemCountMap = {};
+    
     topOffers.forEach((o) => {
       offerMap[o._id.toString()] = o.maxDiscount.toFixed(1);
+      itemCountMap[o._id.toString()] = o.totalItems;
     });
 
     const requestedCategoryIds = new Set(
@@ -1848,6 +1851,7 @@ exports.getTopSeller = async (req, res) => {
         topProductOffer: offerMap[store._id.toString()]
           ? `${offerMap[store._id.toString()]}`
           : null,
+        totalItems: itemCountMap[store._id.toString()] || 0,
       };
     });
 
