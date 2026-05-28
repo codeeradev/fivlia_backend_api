@@ -113,7 +113,7 @@ exports.getFoodSeller = async (req, res) => {
     }
 
     // apply filter only for valid values
-    if (["gym", "snack", "healthy"].includes(filter)) {
+    if (["gym", "snack", "healthy", "50%off"].includes(filter)) {
       sellerQuery.filter = filter;
     }
     // ✅ Get all active foods
@@ -138,6 +138,7 @@ exports.getFoodSeller = async (req, res) => {
     // ✅ Top product offers
     const sellerIds = sellers.map((s) => s._id);
 
+    // ✅ Top product offers + total items
     const topOffers = await Stock.aggregate([
       {
         $match: {
@@ -172,36 +173,49 @@ exports.getFoodSeller = async (req, res) => {
         $group: {
           _id: "$storeId",
           maxDiscount: { $max: "$discount" },
+          totalItems: { $sum: 1 },
+        },
+      },
+      {
+        $sort: {
+          maxDiscount: -1,
         },
       },
     ]);
 
+    // ✅ Offer map
     const offerMap = {};
+    const itemCountMap = {};
 
     topOffers.forEach((o) => {
-      offerMap[o._id.toString()] = o.maxDiscount.toFixed(1);
+      offerMap[o._id.toString()] = Number(o.maxDiscount.toFixed(1));
+      itemCountMap[o._id.toString()] = o.totalItems;
     });
 
-    // ✅ Rating map
-    const ratingsByStore = ratings.reduce((acc, r) => {
-      const id = r.storeId.toString();
+    // ==========================================================
+    // ✅ IF 50%off FILTER THEN ONLY 50%+ SELLERS
+    // ==========================================================
+    let filteredSellers = sellers;
 
-      if (!acc[id]) {
-        acc[id] = {
-          total: 0,
-          count: 0,
-        };
-      }
+    if (filter === "50%off") {
+      filteredSellers = sellers.filter((seller) => {
+        const offer = offerMap[seller._id.toString()] || 0;
 
-      acc[id].total += r.rating || 0;
-      acc[id].count += 1;
+        return offer >= 50;
+      });
 
-      return acc;
-    }, {});
+      // highest offer first
+      filteredSellers.sort((a, b) => {
+        const offerA = offerMap[a._id.toString()] || 0;
+        const offerB = offerMap[b._id.toString()] || 0;
+
+        return offerB - offerA;
+      });
+    }
 
     // ✅ Final response
     const finalFoods = foods.map((food) => {
-      const matchedSellers = sellers
+      const matchedSellers = filteredSellers
         .filter((seller) =>
           seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
         )
@@ -216,9 +230,13 @@ exports.getFoodSeller = async (req, res) => {
           return {
             storeId: store._id,
             storeName: store.storeName,
+
             topProductOffer: offerMap[store._id.toString()]
               ? `${offerMap[store._id.toString()]}`
               : null,
+
+            totalItems: itemCountMap[store._id.toString()] || 0,
+
             image: store.image,
             referralCode: store.referralCode,
             advertisementImages: store.advertisementImages,
@@ -229,6 +247,12 @@ exports.getFoodSeller = async (req, res) => {
             averageRating: avg.toFixed(1),
             ratingCount: stats.count,
           };
+        })
+        // highest offer first
+        .sort((a, b) => {
+          return (
+            Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
+          );
         });
 
       return {
@@ -237,31 +261,41 @@ exports.getFoodSeller = async (req, res) => {
       };
     });
 
-    const allSellers = sellers.map((store) => {
-      const stats = ratingsByStore[store._id.toString()] || {
-        total: 0,
-        count: 0,
-      };
+    // ✅ All sellers
+    const allSellers = filteredSellers
+      .map((store) => {
+        const stats = ratingsByStore[store._id.toString()] || {
+          total: 0,
+          count: 0,
+        };
 
-      const avg = stats.count ? stats.total / stats.count : 0;
+        const avg = stats.count ? stats.total / stats.count : 0;
 
-      return {
-        storeId: store._id,
-        storeName: store.storeName,
-        topProductOffer: offerMap[store._id.toString()]
-          ? `${offerMap[store._id.toString()]}`
-          : null,
-        image: store.image,
-        referralCode: store.referralCode,
-        advertisementImages: store.advertisementImages,
-        sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-        sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-        isVeg: store.isVeg,
-        fullAddress: store.fullAddress,
-        averageRating: avg.toFixed(1),
-        ratingCount: stats.count,
-      };
-    });
+        return {
+          storeId: store._id,
+          storeName: store.storeName,
+
+          topProductOffer: offerMap[store._id.toString()]
+            ? `${offerMap[store._id.toString()]}`
+            : null,
+
+          totalItems: itemCountMap[store._id.toString()] || 0,
+
+          image: store.image,
+          referralCode: store.referralCode,
+          advertisementImages: store.advertisementImages,
+          sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+          sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+          isVeg: store.isVeg,
+          fullAddress: store.fullAddress,
+          averageRating: avg.toFixed(1),
+          ratingCount: stats.count,
+        };
+      })
+      // highest offer first
+      .sort((a, b) => {
+        return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
+      });
 
     return res.status(200).json({ finalFoods, allSellers });
   } catch (error) {
