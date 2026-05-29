@@ -2,6 +2,7 @@ const foodTypeModel = require("../modals/foodType");
 const Seller = require("../modals/store");
 const Rating = require("../modals/rating");
 const Stock = require("../modals/StoreStock");
+const User = require("../modals/user");
 const { getStoresWithinRadius } = require("../config/google");
 
 exports.addFood = async (req, res) => {
