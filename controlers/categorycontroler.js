@@ -69,6 +69,7 @@ exports.banner = async (req, res) => {
       status,
       type2,
       storeId,
+      typeId
     } = req.body;
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const image = rawImagePath ? `/${rawImagePath}` : "";
@@ -207,6 +208,7 @@ exports.banner = async (req, res) => {
 
       status,
       storeId,
+      typeId,
       zones,
     });
     return res
@@ -402,12 +404,13 @@ exports.updateBannerStatus = async (req, res) => {
       range,
       brand: brandId,
       storeId,
+      typeId
     } = req.body;
 
     const rawImagePath = req.files?.image?.[0]?.key;
     const image = rawImagePath ? `/${rawImagePath}` : "";
 
-    const updateData = { status, title, type2 };
+    const updateData = { status, title, type2, typeId };
 
     if (rawImagePath) updateData.image = image;
 
