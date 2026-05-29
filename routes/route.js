@@ -435,7 +435,7 @@ router.get("/getIntro", getIntro);
 router.get("/getAllZone", getAllZone);
 router.get("/getZone", getZone);
 router.get("/getBanner", verifyToken, typeCategoryResolver, getBanner);
-router.get("/getAllBanner", getAllBanner);
+router.get("/getAllBanner", typeCategoryResolver, getAllBanner);
 router.get("/users", users);
 router.get("/getCity", getCity);
 router.get("/getAviableCity", getAviableCity);

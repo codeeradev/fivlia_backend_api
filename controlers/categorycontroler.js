@@ -69,7 +69,7 @@ exports.banner = async (req, res) => {
       status,
       type2,
       storeId,
-      typeId
+      typeId,
     } = req.body;
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const image = rawImagePath ? `/${rawImagePath}` : "";
@@ -89,6 +89,10 @@ exports.banner = async (req, res) => {
       return res
         .status(402)
         .json({ message: 'Invalid banner type. Must be "normal" or "offer".' });
+    }
+
+    if (!typeId || !mongoose.Types.ObjectId.isValid(typeId)) {
+      return res.status(400).json({ message: "Valid typeId is required" });
     }
 
     if (typeof city === "string") {
@@ -276,6 +280,7 @@ exports.getBanner = async (req, res) => {
 
     const allBanners = await Banner.find({
       status: true,
+      ...(req.typeId && { typeId: new mongoose.Types.ObjectId(req.typeId) }),
       ...(type && { type }),
 
       $or: [
@@ -404,31 +409,43 @@ exports.updateBannerStatus = async (req, res) => {
       range,
       brand: brandId,
       storeId,
-      typeId
+      typeId,
     } = req.body;
 
     const rawImagePath = req.files?.image?.[0]?.key;
     const image = rawImagePath ? `/${rawImagePath}` : "";
 
-    const updateData = { status, title, type2, typeId };
+    const updateData = {};
+    if (status !== undefined) updateData.status = status;
+    if (title !== undefined) updateData.title = title;
+    if (type2 !== undefined) updateData.type2 = type2;
+    if (typeId !== undefined) {
+      if (!mongoose.Types.ObjectId.isValid(typeId)) {
+        return res.status(400).json({ message: "Invalid typeId" });
+      }
+      updateData.typeId = typeId;
+    }
 
     if (rawImagePath) updateData.image = image;
 
-    // Handle city
-    if (typeof city === "string") {
-      try {
-        city = JSON.parse(city);
-      } catch (err) {
-        console.log(err);
-        return res.status(400).json({ message: "Invalid city format" });
+    // Handle city only on full banner edits. Status toggles do not send city.
+    if (city !== undefined) {
+      if (typeof city === "string") {
+        try {
+          city = JSON.parse(city);
+        } catch (err) {
+          console.log(err);
+          return res.status(400).json({ message: "Invalid city format" });
+        }
       }
-    }
 
-    let cityIds = Array.isArray(city) ? city : [city];
+      let cityIds = Array.isArray(city) ? city : [city];
+      cityIds = cityIds.filter(Boolean);
 
-    const cityDoc = await ZoneData.find({ _id: { $in: cityIds } });
-    if (cityDoc) {
-      updateData.city = cityDoc.map((c) => ({ _id: c._id, name: c.city }));
+      if (cityIds.length) {
+        const cityDoc = await ZoneData.find({ _id: { $in: cityIds } });
+        updateData.city = cityDoc.map((c) => ({ _id: c._id, name: c.city }));
+      }
     }
 
     if (type2 === "NO") {
@@ -530,8 +547,27 @@ exports.updateBannerStatus = async (req, res) => {
 };
 
 exports.getAllBanner = async (req, res) => {
-  const allBanner = await Banner.find().sort({ createdAt: -1 });
-  res.json(allBanner);
+  try {
+    const { admin } = req.query;
+    const bannerFilter = {};
+
+    if (req.typeId && admin !== "true") {
+      bannerFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
+    }
+
+    const allBanner = await Banner.find(bannerFilter)
+      .populate("typeId", "name")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json(allBanner);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "An error occurred while fetching banners.",
+      error: error.message,
+    });
+  }
 };
 
 exports.addCategory = async (req, res) => {
