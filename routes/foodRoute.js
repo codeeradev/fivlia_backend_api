@@ -14,7 +14,7 @@ router.get("/get-all-food", getAllFoods);
 router.get("/get-active-food", getActiveFoods);
 router.post("/update-food/:id", upload, updateFood);
 router.delete("/delete-food/:id", deleteFood);
-router.get("/get-food-seller", getFoodSeller);
+router.get("/get-food-seller", verifyToken, getFoodSeller);
 router.post("/add-food-to-seller", addFoodToSeller);
 router.post("/remove-food-from-seller", removeFoodFromSeller);
 
