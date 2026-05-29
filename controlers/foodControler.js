@@ -102,6 +102,32 @@ exports.getFoodSeller = async (req, res) => {
 
     console.log("Fetching foods with sellers...");
 
+    const userId = req.user._id;
+
+    const user = await User.findById(userId).lean();
+
+    if (user?.location?.latitude == null || user?.location?.longitude == null) {
+      return res.status(400).json({
+        message: "User location not found",
+      });
+    }
+
+    const userLat = user.location.latitude;
+    const userLng = user.location.longitude;
+
+    const storesWithinRadius = await getStoresWithinRadius(userLat, userLng);
+
+    const allowedStores = Array.isArray(storesWithinRadius?.matchedStores)
+      ? storesWithinRadius.matchedStores
+      : [];
+
+    if (!allowedStores.length) {
+      return res.status(200).json({
+        finalFoods: [],
+        allSellers: [],
+      });
+    }
+    const allowedStoreIds = allowedStores.map((store) => store._id.toString());
     // =========================================================
     // SELLER QUERY
     // =========================================================
@@ -133,7 +159,10 @@ exports.getFoodSeller = async (req, res) => {
     // =========================================================
     // GET SELLERS
     // =========================================================
-    let sellers = await Seller.find(sellerQuery)
+    let sellers = await Seller.find({
+      ...sellerQuery,
+      _id: { $in: allowedStoreIds },
+    })
       .select(
         "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
       )
@@ -246,15 +275,19 @@ exports.getFoodSeller = async (req, res) => {
       return offerB - offerA;
     });
 
+    const storeDistanceMap = {};
+
+    allowedStores.forEach((store) => {
+      storeDistanceMap[store._id.toString()] = store.distance || 999999;
+    });
+
     // =========================================================
     // FINAL FOODS
     // =========================================================
     const finalFoods = foods.map((food) => {
       const matchedSellers = sellers
         .filter((seller) =>
-          seller.foodTypes?.some(
-            (id) => id.toString() === food._id.toString(),
-          ),
+          seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
         )
         .map((store) => {
           const stats = ratingsByStore[store._id.toString()] || {
@@ -267,6 +300,7 @@ exports.getFoodSeller = async (req, res) => {
           return {
             storeId: store._id,
             storeName: store.storeName,
+            distance: storeDistanceMap[store._id.toString()] || null,
 
             topProductOffer: offerMap[store._id.toString()]
               ? `${offerMap[store._id.toString()]}`
@@ -277,10 +311,8 @@ exports.getFoodSeller = async (req, res) => {
             image: store.image,
             referralCode: store.referralCode,
             advertisementImages: store.advertisementImages,
-            sellerFreeDeliveryEnabled:
-              store.sellerFreeDeliveryEnabled,
-            sellerFreeDeliveryLimit:
-              store.sellerFreeDeliveryLimit,
+            sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+            sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
             isVeg: store.isVeg,
             fullAddress: store.fullAddress,
 
@@ -290,8 +322,7 @@ exports.getFoodSeller = async (req, res) => {
         })
         .sort((a, b) => {
           return (
-            Number(b.topProductOffer || 0) -
-            Number(a.topProductOffer || 0)
+            Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
           );
         });
 
@@ -326,10 +357,8 @@ exports.getFoodSeller = async (req, res) => {
           image: store.image,
           referralCode: store.referralCode,
           advertisementImages: store.advertisementImages,
-          sellerFreeDeliveryEnabled:
-            store.sellerFreeDeliveryEnabled,
-          sellerFreeDeliveryLimit:
-            store.sellerFreeDeliveryLimit,
+          sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+          sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
           isVeg: store.isVeg,
           fullAddress: store.fullAddress,
 
@@ -338,10 +367,7 @@ exports.getFoodSeller = async (req, res) => {
         };
       })
       .sort((a, b) => {
-        return (
-          Number(b.topProductOffer || 0) -
-          Number(a.topProductOffer || 0)
-        );
+        return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
       });
 
     return res.status(200).json({

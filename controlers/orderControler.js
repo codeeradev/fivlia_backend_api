@@ -1044,7 +1044,7 @@ exports.orderStatus = async (req, res) => {
 
     const orderOnTheWay = await Order.exists({
       _id: id,
-      orderStatus: { $in: ["On The Way", "Going to Pickup", "On Way"] },
+      orderStatus: { $in: ["On The Way", "Going to Pickup", "On Way", "Ready"] },
     });
 
     if (orderOnTheWay && status === "Accepted") {
@@ -1073,7 +1073,7 @@ exports.orderStatus = async (req, res) => {
 
     if (!updatedOrder)
       return res.status(404).json({ message: "Order not found" });
-    if (status === "Accepted") {
+    if (status === "Accepted" || status === "Ready") {
       autoAssignDriver(updatedOrder).catch((err) => {
         console.error("Driver assignment failed:", err.message);
       });
