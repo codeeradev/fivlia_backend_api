@@ -210,7 +210,7 @@ exports.banner = async (req, res) => {
           }
         : null,
 
-      status,
+      status: status !== undefined ? status : true,
       storeId,
       typeId,
       zones,
@@ -254,54 +254,48 @@ exports.getBanner = async (req, res) => {
       });
     });
 
-    // 🔎 Apply base filters
-    const bannerQuery = {
-      status: true,
-    };
-
-    if (type) {
-      bannerQuery.type = type;
-    }
-
-    const brands = await brand
-      .find({ typeId: req.typeId })
-      .select("_id")
-      .lean();
-    const stores = await Store.find({ typeId: req.typeId })
-      .select("_id")
-      .lean();
-
-    const brandIds = brands.map((b) => b._id);
-    const storeIds = stores.map((s) => s._id);
+    const brandIds = req.typeId
+      ? (await brand.find({ typeId: req.typeId }).select("_id").lean()).map(
+          (b) => b._id,
+        )
+      : [];
 
     const categoryObjectIds = (req.categoryIds || []).map(
       (id) => new mongoose.Types.ObjectId(id),
     );
+    const allCategoryObjectIds = (req.allCategoryIds || req.categoryIds || []).map(
+      (id) => new mongoose.Types.ObjectId(id),
+    );
 
-    const allBanners = await Banner.find({
-      status: true,
-      ...(req.typeId && { typeId: new mongoose.Types.ObjectId(req.typeId) }),
-      ...(type && { type }),
-
-      $or: [
-        // CATEGORY banners
+    const bannerScope = [];
+    if (req.typeId) {
+      bannerScope.push(
         {
-          type2: "Category",
-          "mainCategory._id": { $in: categoryObjectIds },
+          type2: { $in: ["Category", "SubCategory", "Sub Sub-Category"] },
+          $or: [
+            { "mainCategory._id": { $in: categoryObjectIds } },
+            { "subCategory._id": { $in: allCategoryObjectIds } },
+            { "subSubCategory._id": { $in: allCategoryObjectIds } },
+          ],
         },
-
-        // BRAND banners
         {
           type2: "Brand",
           "brand._id": { $in: brandIds },
         },
-
-        // STORE banners
         {
           type2: "Store",
-          storeId: { $in: storeIds },
         },
-      ],
+        {
+          type2: "NO",
+        },
+      );
+    }
+
+    const allBanners = await Banner.find({
+      status: { $ne: false },
+      ...(req.typeId && { typeId: new mongoose.Types.ObjectId(req.typeId) }),
+      ...(type && { type }),
+      ...(bannerScope.length && { $or: bannerScope }),
     })
       .sort({ createdAt: -1 })
       .lean();
@@ -456,6 +450,27 @@ exports.updateBannerStatus = async (req, res) => {
       updateData.storeId = null;
     }
 
+    if (["Category", "SubCategory", "Sub Sub-Category"].includes(type2)) {
+      updateData.brand = null;
+      updateData.storeId = null;
+      updateData.subCategory = null;
+      updateData.subSubCategory = null;
+    }
+
+    if (type2 === "Brand") {
+      updateData.mainCategory = null;
+      updateData.subCategory = null;
+      updateData.subSubCategory = null;
+      updateData.storeId = null;
+    }
+
+    if (type2 === "Store") {
+      updateData.mainCategory = null;
+      updateData.subCategory = null;
+      updateData.subSubCategory = null;
+      updateData.brand = null;
+    }
+
     if (brandId) {
       const foundBrand = await brand.findById(brandId).lean();
       if (!foundBrand)
@@ -521,7 +536,9 @@ exports.updateBannerStatus = async (req, res) => {
     }
 
     // Handle zones
-    if (zones) updateData.zones = zones;
+    if (zones) {
+      updateData.zones = typeof zones === "string" ? JSON.parse(zones) : zones;
+    }
 
     // Update document
     const updatedBanner = await Banner.updateOne(
@@ -1513,19 +1530,13 @@ exports.getMainCategory = async (req, res) => {
     const skip = (page - 1) * limit;
 
     if (req.typeId) {
-      const categories = await Category.find(
-        { _id: { $in: req.categoryIds } },
-        { subcat: 1 },
-      ).lean();
+      const categories = await Category.find({ _id: { $in: req.categoryIds } })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean();
 
-      const subCategories = [];
-
-      categories.forEach((cat) => {
-        (cat.subcat || []).forEach((sub) => {
-          if (req.subCategoryIds.includes(sub._id.toString())) {
-            subCategories.push(sub);
-          }
-        });
+      const totalCategories = await Category.countDocuments({
+        _id: { $in: req.categoryIds },
       });
 
       return res.status(200).send({
@@ -1533,9 +1544,10 @@ exports.getMainCategory = async (req, res) => {
         typeId: req.typeId,
         limit,
         currentPage: page,
-        totalSubCategories: subCategories.length,
-        result: subCategories,
-      });      
+        totalPages: Math.ceil(totalCategories / limit),
+        totalCategories,
+        result: categories,
+      });
     }
 
     // Get total categories for pagination

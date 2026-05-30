@@ -321,13 +321,25 @@ exports.placeOrder = async (req, res) => {
     const orderItems = [];
 
     for (const item of cartItems) {
-      const product = await Products.findById(item.productId);
+      const product = await Products.findById(item.productId)
+        .select("tax category")
+        .lean();
       if (!product) {
         console.error(`Product not found: ${item.productId}`);
         return res.status(400).json({
           message: `Product not found for ID: ${item.productId}`,
         });
       }
+
+      const categoryId = product?.category?.[0]?._id;
+
+      const category = await Category.findById(categoryId)
+        .populate("typeId", "name")
+        .select("typeId")
+        .lean();
+
+      const typeId = category?.typeId?._id;
+      const typeName = category?.typeId?.name;
       const gst = product.tax;
 
       const commision = await getCommison(product._id);
@@ -341,6 +353,8 @@ exports.placeOrder = async (req, res) => {
         commision,
         image: item.image,
         gst,
+        typeId,
+        typeName,
       });
     }
 
@@ -630,7 +644,9 @@ exports.verifyPayment = async (req, res) => {
       tempOrderId,
       {
         transactionId: transactionId || paymentResult?.raw?.id || "",
-        paymentStatus: paymentResult.success ? "Successful" : "Verification Pending",
+        paymentStatus: paymentResult.success
+          ? "Successful"
+          : "Verification Pending",
 
         razorpayStatus: paymentResult.status,
         razorpayResponse: paymentResult.raw || {},
@@ -641,8 +657,7 @@ exports.verifyPayment = async (req, res) => {
     if (!paymentResult.success) {
       return res.status(200).json({
         status: false,
-        message:
-          "Payment verification pending.",
+        message: "Payment verification pending.",
       });
     }
 
@@ -1044,7 +1059,9 @@ exports.orderStatus = async (req, res) => {
 
     const orderOnTheWay = await Order.exists({
       _id: id,
-      orderStatus: { $in: ["On The Way", "Going to Pickup", "On Way", "Ready"] },
+      orderStatus: {
+        $in: ["On The Way", "Going to Pickup", "On Way", "Ready"],
+      },
     });
 
     if (orderOnTheWay && status === "Accepted") {
