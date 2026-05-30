@@ -1026,7 +1026,7 @@ exports.orderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, driverId } = req.body;
-    console.log(req.body)
+    console.log(req.body);
     const normalizedStatus = normalizeOrderStatus(status);
 
     const updateData = { orderStatus: status };
@@ -1036,6 +1036,10 @@ exports.orderStatus = async (req, res) => {
       if (preparationTime !== null) {
         updateData.preparationTime = preparationTime;
       }
+
+      updateData.instantTime = new Date().toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      });
     }
 
     if (driverId) {
