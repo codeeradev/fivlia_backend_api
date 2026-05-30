@@ -27,7 +27,7 @@ const orderSchema = new mongoose.Schema(
     storeId: { type: mongoose.Schema.ObjectId, ref: "Store" },
     orderStatus: { type: String, default: "Pending" },
     preparationTime: Number,
-    instantTime: Number,
+    instantTime: String,
     platformFee: Number,
     invoiceUrl: { type: String },
     storeInvoiceId: { type: String },
