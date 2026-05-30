@@ -17,6 +17,7 @@ const Notification = require("../modals/Notification");
 const Assign = require("../modals/driverModals/assignments");
 const sendNotification = require("../firebase/pushnotification");
 const Store = require("../modals/store");
+const Category = require("../modals/category");
 const Rating = require("../modals/rating");
 const DriverRating = require("../modals/DriverRating");
 const Transaction = require("../modals/driverModals/transaction");
