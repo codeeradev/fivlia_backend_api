@@ -26,6 +26,7 @@ const orderSchema = new mongoose.Schema(
     deliveryDistanceKm: Number,
     storeId: { type: mongoose.Schema.ObjectId, ref: "Store" },
     orderStatus: { type: String, default: "Pending" },
+    preparationTime: Number,
     platformFee: Number,
     invoiceUrl: { type: String },
     storeInvoiceId: { type: String },

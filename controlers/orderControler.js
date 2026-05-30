@@ -22,6 +22,8 @@ const Rating = require("../modals/rating");
 const DriverRating = require("../modals/DriverRating");
 const Transaction = require("../modals/driverModals/transaction");
 const AdminStaff = require("../modals/roleBase/adminStaff");
+const crypto = require("crypto");
+
 const {
   getStoresWithinRadius,
   isWithinZone,
@@ -66,6 +68,32 @@ const telegramOrderLog = require("../utils/telegram_logs");
 
 const MAX_DISTANCE_METERS = 5000;
 const MAX_ATTEMPTS = 10; // retry 10 times (for example, every 30s = 5 minutes total)
+
+const normalizeOrderStatus = (status) =>
+  String(status || "")
+    .trim()
+    .toLowerCase();
+
+const isFoodOrder = (order) =>
+  (order?.items || []).some(
+    (item) =>
+      String(item?.typeName || "")
+        .trim()
+        .toLowerCase() === "food",
+  );
+
+const getPreparationTimeMinutes = (body) => {
+  const rawTime =
+    body?.preparationTimeMinutes ??
+    body?.preparationTime ??
+    body?.preparingTime ??
+    body?.prepareTime;
+
+  if (rawTime === undefined || rawTime === null || rawTime === "") return null;
+
+  const minutes = Number(rawTime);
+  return Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
+};
 const RETRY_INTERVAL = 10000;
 
 // Helper: send repeated notifications until accepted
@@ -521,8 +549,6 @@ exports.placeOrder = async (req, res) => {
       .json({ message: "Server error", error: error.message });
   }
 };
-
-const crypto = require("crypto");
 
 exports.razorpayWebhook = async (req, res) => {
   try {
@@ -1000,8 +1026,16 @@ exports.orderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, driverId } = req.body;
+    const normalizedStatus = normalizeOrderStatus(status);
 
     const updateData = { orderStatus: status };
+
+    if (normalizedStatus === "preparing") {
+      const preparationTime = getPreparationTimeMinutes(req.body);
+      if (preparationTime !== null) {
+        updateData.preparationTime = preparationTime;
+      }
+    }
 
     if (driverId) {
       const driverDoc = await driver.findOne({ _id: driverId });
@@ -1091,8 +1125,13 @@ exports.orderStatus = async (req, res) => {
 
     if (!updatedOrder)
       return res.status(404).json({ message: "Order not found" });
-    if (status === "Accepted" || status === "Ready") {
-      autoAssignDriver(updatedOrder).catch((err) => {
+
+    const shouldAutoAssignDriver =
+      normalizedStatus === "accepted" ||
+      (normalizedStatus === "preparing" && isFoodOrder(updatedOrder));
+
+    if (shouldAutoAssignDriver) {
+      autoAssignDriver(updatedOrder._id).catch((err) => {
         console.error("Driver assignment failed:", err.message);
       });
     }

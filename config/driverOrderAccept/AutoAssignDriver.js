@@ -17,6 +17,16 @@ const db = admin.firestore();
 const autoAssignDriver = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
+    if (!order) {
+      console.warn(`Order ${orderId} not found for auto assignment`);
+      return;
+    }
+
+    if (order.driver?.driverId) {
+      console.log(`Order ${order.orderId} already has a driver assigned`);
+      return;
+    }
+
     const user = await Address.findById(order.addressId);
 
     const userLat = user.latitude;

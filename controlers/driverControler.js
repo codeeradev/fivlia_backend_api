@@ -31,6 +31,21 @@ require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const order = require("../modals/order");
 
+const isFoodPreparingOrder = (order) => {
+  const normalizedStatus = String(order?.orderStatus || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedStatus !== "preparing") return false;
+
+  return (order?.items || []).some(
+    (item) =>
+      String(item?.typeName || "")
+        .trim()
+        .toLowerCase() === "food",
+  );
+};
+
 exports.driverLogin = async (req, res) => {
   try {
     const { mobileNumber, driverDeviceId, password, fcmToken } = req.body;
@@ -142,16 +157,22 @@ exports.acceptOrder = async (req, res) => {
     const driverData = await driver.findOne({ _id: driverId });
     let updatedOrder = null;
     if (status === true) {
+      const existingOrder = await Order.findOne({ orderId }).lean();
+      const orderUpdate = {
+        driver: {
+          driverId: driverData.driverId,
+          name: driverData.driverName,
+          mobileNumber: driverData.address.mobileNo,
+        },
+      };
+
+      if (!isFoodPreparingOrder(existingOrder)) {
+        orderUpdate.orderStatus = "Going to Pickup";
+      }
+
       updatedOrder = await Order.findOneAndUpdate(
         { orderId },
-        {
-          driver: {
-            driverId: driverData.driverId,
-            name: driverData.driverName,
-            mobileNumber: driverData.address.mobileNo,
-          },
-          orderStatus: "Going to Pickup",
-        },
+        orderUpdate,
         { new: true },
       );
 
@@ -506,7 +527,16 @@ exports.acceptedOrder = async (req, res) => {
     const { mobileNumber } = req.params;
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
-      orderStatus: { $in: ["On The Way", "Going to Pickup", "On Way"] },
+      orderStatus: {
+        $in: [
+          "On The Way",
+          "Going to Pickup",
+          "On Way",
+          "Preparing",
+          "preparing",
+          "Ready",
+        ],
+      },
     });
     const enrichedOrders = await Promise.all(
       AcceptedOrders.map(async (order) => {

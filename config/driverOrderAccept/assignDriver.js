@@ -20,6 +20,21 @@ const rejectedDriversMap = new Map();
 const retryTracker = new Map();
 const orderTimeouts = new Map();
 
+const isFoodPreparingOrder = (order) => {
+  const normalizedStatus = String(order?.orderStatus || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedStatus !== "preparing") return false;
+
+  return (order?.items || []).some(
+    (item) =>
+      String(item?.typeName || "")
+        .trim()
+        .toLowerCase() === "food",
+  );
+};
+
 const assignWithBroadcast = async (order, drivers) => {
   const orderId = order.orderId.toString();
 
@@ -208,17 +223,25 @@ const assignWithBroadcast = async (order, drivers) => {
         )
           return;
 
+        const latestOrder = await Order.findOne({ orderId }).lean();
+        const shouldKeepPreparingStatus = isFoodPreparingOrder(latestOrder);
+
+        const orderUpdate = {
+          driver: {
+            driverId,
+            name: driver.driverName,
+            mobileNumber: driver.address?.mobileNo,
+          },
+        };
+
+        if (!shouldKeepPreparingStatus) {
+          orderUpdate.orderStatus = "Going to Pickup";
+        }
+
         // Atomic DB update to prevent race condition
         const updateResult = await Order.findOneAndUpdate(
           { orderId, "driver.driverId": { $exists: false } },
-          {
-            driver: {
-              driverId,
-              name: driver.driverName,
-              mobileNumber: driver.address?.mobileNo,
-            },
-            orderStatus: "Going to Pickup",
-          },
+          orderUpdate,
           { new: true },
         );
 
@@ -319,13 +342,9 @@ const assignWithBroadcast = async (order, drivers) => {
   broadcastOrder();
 
   const timeout = setTimeout(async () => {
-    orderTimeouts.set(orderId, timeout);
     const existingOrder = await Order.findOne({ orderId }).lean();
 
-    if (
-      existingOrder?.driver &&
-      existingOrder.orderStatus === "Going to Pickup"
-    ) {
+    if (existingOrder?.driver?.driverId) {
       console.log(`🛑 Order ${orderId} already assigned. Skipping retry.`);
       cleanupAllListeners();
       return;
@@ -334,8 +353,7 @@ const assignWithBroadcast = async (order, drivers) => {
     const isStillUnassigned =
       !orderAssigned &&
       !assignedOrders.has(orderId) &&
-      (!existingOrder?.driver ||
-        existingOrder?.orderStatus !== "Going to Pickup");
+      !existingOrder?.driver?.driverId;
 
     if (isStillUnassigned) {
       const allDriverIds = new Set(drivers.map((d) => d._id.toString()));
@@ -364,6 +382,8 @@ const assignWithBroadcast = async (order, drivers) => {
       cleanupAllListeners();
     }
   }, TIMEOUT_MS);
+
+  orderTimeouts.set(orderId, timeout);
 };
 
 module.exports = assignWithBroadcast;
