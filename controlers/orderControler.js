@@ -1026,6 +1026,7 @@ exports.orderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, driverId } = req.body;
+    console.log(req.body)
     const normalizedStatus = normalizeOrderStatus(status);
 
     const updateData = { orderStatus: status };
