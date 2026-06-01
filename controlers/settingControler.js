@@ -10,6 +10,25 @@ exports.getSettings = async (req, res) => {
       return res.status(404).json({ message: "Settings not found" });
     }
 
+    return res.status(200).json({ message: "Settings", settings });
+  } catch (error) {
+    console.error("Get User Settings Error =>", error);
+    return res
+      .status(500)
+      .json({ message: "Error getting settings", error: error.message });
+  }
+};
+
+exports.settings = async (req, res) => {
+  try {
+    const userId = req.user;
+
+    // Get the settings document (full, with all fields)
+    const settings = await SettingAdmin.findOne().lean();
+    if (!settings) {
+      return res.status(404).json({ message: "Settings not found" });
+    }
+
     const pages = await Page.find({
       pageSlug: {
         $in: ["about-us", "privacy", "terms"],
@@ -20,7 +39,6 @@ exports.getSettings = async (req, res) => {
     const privacyPolicy = pages.find((p) => p.pageSlug === "privacy");
     const termsAndConditions = pages.find((p) => p.pageSlug === "terms");
 
-    console.log("About Us Page =>", aboutUs);
     settings.links = {
       ...settings.links,
 
@@ -48,27 +66,6 @@ exports.getSettings = async (req, res) => {
           }
         : null,
     };
-
-    console.log("About Us Page Setting=>", settings.links.about_us);
-
-    return res.status(200).json({ message: "Settings", settings });
-  } catch (error) {
-    console.error("Get User Settings Error =>", error);
-    return res
-      .status(500)
-      .json({ message: "Error getting settings", error: error.message });
-  }
-};
-
-exports.settings = async (req, res) => {
-  try {
-    const userId = req.user;
-
-    // Get the settings document (full, with all fields)
-    const settings = await SettingAdmin.findOne().lean();
-    if (!settings) {
-      return res.status(404).json({ message: "Settings not found" });
-    }
 
     // Get user data (including addresses)
     const user = await User.findById(userId).lean();
