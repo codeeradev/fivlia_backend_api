@@ -40,11 +40,11 @@ exports.getSettings = async (req, res) => {
           }
         : null,
 
-      termAndCondition: termsAndCondition
+      termAndCondition: termsAndConditions
         ? {
-            title: termsAndCondition.pageSlug,
-            _id: termsAndCondition._id,
-            data: termsAndCondition.pageContent,
+            title: termsAndConditions.pageSlug,
+            _id: termsAndConditions._id,
+            data: termsAndConditions.pageContent,
           }
         : null,
     };
