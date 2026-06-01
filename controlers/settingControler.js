@@ -20,6 +20,7 @@ exports.getSettings = async (req, res) => {
     const privacyPolicy = pages.find((p) => p.pageSlug === "privacy");
     const termsAndConditions = pages.find((p) => p.pageSlug === "terms");
 
+    console.log("About Us Page =>", aboutUs);
     settings.links = {
       ...settings.links,
 
@@ -47,6 +48,8 @@ exports.getSettings = async (req, res) => {
           }
         : null,
     };
+
+    console.log("About Us Page Setting=>", settings.links.about_us);
 
     return res.status(200).json({ message: "Settings", settings });
   } catch (error) {
