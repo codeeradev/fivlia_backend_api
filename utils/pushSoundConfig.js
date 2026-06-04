@@ -13,12 +13,17 @@ const buildPlatformPushConfig = (
 
   return {
     android: {
+      priority: "high",
       notification: {
         sound: normalizedSound,
-        channelId: "channel_id",
+        channel_id: "channel_id",
       },
     },
     apns: {
+      headers: {
+        "apns-priority": "10", // ← CRITICAL for iOS
+      },
+
       payload: {
         aps: {
           alert: { title, body },

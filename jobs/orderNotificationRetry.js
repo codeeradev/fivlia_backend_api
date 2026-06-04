@@ -20,7 +20,9 @@ async function notifySeller(store, title, body) {
     await sendNotification(token, title, body, "/dashboard1", {
       orderId: store._id.toString(),
       ts: Date.now().toString()
-    });
+    },
+    "custom_sound",
+  );
   }
 }
 

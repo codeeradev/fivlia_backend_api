@@ -154,7 +154,7 @@ exports.addCart = async (req, res) => {
     }
 
     // Final fallback to avoid undefined values (optional)
-    if (!price || !mrp) {
+    if (price == null || mrp == null) {
       return res.status(400).json({
         message: "Price/MRP could not be determined for the selected variant.",
       });
@@ -182,7 +182,7 @@ exports.addCart = async (req, res) => {
       name,
       image,
       quantity,
-      price,
+      price: finalPrice,
       mrp,
       tax,
       productId,

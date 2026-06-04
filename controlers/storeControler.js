@@ -545,7 +545,7 @@ exports.removeCategoryInStore = async (req, res) => {
 exports.getStoreTransaction = async (req, res) => {
   try {
     const storeId = req.params;
-    const storeData = await store_transaction.find(storeId);
+    const storeData = await store_transaction.find(storeId).sort({ createdAt: -1 }).lean();;
     return res.status(200).json({ message: "Store transactions", storeData });
   } catch (error) {
     console.error(error);

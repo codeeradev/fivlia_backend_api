@@ -26,6 +26,7 @@ adminSignature:String,
 
 DeliveryStatus:String,
 
+foodSellerTaxPercent:String,
 Auth:[{firebase:{status:Boolean},whatsApp:{appKey:String,authKey:String,status:Boolean},whatsAppBulk:{apiKey:String,instanceKey:String,status:Boolean},bulksms:{api_id:String,api_password:String,status:Boolean}}],
 PaymentGateways:{RazorPayKey:{test:String,live:String,secretKey:String,status:Boolean},PhonePe:{test:String,live:String,secretKey:String,status:Boolean}},
 PaymentGatewayStatus:Boolean,

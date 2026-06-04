@@ -1,4 +1,9 @@
 // services/deliverOrder.service.js
+const {
+  buildPlatformPushConfig,
+  CUSTOM_PUSH_SOUND,
+  DEFAULT_PUSH_SOUND,
+} = require("./pushSoundConfig");
 
 module.exports.deliverOrderCommon = async ({
   orderId,
@@ -126,6 +131,11 @@ module.exports.deliverOrderCommon = async ({
         title: "Order Delivered",
         body: `Your order #${orderId} has been delivered successfully.`,
       },
+      ...buildPlatformPushConfig(
+        "Order Delivered",
+        `Your order #${orderId} has been delivered successfully.`,
+        DEFAULT_PUSH_SOUND,
+      ),
       data: { orderId: orderId.toString(), type: "delivered" },
     });
   }
@@ -137,6 +147,11 @@ module.exports.deliverOrderCommon = async ({
         title: "Order Delivered",
         body: `Order #${orderId} delivered successfully.`,
       },
+      ...buildPlatformPushConfig(
+        "Order Delivered",
+        `Order #${orderId} delivered successfully.`,
+        CUSTOM_PUSH_SOUND,
+      ),
       data: { orderId: orderId.toString(), type: "delivered" },
     });
   }

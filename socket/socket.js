@@ -1,32 +1,61 @@
-const { driverSocketMap,sellerSocketMap,adminSocketMap,userSocketMap } = require('../utils/driverSocketMap');
-const {updateDriverStatus} = require('../controlers/driverControler')
+const {
+  driverSocketMap,
+  sellerSocketMap,
+  adminSocketMap,
+  userSocketMap,
+} = require("../utils/driverSocketMap");
+const { updateDriverStatus } = require("../controlers/driverControler");
+const { getPendingDriverOffers } = require("../utils/pendingDriverOffers");
+
+const replayPendingOrdersToDriver = async (socket, driverId) => {
+  if (!driverId) return 0;
+  const pendingOffers = await getPendingDriverOffers(driverId);
+  for (const offer of pendingOffers) {
+    socket.emit("newOrder", offer);
+  }
+  return pendingOffers.length;
+};
+
 module.exports = (io) => {
-  io.on('connection', (socket) => {
-   console.log('Driver connected:', socket.id);
-    socket.on('updateDriverStatus', async (payload) => {
-      if (typeof payload === 'string') {
+  io.on("connection", (socket) => {
+    console.log("Driver connected:", socket.id);
+
+    socket.on("updateDriverStatus", async (payload) => {
+      if (typeof payload === "string") {
         try {
           payload = JSON.parse(payload);
         } catch (e) {
-          console.error('Failed to parse payload:', payload);
+          console.error("Failed to parse payload:", payload);
           return;
         }
       }
+
       const { driverId, status } = payload || {};
       const result = await updateDriverStatus(driverId, status);
-      
-        if (status === 'online') {
-          driverSocketMap.set(driverId, socket); // set only if online
-          console.log('🧠 driverSocketMap:', [...driverSocketMap.entries()]);
-
-        } else {
-          driverSocketMap.delete(driverId); // remove if offline
-        }
 
       if (result.success) {
-        io.emit('activeStatus', { message: "Driver status updated", driverId, status });
+        // Keep in-memory socket map aligned with persisted driver status.
+        if (status === "online") {
+          driverSocketMap.set(driverId, socket);
+          console.log("driverSocketMap entries:", [...driverSocketMap.keys()]);
+          const replayed = await replayPendingOrdersToDriver(socket, driverId);
+          if (replayed > 0) {
+            console.log(`Replayed ${replayed} pending orders to driver ${driverId}`);
+          }
+        } else {
+          driverSocketMap.delete(driverId);
+        }
+
+        io.emit("activeStatus", {
+          message: "Driver status updated",
+          driverId,
+          status,
+        });
       } else {
-        socket.emit('statusUpdateError', { message: result.message, error: result.error });
+        socket.emit("statusUpdateError", {
+          message: result.message,
+          error: result.error,
+        });
       }
     });
 
@@ -44,28 +73,63 @@ module.exports = (io) => {
       if (!storeId) return;
 
       sellerSocketMap.set(storeId, socket);
-      console.log("🏪 Seller connected:", storeId);
-      console.log("🧠 sellerSocketMap:", [...sellerSocketMap.keys()]);
+      console.log("Seller connected:", storeId);
+      console.log("sellerSocketMap keys:", [...sellerSocketMap.keys()]);
 
-      socket.emit("joinedSellerRoom", { message: "Seller joined successfully", storeId });
+      socket.emit("joinedSellerRoom", {
+        message: "Seller joined successfully",
+        storeId,
+      });
     });
 
     socket.on("joinAdmin", () => {
-      adminSocketMap.set("admin", socket); // single admin or can use adminId
-      console.log("👑 Admin connected");
+      adminSocketMap.set("admin", socket);
+      console.log("Admin connected");
       socket.emit("joinedAdminRoom", { message: "Admin joined successfully" });
     });
 
-    socket.on('joinUser', (payload) => {
-      if (typeof payload === 'string') payload = JSON.parse(payload);
-      const { userId } = payload;
+    socket.on("joinUser", (payload) => {
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch (e) {
+          console.error("Failed to parse joinUser payload:", payload);
+          return;
+        }
+      }
+
+      const { userId } = payload || {};
       if (!userId) return;
+
       userSocketMap.set(userId, socket);
-      console.log('👤 User connected:', userId);
-      socket.emit('joinedUserRoom', { message: 'User joined successfully', userId });
+      console.log("User connected:", userId);
+      socket.emit("joinedUserRoom", {
+        message: "User joined successfully",
+        userId,
+      });
     });
 
-    socket.on('disconnect', () => {
+    socket.on("driverReadyForOrders", async (payload) => {
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch (e) {
+          console.error("Failed to parse driverReadyForOrders payload:", payload);
+          return;
+        }
+      }
+
+      const { driverId } = payload || {};
+      if (!driverId) return;
+
+      const replayed = await replayPendingOrdersToDriver(socket, driverId);
+      socket.emit("driverPendingOrdersSynced", {
+        driverId,
+        replayed,
+      });
+    });
+
+    socket.on("disconnect", () => {
       for (const [driverId, s] of driverSocketMap.entries()) {
         if (s.id === socket.id) driverSocketMap.delete(driverId);
       }
@@ -81,5 +145,3 @@ module.exports = (io) => {
     });
   });
 };
-
-

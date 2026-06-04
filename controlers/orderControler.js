@@ -139,6 +139,7 @@ const notifySeller = async (
   body,
   clickAction = "/dashboard1",
   data = {},
+  soundType = CUSTOM_PUSH_SOUND,
 ) => {
   try {
     // ✅ Support both new (devices[]) and old (fcmToken) formats
@@ -164,7 +165,7 @@ const notifySeller = async (
     // Send to each token (keep your existing logic)
     for (const token of tokens) {
       try {
-        await sendNotification(token, title, body, clickAction, data);
+        await sendNotification(token, title, body, clickAction, data, soundType);
       } catch (err) {
         console.error(
           "notifySeller: sendNotification failed for token",
@@ -688,6 +689,18 @@ exports.verifyPayment = async (req, res) => {
       });
     }
 
+    const existingOrder = await Order.findOne({
+      transactionId: transactionId || paymentResult?.raw?.id,
+    });
+
+    if (existingOrder) {
+      return res.status(200).json({
+        status: true,
+        message: "Order already exists",
+        order: existingOrder,
+      });
+    }
+
     const orderData = {
       orderId: tempOrder.orderId,
       items: tempOrder.items,
@@ -1112,6 +1125,28 @@ exports.orderStatus = async (req, res) => {
       new: true,
     });
 
+    if (driverId !== undefined) {
+      try {
+        await updateDispatchState(
+          updatedOrder.orderId,
+          {
+            $set: {
+              assigned: true,
+              status: "assigned",
+            },
+          },
+          async (redis, keys) => {
+            await redis.hSet(keys.state, {
+              assigned: "1",
+              status: "assigned",
+            });
+          },
+        );
+      } catch (err) {
+        console.warn("⚠️ Dispatch update failed:", err.message);
+      }
+    }
+
     await telegramOrderLog("📦 ORDER STATUS UPDATED", {
       orderId: updatedOrder.orderId,
       status,
@@ -1123,6 +1158,27 @@ exports.orderStatus = async (req, res) => {
         orderId: updatedOrder.orderId,
         orderStatus: "Accepted",
       });
+
+      try {
+        await updateDispatchState(
+          updatedOrder.orderId,
+          {
+            $set: {
+              assigned: false,
+              status: "cancelled",
+            },
+          },
+          async (redis, keys) => {
+            await redis.hSet(keys.state, {
+              assigned: "0",
+              status: "cancelled",
+            });
+          },
+        );
+      } catch (err) {
+        console.warn("⚠️ Cancel dispatch update failed:", err.message);
+      }
+
       console.log(
         `Deleted ${deleteAssignments.deletedCount} Accepted assignments for cancelled order ${updatedOrder.orderId}`,
       );

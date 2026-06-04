@@ -14,11 +14,15 @@ const {resumePendingDispatch} = require("./utils/resumePendingOrders");
 // const { initAgenda } = require('./config/agenda'); // ✅ your agenda setup
 require("./jobs/orderNotificationRetry");
 
-connectDb();
-
 const app = express();
 app.set("etag", false);
 app.use(cors());
+
+app.use(
+  "/razorpay-webhook",
+  express.raw({ type: "application/json" })
+);
+
 app.use(express.json());
 // const key = fs.readFileSync('/etc/letsencrypt/live/api.fivlia.in/privkey.pem', 'utf8');
 // const cert = fs.readFileSync('/etc/letsencrypt/live/api.fivlia.in/cert.pem', 'utf8');

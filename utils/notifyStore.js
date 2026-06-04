@@ -1,10 +1,20 @@
 const admin = require("../firebase/firebase");
+const {
+  buildPlatformPushConfig,
+  CUSTOM_PUSH_SOUND,
+} = require("./pushSoundConfig");
 
 /**
  * Universal push sender for store/seller/driver notifications.
  * Automatically cleans invalid tokens.
  */
-exports.notifyEntity = async (entityDoc, title, body, data = {}) => {
+exports.notifyEntity = async (
+  entityDoc,
+  title,
+  body,
+  data = {},
+  soundType = CUSTOM_PUSH_SOUND,
+) => {
   try {
     if (!entityDoc?.devices?.length) {
       console.log(`ℹ️ No device list found for entity ${entityDoc?._id}`);
@@ -21,24 +31,14 @@ exports.notifyEntity = async (entityDoc, title, body, data = {}) => {
       return;
     }
 
+    const notificationData =
+      typeof data === "string" ? { click_action: data } : data;
+
     // 2️⃣ Prepare FCM message
     const message = {
       notification: { title, body },
-      android: {
-        notification: {
-          channelId: "default_channel",
-          sound: "default",
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: "default",
-            alert: { title, body },
-          },
-        },
-      },
-      data,
+      ...buildPlatformPushConfig(title, body, soundType),
+      data: notificationData,
     };
 
     // 3️⃣ Send to all tokens in parallel

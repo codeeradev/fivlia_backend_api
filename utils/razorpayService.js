@@ -2,6 +2,7 @@ const Razorpay = require("razorpay");
 const { SettingAdmin } = require("../modals/setting");
 const Product = require("../modals/Product"); // Adjust path
 const Category = require("../modals/category"); // Adjust path if needed
+const telegramOrderLog = require("./telegram_logs");
 
 async function createRazorpayOrder(
   amount,
@@ -63,17 +64,18 @@ async function verifyRazorpayPayment(transactionId, razorpayOrderId) {
     }
 
     // 🔥 FETCH PAYMENT USING ORDER ID
-    const payments = await razorpay.orders.fetchPayments(
-      razorpayOrderId
-    );
+    const payments = await razorpay.orders.fetchPayments(razorpayOrderId);
+
+    await telegramOrderLog("🕸️ WEBHOOK RUN (Service Function Fails)", {
+      razorpayOrderId: razorpayOrderId,
+      transactionId: transactionId || "N/A",
+    });
 
     if (!payments.items || payments.items.length === 0) {
       return { success: false, status: "not_found" };
     }
 
-    const capturedPayment = payments.items.find(
-      (p) => p.status === "captured"
-    );
+    const capturedPayment = payments.items.find((p) => p.status === "captured");
 
     if (!capturedPayment) {
       return {

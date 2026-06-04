@@ -1015,7 +1015,8 @@ exports.editSellerProfile = async (req, res) => {
 
 exports.sellerWithdrawalRequest = async (req, res) => {
   try {
-    const { storeId, amount } = req.body;
+    const { storeId } = req.body;
+    const amount = parseFloat(req.body.amount);
     const storeData = await seller.findById(storeId);
     if (!storeData)
       return res.status(204).json({ message: "Seller not found" });
@@ -1108,6 +1109,8 @@ exports.getAllStore = async (req, res) => {
 
 exports.logoutSeller = async (req, res) => {
   try {
+    const { type } = req.query;
+
     const { sellerId, deviceId } = req.body;
     if (!sellerId) {
       return res.status(400).json({ message: "Seller ID is required" });
@@ -1117,6 +1120,14 @@ exports.logoutSeller = async (req, res) => {
     if (!sellerDoc) {
       return res.status(204).json({ message: "Seller not found" });
     }
+
+    if (type === "all") {
+      sellerDoc.devices = [];
+      await sellerDoc.save();
+      return res.status(200).json({
+        message: "Logged out from all devices successfully",
+      });
+    } //logout from all devices
 
     // ✅ Logout from one specific device
     if (!deviceId) {
@@ -1321,7 +1332,7 @@ exports.deleteCoupon = async (req, res) => {
 
 exports.updateToken = async (req, res) => {
   try {
-    const {sellerId} = req.params;
+    const { sellerId } = req.params;
     const { deviceId, token } = req.body;
 
     console.log("req.body of update token", req.body);

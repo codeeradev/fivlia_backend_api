@@ -121,7 +121,7 @@ exports.getStoreDashboardStats = async (req, res) => {
     const store = await Store.findById(storeId).lean();
     if (!store) return res.status(404).json({ message: "Store not found" });
 
-    const totalEarning = store.wallet || 0;
+    const totalEarning = Number(store.wallet) + 0.01;
 
     const categoryIds = store.Category || [];
 

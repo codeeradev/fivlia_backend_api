@@ -415,6 +415,77 @@ async function generatePDFInvoice(
 
         doc.moveDown(0.8);
 
+        // 1. Show seller-side settlement cuts separately so the new 5% food-seller tax is visible on seller invoice.
+        const totalCommission = order.items.reduce((sum, item) => {
+          const itemTotal = item.price * item.quantity;
+          const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
+          return sum + commissionAmount;
+        }, 0);
+        const foodSellerTaxPercent = Number(order.foodSellerTaxPercent || 0);
+        const foodSellerTaxAmount = Number(order.foodSellerTaxAmount || 0);
+        const netSellerAmount = Math.max(
+          itemsTotal - totalCommission - foodSellerTaxAmount,
+          0,
+        );
+
+        // 2. Keep settlement details visible only on seller invoice so customer/admin invoice layout stays unchanged.
+        if (
+          dType === "seller" &&
+          !store.Authorized_Store &&
+          (totalCommission > 0 || foodSellerTaxAmount > 0)
+        ) {
+          doc.moveTo(tableLeft, doc.y).lineTo(tableRight, doc.y).stroke();
+          doc.moveDown(0.4);
+          doc.font("Helvetica-Bold").fontSize(9).text("SELLER SETTLEMENT:");
+          doc.moveDown(0.3);
+          doc.font("Helvetica").fontSize(8);
+
+          const commissionY = doc.y;
+          doc.text("Commission Deduction:", tableLeft, commissionY, {
+            width: 120,
+            align: "left",
+          });
+          doc.text(totalCommission.toFixed(2), tableLeft + 120, commissionY, {
+            width: tableRight - tableLeft - 120,
+            align: "left",
+          });
+
+          if (foodSellerTaxAmount > 0) {
+            const foodTaxY = doc.y;
+            doc.text(
+              `Food Seller Tax (${foodSellerTaxPercent}%):`,
+              tableLeft,
+              foodTaxY,
+              {
+                width: 120,
+                align: "left",
+              },
+            );
+            doc.text(
+              foodSellerTaxAmount.toFixed(2),
+              tableLeft + 120,
+              foodTaxY,
+              {
+                width: tableRight - tableLeft - 120,
+                align: "left",
+              },
+            );
+          }
+
+          doc.moveDown(0.3);
+          const netSellerY = doc.y;
+          doc.font("Helvetica-Bold").fontSize(9);
+          doc.text("Net Amount To Seller:", tableLeft, netSellerY, {
+            width: 120,
+            align: "left",
+          });
+          doc.text(netSellerAmount.toFixed(2), tableLeft + 120, netSellerY, {
+            width: tableRight - tableLeft - 120,
+            align: "left",
+          });
+          doc.moveDown(0.8);
+        }
+
         // Signature image (if available)
         if (store.Authorized_Store === true && adminSignatreBuffer) {
           doc.fontSize(7).text("Seller Authorized Signature", {

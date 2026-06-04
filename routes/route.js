@@ -181,6 +181,7 @@ const {
   driver,
   getDriver,
   editDriver,
+  razorpayWebhook,
   verifyPayment,
   getOrderDetails,
   deliveryStatus,
@@ -343,6 +344,7 @@ router.post("/addCart", upload, verifyToken, addCart);
 router.post("/placeOrder", placeOrder);
 router.post("/bulkOrder/:productId", verifyToken, bulkOrder);
 router.put("/update-bulk-orders/:id", updateBulkOrders);
+router.post("/razorpay-webhook", razorpayWebhook);
 router.post("/verifyPayment", verifyPayment);
 router.post("/filter", filter);
 router.post("/createStore", upload, createStore);
@@ -393,7 +395,7 @@ router.post("/seller/create-seller-coupon", upload, createSellerCoupon);
 router.post("/seller/edit-seller-coupon/:couponId", editSellerCoupon);
 router.get("/seller/get-coupons/:storeId", getCoupons);
 router.delete("/seller/delete-coupons/:id", deleteCoupon);
-router.post("/seller/update-token", verifyToken, updateToken);
+router.post("/seller/update-token/:sellerId", updateToken);
 // router.put('/editSellerProduct/:id', upload, editSellerProduct)
 // router.put('/updateSellerStock/:id', updateSellerStock)
 router.put("/acceptDeclineRequest", acceptDeclineRequest);
