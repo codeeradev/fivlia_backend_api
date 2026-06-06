@@ -1863,6 +1863,13 @@ exports.getTopSeller = async (req, res) => {
     // Sort stores by averageRating in descending order (highest to lowest)
     // storeDetailsWithRatings.sort((a, b) => b.averageRating - a.averageRating);
 
+    storeDetailsWithRatings.sort((a, b) => {
+      const offerA = parseFloat(a.topProductOffer || 0);
+      const offerB = parseFloat(b.topProductOffer || 0);
+
+      return offerB - offerA;
+    });
+
     return res.status(200).json({
       storeDetailsWithRatings,
     });

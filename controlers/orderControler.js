@@ -165,7 +165,14 @@ const notifySeller = async (
     // Send to each token (keep your existing logic)
     for (const token of tokens) {
       try {
-        await sendNotification(token, title, body, clickAction, data, soundType);
+        await sendNotification(
+          token,
+          title,
+          body,
+          clickAction,
+          data,
+          soundType,
+        );
       } catch (err) {
         console.error(
           "notifySeller: sendNotification failed for token",
@@ -479,14 +486,21 @@ exports.placeOrder = async (req, res) => {
       console.log("noti block next");
       if (admin?.fcmToken) {
         console.log("noti block runned");
-        await sendNotification(
-          admin.fcmToken,
-          "New Order Received 🛒",
-          `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
-          "/orders",
-          {},
-          CUSTOM_PUSH_SOUND,
-        );
+        try {
+          await sendNotification(
+            admin.fcmToken,
+            "New Order Received 🛒",
+            `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+            "/orders",
+            {},
+            CUSTOM_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
       }
 
       sendAdminNotification({
@@ -766,14 +780,21 @@ exports.verifyPayment = async (req, res) => {
       });
 
       if (admin?.fcmToken) {
-        await sendNotification(
-          admin.fcmToken,
-          "New Order Received 🛒",
-          `Order #${finalOrder.orderId} worth ₹${finalOrder.totalPrice} placed.`,
-          "/orders",
-          {},
-          CUSTOM_PUSH_SOUND,
-        );
+        try {
+          await sendNotification(
+            admin.fcmToken,
+            "New Order Received 🛒",
+            `Order #${finalOrder.orderId} worth ₹${finalOrder.totalPrice} placed.`,
+            "/orders",
+            {},
+            CUSTOM_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
       }
 
       const sellerSocket = sellerSocketMap.get(sellerDoc._id.toString());
@@ -1078,34 +1099,48 @@ exports.orderStatus = async (req, res) => {
 
         // 🧠 Notify user that a driver has been assigned
         if (user?.fcmToken && user.fcmToken !== "null") {
-          await sendNotification(
-            user.fcmToken,
-            "🚗 Driver Assigned!",
-            `Your order #${orderDoc.orderId} has been assigned to driver ${driverDoc.driverName}.`,
-            "/dashboard1",
-            {
-              orderId: orderDoc.orderId,
-              driverName: driverDoc.driverName,
-              driverMobile: driverDoc.address?.mobileNo || "",
-              storeName: storeData?.storeName || "Fivlia",
-            },
-            DEFAULT_PUSH_SOUND,
-          );
+          try {
+            await sendNotification(
+              user.fcmToken,
+              "🚗 Driver Assigned!",
+              `Your order #${orderDoc.orderId} has been assigned to driver ${driverDoc.driverName}.`,
+              "/dashboard1",
+              {
+                orderId: orderDoc.orderId,
+                driverName: driverDoc.driverName,
+                driverMobile: driverDoc.address?.mobileNo || "",
+                storeName: storeData?.storeName || "Fivlia",
+              },
+              DEFAULT_PUSH_SOUND,
+            );
+          } catch (err) {
+            console.warn(
+              "⚠️ User notification failed order status change:",
+              err.response?.data?.error?.message || err.message,
+            );
+          }
         }
 
         // 🧠 Optionally notify the store as well
         if (storeData?.fcmTokenMobile) {
-          await sendNotification(
-            storeData.fcmTokenMobile,
-            "Driver Assigned 🚗",
-            `Driver ${driverDoc.driverName} has been assigned for order #${orderDoc.orderId}.`,
-            "/dashboard1",
-            {
-              orderId: orderDoc.orderId,
-              driverName: driverDoc.driverName,
-            },
-            CUSTOM_PUSH_SOUND,
-          );
+          try {
+            await sendNotification(
+              storeData.fcmTokenMobile,
+              "Driver Assigned 🚗",
+              `Driver ${driverDoc.driverName} has been assigned for order #${orderDoc.orderId}.`,
+              "/dashboard1",
+              {
+                orderId: orderDoc.orderId,
+                driverName: driverDoc.driverName,
+              },
+              CUSTOM_PUSH_SOUND,
+            );
+          } catch (err) {
+            console.warn(
+              "⚠️ User notification failed order status change:",
+              err.response?.data?.error?.message || err.message,
+            );
+          }
         }
       }
     }
@@ -1396,20 +1431,27 @@ exports.orderStatus = async (req, res) => {
     const store = await Store.findById(updatedOrder.storeId).lean();
     // 3. Send notification if FCM token valid and status exists
     if (user?.fcmToken && user.fcmToken !== "null" && statusInfo?.statusTitle) {
-      await sendNotification(
-        user.fcmToken,
-        `📦 Order #${updatedOrder.orderId} - ${statusInfo.statusTitle}`,
-        `Your order is now marked as ${statusInfo.statusTitle} by ${
-          store.storeName || "Fivlia"
-        }`,
-        "/dashboard1",
-        {
-          image: statusInfo.image || "",
-          orderId: updatedOrder.orderId,
-          statusCode: statusInfo.statusCode,
-        },
-        DEFAULT_PUSH_SOUND,
-      );
+      try {
+        await sendNotification(
+          user.fcmToken,
+          `📦 Order #${updatedOrder.orderId} - ${statusInfo.statusTitle}`,
+          `Your order is now marked as ${statusInfo.statusTitle} by ${
+            store.storeName || "Fivlia"
+          }`,
+          "/dashboard1",
+          {
+            image: statusInfo.image || "",
+            orderId: updatedOrder.orderId,
+            statusCode: statusInfo.statusCode,
+          },
+          DEFAULT_PUSH_SOUND,
+        );
+      } catch (err) {
+        console.warn(
+          "⚠️ User notification failed order status change:",
+          err.response?.data?.error?.message || err.message,
+        );
+      }
     }
 
     // new socket code of user order status
