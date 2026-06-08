@@ -177,11 +177,9 @@ exports.acceptOrder = async (req, res) => {
         orderUpdate.orderStatus = "Going to Pickup";
       }
 
-      updatedOrder = await Order.findOneAndUpdate(
-        { orderId },
-        orderUpdate,
-        { new: true },
-      );
+      updatedOrder = await Order.findOneAndUpdate({ orderId }, orderUpdate, {
+        new: true,
+      });
 
       // new socket code of user order status
       await emitUserOrderStatusUpdate(
@@ -304,17 +302,22 @@ exports.driverOrderStatus = async (req, res) => {
         }, 0);
 
         // 1. Apply the extra 5% tax only for food sellers and keep old commission flow unchanged.
-        const isFoodSellerTaxApplicable =
-          !store.Authorized_Store &&
-          (store?.sellFood === true ||
-            String(store?.businessType || "")
-              .trim()
-              .toUpperCase() === "FSSAI");
-
         const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
 
-        const foodSellerTaxAmount = isFoodSellerTaxApplicable
-          ? (itemTotal * foodSellerTaxPercent) / 100
+        const foodItemsTotal = order.items.reduce((sum, item) => {
+          const typeName = String(item.typeName || "")
+            .trim()
+            .toLowerCase();
+
+          if (typeName === "food") {
+            return sum + item.price * item.quantity;
+          }
+
+          return sum;
+        }, 0);
+
+        const foodSellerTaxAmount = !store.Authorized_Store
+          ? (foodItemsTotal * foodSellerTaxPercent) / 100
           : 0;
 
         const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
