@@ -1581,7 +1581,13 @@ exports.getAllSellerProducts = async (req, res) => {
     const productFilter = { _id: { $in: productIds } };
 
     if (mongoose.Types.ObjectId.isValid(requestedTypeId)) {
-      productFilter.typeId = new mongoose.Types.ObjectId(requestedTypeId);
+      const categoryIds = await Category.find({
+        typeId: requestedTypeId,
+      }).distinct("_id");
+
+      productFilter["category._id"] = {
+        $in: categoryIds,
+      };
     }
 
     const total = await Products.countDocuments(productFilter);
