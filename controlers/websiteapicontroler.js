@@ -1551,6 +1551,7 @@ exports.getAllSellerProducts = async (req, res) => {
   try {
     const requestedTypeId = resolveRequestedTypeId(req);
 
+    console.log("Fetching products for seller:", id, "with type filter:", requestedTypeId);
     // 1. Fetch Stock data for the seller using sellerId
     const stockData = await Stock.find({ storeId: id }).lean();
 
