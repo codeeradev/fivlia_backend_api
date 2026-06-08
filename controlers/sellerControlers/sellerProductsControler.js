@@ -35,10 +35,10 @@ exports.addCategoryInSeller = async (req, res) => {
             subCategoryId:
               sub.subCategoryId &&
               mongoose.isValidObjectId(
-                sub.subCategoryId.$oid || sub.subCategoryId
+                sub.subCategoryId.$oid || sub.subCategoryId,
               )
                 ? new mongoose.Types.ObjectId(
-                    sub.subCategoryId.$oid || sub.subCategoryId
+                    sub.subCategoryId.$oid || sub.subCategoryId,
                   )
                 : null,
             subSubCategories: Array.isArray(sub.subSubCategories)
@@ -47,10 +47,10 @@ exports.addCategoryInSeller = async (req, res) => {
                     subSubCategoryId:
                       ss.subSubCategoryId &&
                       mongoose.isValidObjectId(
-                        ss.subSubCategoryId.$oid || ss.subSubCategoryId
+                        ss.subSubCategoryId.$oid || ss.subSubCategoryId,
                       )
                         ? new mongoose.Types.ObjectId(
-                            ss.subSubCategoryId.$oid || ss.subSubCategoryId
+                            ss.subSubCategoryId.$oid || ss.subSubCategoryId,
                           )
                         : null,
                   }))
@@ -72,7 +72,7 @@ exports.addCategoryInSeller = async (req, res) => {
       if (!newCat.categoryId) return;
 
       const existingCat = updatedCategories.find(
-        (c) => c.categoryId.toString() === newCat.categoryId.toString()
+        (c) => c.categoryId.toString() === newCat.categoryId.toString(),
       );
 
       if (existingCat) {
@@ -83,7 +83,7 @@ exports.addCategoryInSeller = async (req, res) => {
           const existingSub = existingCat.subCategories.find(
             (s) =>
               s.subCategoryId &&
-              s.subCategoryId.toString() === newSub.subCategoryId.toString()
+              s.subCategoryId.toString() === newSub.subCategoryId.toString(),
           );
 
           if (existingSub) {
@@ -93,7 +93,7 @@ exports.addCategoryInSeller = async (req, res) => {
                 !existingSub.subSubCategories.find(
                   (ess) =>
                     ess.subSubCategoryId.toString() ===
-                    ss.subSubCategoryId.toString()
+                    ss.subSubCategoryId.toString(),
                 )
               ) {
                 existingSub.subSubCategories.push(ss);
@@ -132,7 +132,7 @@ exports.addCategoryInSeller = async (req, res) => {
         const exists = storeStock.stock.find(
           (s) =>
             s.productId.toString() === pid.toString() &&
-            s.variantId.toString() === variant._id.toString()
+            s.variantId.toString() === variant._id.toString(),
         );
 
         if (!exists) {
@@ -230,7 +230,7 @@ exports.getCategoryProduct = async (req, res) => {
         "_id productName productThumbnailUrl " +
           "category._id category.name " +
           "subCategory._id subCategory.name " +
-          "subSubCategory._id subSubCategory.name "
+          "subSubCategory._id subSubCategory.name ",
       )
       .lean();
 
@@ -292,7 +292,7 @@ exports.getSellerCategories = async (req, res) => {
     const result = store.sellerCategories
       .map((storeCat) => {
         const fullCat = categories.find(
-          (c) => c._id.toString() === storeCat.categoryId.toString()
+          (c) => c._id.toString() === storeCat.categoryId.toString(),
         );
         if (!fullCat) return null;
 
@@ -321,25 +321,49 @@ exports.getSellerCategories = async (req, res) => {
 };
 
 exports.getSellerProducts = async (req, res) => {
-  const { sellerId, page = 1, limit, search = "", category = "" } = req.query;
+  const {
+    sellerId,
+    page = 1,
+    limit = 100,
+    search = "",
+    category = "",
+  } = req.query;
 
   try {
     if (!sellerId) {
-      return res.status(400).json({ success: false, message: "Missing sellerId" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing sellerId" });
     }
 
-    let productMatch = {};
-    if (search) {
-      productMatch.productName = { $regex: search, $options: "i" };
+    const store = await Store.findById(sellerId)
+      .select("sellFood businessType foodTypes")
+      .lean();
+
+    if (!store) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Seller not found" });
     }
 
-    if (category) {
-      productMatch["category._id"] = new mongoose.Types.ObjectId(category);
+    const isFoodSeller =
+      store.sellFood === true || store.businessType === "FSSAI";
+    const sellerFoodTypes = (store.foodTypes || []).map((id) => id.toString());
+    const numericPage = parseInt(page) || 1;
+    const numericLimit = parseInt(limit) || 100;
+    const skip = (numericPage - 1) * numericLimit;
+
+    if (isFoodSeller && !sellerFoodTypes.length) {
+      return res.json({
+        success: true,
+        products: [],
+        total: 0,
+        page: numericPage,
+        limit: numericLimit,
+        totalPages: 0,
+      });
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    /* ---------------- STOCK ---------------- */
     const stockData = await Stock.findOne({ storeId: sellerId }).lean();
     const stockEntries = stockData?.stock || [];
 
@@ -348,38 +372,51 @@ exports.getSellerProducts = async (req, res) => {
       .filter(Boolean)
       .map((id) => new mongoose.Types.ObjectId(id));
 
-    /* ---------------- TOTAL (UNCHANGED LOGIC) ---------------- */
-    const total = await Product.countDocuments({ _id: { $in: productIds } });
-
-    /* ---------------- PRODUCTS ---------------- */
-    const sellerProducts = await Product.find({
+    const productQuery = {
       _id: { $in: productIds },
-      ...productMatch,
-    })
+    };
+
+    if (search) {
+      productQuery.productName = { $regex: search, $options: "i" };
+    }
+
+    if (category) {
+      productQuery["category._id"] = new mongoose.Types.ObjectId(category);
+    }
+
+    if (isFoodSeller) {
+      productQuery.isVeg = { $in: [1, 2] };
+    } else {
+      productQuery.isVeg = 0;
+    }
+
+    const total = await Product.countDocuments(productQuery);
+
+    const sellerProducts = await Product.find(productQuery)
       .skip(skip)
-      .limit(parseInt(limit))
+      .limit(numericLimit)
       .select(
-        "productName mrp sku sell_price productThumbnailUrl category subCategory subSubCategory variants"
+        "productName mrp sku sell_price productThumbnailUrl category subCategory subSubCategory variants isVeg",
       )
       .lean();
 
-    /* ---------------- CATEGORY PREFETCH (OPTIMIZATION ONLY) ---------------- */
     const categoryIds = [
       ...new Set(
         sellerProducts
           .map((p) => p.category?.[0]?._id?.toString())
-          .filter(Boolean)
+          .filter(Boolean),
       ),
     ];
 
-    const categories = await Category.find({ _id: { $in: categoryIds } }).lean();
+    const categories = await Category.find({
+      _id: { $in: categoryIds },
+    }).lean();
 
     const categoryMap = {};
     categories.forEach((cat) => {
       categoryMap[cat._id.toString()] = cat;
     });
 
-    /* ---------------- RESPONSE BUILD (LOGIC PRESERVED) ---------------- */
     const products = await Promise.all(
       sellerProducts.map(async (prod) => {
         const productIdStr = prod._id.toString();
@@ -398,17 +435,15 @@ exports.getSellerProducts = async (req, res) => {
 
           if (fullCategory.subcat && (subSubCategoryId || subCategoryId)) {
             const matchedSubcat = fullCategory.subcat.find(
-              (sub) => sub._id.toString() === subCategoryId
+              (sub) => sub._id.toString() === subCategoryId,
             );
 
             if (matchedSubcat?.subsubcat?.length) {
               const matchedSubSubCat = matchedSubcat.subsubcat.find(
-                (ss) => ss._id.toString() === subSubCategoryId
+                (ss) => ss._id.toString() === subSubCategoryId,
               );
               commission =
-                matchedSubSubCat?.commison ??
-                matchedSubcat?.commison ??
-                0;
+                matchedSubSubCat?.commison ?? matchedSubcat?.commison ?? 0;
             } else {
               commission = matchedSubcat?.commison ?? 0;
             }
@@ -416,7 +451,7 @@ exports.getSellerProducts = async (req, res) => {
         }
 
         const firstStockEntry = stockEntries.find(
-          (s) => s.productId.toString() === productIdStr
+          (s) => s.productId.toString() === productIdStr,
         );
 
         const variantsWithStock = (prod.variants || []).map((variant) => {
@@ -424,7 +459,7 @@ exports.getSellerProducts = async (req, res) => {
             stockEntries.find(
               (s) =>
                 s.productId.toString() === productIdStr &&
-                s.variantId?.toString() === variant._id.toString()
+                s.variantId?.toString() === variant._id.toString(),
             ) || null;
 
           return {
@@ -450,16 +485,16 @@ exports.getSellerProducts = async (req, res) => {
           status: firstStockEntry?.status ?? false,
           commission,
         };
-      })
+      }),
     );
 
     res.json({
       success: true,
       products,
       total,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      totalPages: Math.ceil(total / limit),
+      page: numericPage,
+      limit: numericLimit,
+      totalPages: Math.ceil(total / numericLimit),
     });
   } catch (err) {
     console.error("Error in getSellerProducts:", err);
@@ -479,7 +514,7 @@ exports.updateSellerProducStatus = async (req, res) => {
     const updated = await Products.findOneAndUpdate(
       { "stock.productId": productId, storeId: id },
       { $set: { "stock.$.status": status } },
-      { new: true }
+      { new: true },
     );
     console.log("updated", updated);
     if (!updated) {
@@ -518,7 +553,7 @@ exports.getSellerCategoryList = async (req, res) => {
 
 exports.getExistingProductList = async (req, res) => {
   try {
-    const { q } = req.query;
+    const { q, sellerId, page = 1, limit = 100 } = req.query;
 
     if (!q || q.length < 3) {
       return res
@@ -527,27 +562,75 @@ exports.getExistingProductList = async (req, res) => {
     }
 
     const regex = new RegExp(q, "i");
+    const matchConditions = [
+      {
+        $or: [
+          { productName: regex },
+          { description: regex },
+          { "brand_Name.name": regex },
+          { "category.name": regex },
+          { "subCategory.name": regex },
+          { "subSubCategory.name": regex },
+        ],
+      },
+      {
+        sellerProductStatus: {
+          $nin: [
+            "pending_admin_approval",
+            "request_brand_approval",
+            "submit_brand_approval",
+            "rejected",
+          ],
+        },
+      },
+    ];
 
-    const matchedProducts = await Product.find({
-      $or: [
-        { productName: regex },
-        { description: regex },
-        { "brand_Name.name": regex },
-        { "category.name": regex },
-        { "subCategory.name": regex },
-        { "subSubCategory.name": regex },
-      ], sellerProductStatus: {
-    $nin: [
-      "pending_admin_approval",
-      "request_brand_approval",
-      "submit_brand_approval",
-      "rejected"
-    ]
-  }
+    if (sellerId) {
+      const store = await Store.findById(sellerId)
+        .select("sellFood businessType foodTypes")
+        .lean();
 
-    })
+      if (!store) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Seller not found" });
+      }
+
+      const isFoodSeller =
+        store.sellFood === true || store.businessType === "FSSAI";
+      const sellerFoodTypes = (store.foodTypes || []).map((id) =>
+        id.toString(),
+      );
+
+      if (isFoodSeller) {
+        if (!sellerFoodTypes.length) {
+          return res
+            .status(200)
+            .json({ success: true, products: [], totalCount: 0 });
+        }
+
+        matchConditions.push({
+          isVeg: { $in: [1, 2] },
+        });
+      } else {
+        matchConditions.push({
+          isVeg: 0,
+        });
+      }
+    }
+
+    const query = { $and: matchConditions };
+    const numericPage = parseInt(page) || 1;
+    const numericLimit = parseInt(limit) || 100;
+    const skip = (numericPage - 1) * numericLimit;
+
+    const totalCount = await Product.countDocuments(query);
+
+    const matchedProducts = await Product.find(query)
+      .skip(skip)
+      .limit(numericLimit)
       .select(
-        "productName productThumbnailUrl sku brand_Name category subCategory subSubCategory"
+        "productName productThumbnailUrl sku brand_Name category subCategory subSubCategory isVeg",
       )
       .lean();
 
@@ -569,12 +652,12 @@ exports.getExistingProductList = async (req, res) => {
 
           if (fullCategory?.subcat && (subSubCategoryId || subCategoryId)) {
             const matchedSubcat = fullCategory.subcat.find(
-              (sub) => sub._id.toString() === subCategoryId
+              (sub) => sub._id.toString() === subCategoryId,
             );
 
             if (matchedSubcat && Array.isArray(matchedSubcat.subsubcat)) {
               const matchedSubSubCat = matchedSubcat.subsubcat.find(
-                (subsub) => subsub._id.toString() === subSubCategoryId
+                (subsub) => subsub._id.toString() === subSubCategoryId,
               );
               commission =
                 matchedSubSubCat?.commison ?? matchedSubcat?.commison ?? 0;
@@ -598,10 +681,10 @@ exports.getExistingProductList = async (req, res) => {
           subSubCategoryId: prod.subSubCategory?.[0]?._id ?? null,
           commission,
         };
-      })
+      }),
     );
 
-    return res.status(200).json({ success: true, products });
+    return res.status(200).json({ success: true, products, totalCount });
   } catch (error) {
     console.error("Search product error:", error);
     return res
@@ -620,7 +703,7 @@ exports.removeCategory = async (req, res) => {
           sellerCategories: { categoryId: categoryId },
         },
       },
-      { new: true }
+      { new: true },
     );
 
     const stockDoc = await Stock.findOne({ storeId });
@@ -632,7 +715,7 @@ exports.removeCategory = async (req, res) => {
 
     // 4️⃣ Filter stock array (remove all products in that category)
     const filteredStock = stockDoc.stock.filter(
-      (item) => !productIdsToRemove.includes(item.productId.toString())
+      (item) => !productIdsToRemove.includes(item.productId.toString()),
     );
 
     // 5️⃣ Save updated stock
@@ -663,7 +746,7 @@ exports.removeProduct = async (req, res) => {
           stock: { productId: productId },
         },
       },
-      { new: true }
+      { new: true },
     );
 
     return res.status(200).json({

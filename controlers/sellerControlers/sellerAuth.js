@@ -662,6 +662,8 @@ exports.verifyOtpSeller = async (req, res) => {
         message: "✅ Admin login successful",
         sellerId: store._id,
         storeName: store.storeName,
+        sellFood: store.sellFood,
+        businessType: store.businessType,
         token: jwttoken,
         activeDevices:
           store.devices?.map((d) => ({

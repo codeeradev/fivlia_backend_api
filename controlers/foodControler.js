@@ -400,18 +400,28 @@ exports.addFoodToSeller = async (req, res) => {
       return res.status(404).json({ message: "Seller not found" });
     }
 
-    if (seller.foodTypes.includes(foodId)) {
+    const foodIds = Array.isArray(foodId) ? foodId : foodId ? [foodId] : [];
+    const uniqueFoodIds = [...new Set(foodIds.map((id) => id?.toString()).filter(Boolean))];
+
+    if (!uniqueFoodIds.length) {
+      seller.foodTypes = [];
+      await seller.save();
       return res
-        .status(400)
-        .json({ message: "Food type already added to this seller" });
+        .status(200)
+        .json({ message: "Food types updated successfully", foodTypes: seller.foodTypes });
     }
 
-    seller.foodTypes = foodId;
+    const activeFoods = await foodTypeModel
+      .find({ _id: { $in: uniqueFoodIds }, status: true })
+      .select("_id")
+      .lean();
+
+    seller.foodTypes = activeFoods.map((food) => food._id);
     await seller.save();
 
     return res
       .status(200)
-      .json({ message: "Food type added to seller successfully" });
+      .json({ message: "Food types updated successfully", foodTypes: seller.foodTypes });
   } catch (error) {
     console.error("Error adding food type to seller:", error);
     return res.status(500).json({ message: "Internal server error" });
@@ -422,7 +432,8 @@ exports.removeFoodFromSeller = async (req, res) => {
   try {
     const { sellerId, foodId } = req.body;
 
-    const seller = await Seller.findOne(sellerId, {
+    const seller = await Seller.findOne({
+      _id: sellerId,
       $or: [{ sellFood: true }, { businessType: "FSSAI" }],
       status: true,
       Authorized_Store: false,
@@ -431,7 +442,11 @@ exports.removeFoodFromSeller = async (req, res) => {
       return res.status(404).json({ message: "Seller not found" });
     }
 
-    if (!seller.foodTypes.includes(foodId)) {
+    const hasFoodType = seller.foodTypes.some(
+      (id) => id.toString() === foodId,
+    );
+
+    if (!hasFoodType) {
       return res
         .status(400)
         .json({ message: "Food type not associated with this seller" });
