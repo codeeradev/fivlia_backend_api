@@ -1694,12 +1694,6 @@ exports.getAllSellerProducts = async (req, res) => {
       req,
     );
 
-    let evenProducts = [...filteredProductsWithStock];
-
-    if (evenProducts.length % 2 !== 0) {
-      evenProducts.pop(); // remove last product if odd count
-    }
-
     return res.status(200).json({
       sellerImage: sellerImages,
       seller: seller,
@@ -1896,6 +1890,10 @@ exports.getTopSeller = async (req, res) => {
         topProductOffer: offerMap[store._id.toString()]
           ? `${offerMap[store._id.toString()]}`
           : null,
+        
+        deliveredOrders:
+        deliveredOrderMap[store._id.toString()] || 0,
+
         totalItems: itemCountMap[store._id.toString()] || 0,
       };
     });
@@ -1910,8 +1908,14 @@ exports.getTopSeller = async (req, res) => {
       return offerB - offerA;
     });
 
+    let evenSellers = [...storeDetailsWithRatings];
+
+    if (evenSellers.length % 2 !== 0) {
+      evenSellers.pop(); // remove last seller if odd count
+    }
+
     return res.status(200).json({
-      storeDetailsWithRatings,
+      evenSellers,
     });
   } catch (error) {
     console.error("Error fetching seller:", error);
