@@ -1715,7 +1715,7 @@ const hasMatchingSellerCategory = (store = {}, categoryIdSet = new Set()) => {
 };
 
 exports.getTopSeller = async (req, res) => {
-  const { lat, lng } = req.query;
+  const { lat, lng, typeId } = req.query;
   try {
     const stores = await getStoresWithinRadius(lat, lng);
     const allowedStores = Array.isArray(stores?.matchedStores)
@@ -1799,7 +1799,7 @@ exports.getTopSeller = async (req, res) => {
         return true;
       }
 
-      return hasMatchingSellerCategory(store, requestedCategoryIds);
+      return store.typeId?.toString() === typeId.toString();
     });
 
     if (!filteredStores.length) {
