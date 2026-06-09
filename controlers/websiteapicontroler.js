@@ -1800,8 +1800,8 @@ exports.getTopSeller = async (req, res) => {
         return true;
       }
 
-      // return store.typeId?.toString() === typeId.toString();
-      return hasMatchingSellerCategory(store, requestedCategoryIds);
+      return store.typeId?.toString() === typeId.toString();
+      // return hasMatchingSellerCategory(store, requestedCategoryIds);
     });
 
     if (!filteredStores.length) {
