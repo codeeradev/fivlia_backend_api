@@ -1717,6 +1717,7 @@ const hasMatchingSellerCategory = (store = {}, categoryIdSet = new Set()) => {
 exports.getTopSeller = async (req, res) => {
   const { lat, lng, typeId } = req.query;
   try {
+    console.log("📍 Fetching top sellers for location:", { lat, lng, typeId });
     const stores = await getStoresWithinRadius(lat, lng);
     const allowedStores = Array.isArray(stores?.matchedStores)
       ? stores.matchedStores
