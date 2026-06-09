@@ -36,6 +36,7 @@ const {
   getActiveStoreOffer,
   applyStoreOfferToPrice,
 } = require("../utils/storeOffer");
+const { Order, TempOrder } = require("../modals/order");
 
 exports.forwebbestselling = async (req, res) => {
   try {
@@ -1551,7 +1552,12 @@ exports.getAllSellerProducts = async (req, res) => {
   try {
     const requestedTypeId = resolveRequestedTypeId(req);
 
-    console.log("Fetching products for seller:", id, "with type filter:", requestedTypeId);
+    console.log(
+      "Fetching products for seller:",
+      id,
+      "with type filter:",
+      requestedTypeId,
+    );
     // 1. Fetch Stock data for the seller using sellerId
     const stockData = await Stock.find({ storeId: id }).lean();
 
@@ -1688,6 +1694,12 @@ exports.getAllSellerProducts = async (req, res) => {
       req,
     );
 
+    let evenProducts = [...filteredProductsWithStock];
+
+    if (evenProducts.length % 2 !== 0) {
+      evenProducts.pop(); // remove last product if odd count
+    }
+
     return res.status(200).json({
       sellerImage: sellerImages,
       seller: seller,
@@ -1809,6 +1821,27 @@ exports.getTopSeller = async (req, res) => {
         storeDetailsWithRatings: [],
       });
     }
+
+    const deliveredOrders = await Order.aggregate([
+      {
+        $match: {
+          storeId: { $in: filteredStores.map((store) => store._id) },
+          orderStatus: "delivered",
+        },
+      },
+      {
+        $group: {
+          _id: "$storeId",
+          totalDeliveredOrders: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const deliveredOrderMap = {};
+
+    deliveredOrders.forEach((item) => {
+      deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
+    });
 
     const ratings = await Rating.find({
       storeId: { $in: filteredStores.map((store) => store._id) },
