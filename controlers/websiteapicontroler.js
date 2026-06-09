@@ -1915,7 +1915,7 @@ exports.getTopSeller = async (req, res) => {
     }
 
     return res.status(200).json({
-      evenSellers,
+      storeDetailsWithRatings: evenSellers,
     });
   } catch (error) {
     console.error("Error fetching seller:", error);
