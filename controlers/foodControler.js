@@ -105,7 +105,7 @@ exports.getFoodSeller = async (req, res) => {
   try {
     const { veg, filter } = req.query;
 
-    console.log("Fetching foods with sellers...");
+    console.log("Fetching foods with sellers..." ,req.query);
 
     const userId = req.user._id;
 
