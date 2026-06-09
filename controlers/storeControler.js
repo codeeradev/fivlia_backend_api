@@ -302,6 +302,7 @@ exports.storeEdit = async (req, res) => {
       }
     }
 
+    if(typeId) updateObj.typeId = typeId;
     // ✅ Latitude & Longitude
     if (Latitude) updateObj.Latitude = parseFloat(Latitude);
     if (Longitude) updateObj.Longitude = parseFloat(Longitude);
