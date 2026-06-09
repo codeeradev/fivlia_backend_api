@@ -4,6 +4,7 @@ const Rating = require("../modals/rating");
 const Stock = require("../modals/StoreStock");
 const User = require("../modals/User");
 const { getStoresWithinRadius } = require("../config/google");
+const { Order, TempOrder } = require("../modals/order");
 
 exports.addFood = async (req, res) => {
   try {
@@ -174,6 +175,26 @@ exports.getFoodSeller = async (req, res) => {
 
     const sellerIds = sellers.map((s) => s._id);
 
+    const deliveredOrders = await Order.aggregate([
+      {
+        $match: {
+          storeId: { $in: sellerIds },
+          orderStatus: "Delivered",
+        },
+      },
+      {
+        $group: {
+          _id: "$storeId",
+          totalDeliveredOrders: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const deliveredOrderMap = {};
+
+    deliveredOrders.forEach((item) => {
+      deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
+    });
     // =========================================================
     // RATINGS
     // =========================================================
@@ -319,7 +340,7 @@ exports.getFoodSeller = async (req, res) => {
             sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
             isVeg: store.isVeg,
             fullAddress: store.fullAddress,
-
+            deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
             averageRating: avg.toFixed(1),
             ratingCount: stats.count,
           };
@@ -330,9 +351,15 @@ exports.getFoodSeller = async (req, res) => {
           );
         });
 
+      let evenMatchedSellers = [...matchedSellers];
+
+      if (evenMatchedSellers.length % 2 !== 0) {
+        evenMatchedSellers.pop(); // remove last seller if odd count
+      }
+
       return {
         ...food,
-        sellers: matchedSellers,
+        sellers: evenMatchedSellers,
       };
     });
 
@@ -365,7 +392,7 @@ exports.getFoodSeller = async (req, res) => {
           sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
           isVeg: store.isVeg,
           fullAddress: store.fullAddress,
-
+          deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
           averageRating: avg.toFixed(1),
           ratingCount: stats.count,
         };
@@ -374,9 +401,15 @@ exports.getFoodSeller = async (req, res) => {
         return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
       });
 
+    let evenSellers = [...allSellers];
+
+    if (evenSellers.length % 2 !== 0) {
+      evenSellers.pop(); // remove last seller if odd count
+    }
+
     return res.status(200).json({
       finalFoods,
-      allSellers,
+      allSellers: evenSellers,
     });
   } catch (error) {
     console.error("Error fetching foods with sellers:", error);
@@ -410,12 +443,10 @@ exports.addFoodToSeller = async (req, res) => {
     if (!uniqueFoodIds.length) {
       seller.foodTypes = [];
       await seller.save();
-      return res
-        .status(200)
-        .json({
-          message: "Food types updated successfully",
-          foodTypes: seller.foodTypes,
-        });
+      return res.status(200).json({
+        message: "Food types updated successfully",
+        foodTypes: seller.foodTypes,
+      });
     }
 
     const activeFoods = await foodTypeModel
@@ -426,12 +457,10 @@ exports.addFoodToSeller = async (req, res) => {
     seller.foodTypes = activeFoods.map((food) => food._id);
     await seller.save();
 
-    return res
-      .status(200)
-      .json({
-        message: "Food types updated successfully",
-        foodTypes: seller.foodTypes,
-      });
+    return res.status(200).json({
+      message: "Food types updated successfully",
+      foodTypes: seller.foodTypes,
+    });
   } catch (error) {
     console.error("Error adding food type to seller:", error);
     return res.status(500).json({ message: "Internal server error" });
