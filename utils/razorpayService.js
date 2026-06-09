@@ -3,6 +3,7 @@ const { SettingAdmin } = require("../modals/setting");
 const Product = require("../modals/Product"); // Adjust path
 const Category = require("../modals/category"); // Adjust path if needed
 const telegramOrderLog = require("./telegram_logs");
+const FoodType = require("../modals/foodType");
 
 async function createRazorpayOrder(
   amount,
@@ -104,6 +105,33 @@ const getCommison = async (productId) => {
 
   const product = await Product.findById(productId).lean();
   if (!product) throw new Error("Product not found");
+
+  // ================= FOOD COMMISSION LOGIC =================
+
+  // Priority 1 - FoodType Commission
+  if (product.foodTypeId) {
+    const foodType = await FoodType.findById(product.foodTypeId).select(
+      "commission",
+    );
+
+    return foodType?.commission || 0;
+  }
+
+  // Food Type Id nahi mili
+  const FOOD_TYPE_ID = "69cf8a31ad92aee54ecb1e72";
+
+  const isFoodByType =
+    product.typeId && product.typeId.toString() === FOOD_TYPE_ID;
+
+  const isFoodByVeg = product.isVeg === 1 || product.isVeg === 2;
+
+  if (isFoodByType || isFoodByVeg) {
+    const setting = await SettingAdmin.findOne().select("foodGlobalCommission");
+
+    return setting?.foodGlobalCommission || 0;
+  }
+
+  // ================= END FOOD COMMISSION LOGIC =================
 
   let commission = 0;
 

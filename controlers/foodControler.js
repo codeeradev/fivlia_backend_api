@@ -7,7 +7,7 @@ const { getStoresWithinRadius } = require("../config/google");
 
 exports.addFood = async (req, res) => {
   try {
-    const { name, description, filter } = req.body;
+    const { name, description, filter, commission } = req.body;
     const image = `/${req.files?.image?.[0]?.key}`;
 
     const parsedFilter = filter ? JSON.parse(filter) : [];
@@ -17,6 +17,7 @@ exports.addFood = async (req, res) => {
       description,
       image,
       filter: parsedFilter,
+      commission,
     });
 
     return res
@@ -57,12 +58,13 @@ exports.getActiveFoods = async (req, res) => {
 exports.updateFood = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, filter } = req.body;
+    const { name, description, filter, commission } = req.body;
 
     const updateData = {};
     if (name) updateData.name = name;
     if (description) updateData.description = description;
     if (filter) updateData.filter = JSON.parse(filter);
+    if (commission !== undefined) updateData.commission = commission;
     if (req.files?.image?.[0]?.key)
       updateData.image = `/${req.files.image[0].key}`;
 
@@ -401,14 +403,19 @@ exports.addFoodToSeller = async (req, res) => {
     }
 
     const foodIds = Array.isArray(foodId) ? foodId : foodId ? [foodId] : [];
-    const uniqueFoodIds = [...new Set(foodIds.map((id) => id?.toString()).filter(Boolean))];
+    const uniqueFoodIds = [
+      ...new Set(foodIds.map((id) => id?.toString()).filter(Boolean)),
+    ];
 
     if (!uniqueFoodIds.length) {
       seller.foodTypes = [];
       await seller.save();
       return res
         .status(200)
-        .json({ message: "Food types updated successfully", foodTypes: seller.foodTypes });
+        .json({
+          message: "Food types updated successfully",
+          foodTypes: seller.foodTypes,
+        });
     }
 
     const activeFoods = await foodTypeModel
@@ -421,7 +428,10 @@ exports.addFoodToSeller = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Food types updated successfully", foodTypes: seller.foodTypes });
+      .json({
+        message: "Food types updated successfully",
+        foodTypes: seller.foodTypes,
+      });
   } catch (error) {
     console.error("Error adding food type to seller:", error);
     return res.status(500).json({ message: "Internal server error" });
@@ -442,9 +452,7 @@ exports.removeFoodFromSeller = async (req, res) => {
       return res.status(404).json({ message: "Seller not found" });
     }
 
-    const hasFoodType = seller.foodTypes.some(
-      (id) => id.toString() === foodId,
-    );
+    const hasFoodType = seller.foodTypes.some((id) => id.toString() === foodId);
 
     if (!hasFoodType) {
       return res

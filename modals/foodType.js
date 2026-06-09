@@ -7,6 +7,7 @@ const foodTypeSchema = new mongoose.Schema({
   orderCount: { type: Number, default: 0 },
   filter: [{ type: String }],
   status: { type: Boolean, default: true },
+  commission: { type: Number, default: 0 },
 }, { timestamps: true });
 
 const FoodType = mongoose.model("FoodType", foodTypeSchema);

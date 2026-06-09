@@ -47,7 +47,8 @@ imageLink:String,
 fixDeliveryCharges:Number,
 perKmCharges:Number,
 fixNightDeliveryCharges:Number,
-perKmNightCharges:Number
+perKmNightCharges:Number,
+foodGlobalCommission:Number,
 });
 
 module.exports ={
