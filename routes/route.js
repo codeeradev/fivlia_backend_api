@@ -467,7 +467,7 @@ router.get("/website/relatedProducts", typeCategoryResolver, forwebgetRelatedPro
 router.get("/website/forwebgetBanner", forwebgetBanner);
 router.get("/getPage", getPage);
 router.get("/getDetailsGst", getDetailsGst);
-router.get("/seller-products", typeCategoryResolver, getAllSellerProducts);
+router.get("/seller-products", getAllSellerProducts);
 router.get("/products-count", getCategoryCounts);
 router.post("/save-contact-us", contactUs);
 router.get("/top-seller", typeCategoryResolver, getTopSeller);

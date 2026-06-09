@@ -1550,19 +1550,11 @@ exports.getAllSellerProducts = async (req, res) => {
   const { id, page, limit } = req.query;
   const skip = (page - 1) * limit;
   try {
-    const requestedTypeId = resolveRequestedTypeId(req);
-
-    console.log(
-      "Fetching products for seller:",
-      id,
-      "with type filter:",
-      requestedTypeId,
-    );
     // 1. Fetch Stock data for the seller using sellerId
     const stockData = await Stock.find({ storeId: id }).lean();
 
     const seller = await Store.findOne({ _id: id }).select(
-      "storeName sellerCategories advertisementImages",
+      "storeName sellerCategories advertisementImages typeId",
     );
 
     // 🔥 FETCH & VALIDATE ACTIVE OFFER
@@ -1587,9 +1579,9 @@ exports.getAllSellerProducts = async (req, res) => {
 
     const productFilter = { _id: { $in: productIds } };
 
-    if (mongoose.Types.ObjectId.isValid(requestedTypeId)) {
+    if(seller.typeId !== undefined && seller.typeId !== null) {
       const categoryIds = await Category.find({
-        typeId: requestedTypeId,
+        typeId: seller.typeId,
       }).distinct("_id");
 
       productFilter["category._id"] = {
