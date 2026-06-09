@@ -221,6 +221,7 @@ exports.createStore = async (req, res) => {
       image,
       products: products.map((p) => p._id),
       fivliaAssured: isAssured,
+      typeId,
     });
 
     return res.status(201).json({
@@ -259,6 +260,7 @@ exports.storeEdit = async (req, res) => {
       status,
       Description,
       openTime,
+      typeId,
       closeTime,
       isAssured,
       Category: categoryInput,

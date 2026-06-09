@@ -1820,7 +1820,7 @@ exports.getTopSeller = async (req, res) => {
       {
         $match: {
           storeId: { $in: filteredStores.map((store) => store._id) },
-          orderStatus: "delivered",
+          orderStatus: "Delivered",
         },
       },
       {
