@@ -1579,10 +1579,7 @@ exports.getAllSellerProducts = async (req, res) => {
 
     const productFilter = { _id: { $in: productIds } };
 
-    console.log("Seller Type ID:", seller.typeId);
     if(seller.typeId !== undefined && seller.typeId !== null) {
-
-      console.log("rohit g**du");
       const categoryIds = await Category.find({
         typeId: seller.typeId,
       }).distinct("_id");
