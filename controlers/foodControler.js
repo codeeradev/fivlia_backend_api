@@ -143,9 +143,9 @@ exports.getFoodSeller = async (req, res) => {
     };
 
     // veg filter
-    if (veg === "true") {
-      sellerQuery.isVeg = "veg";
-    }
+    // if (veg === "true") {
+    //   sellerQuery.isVeg = "veg";
+    // }
 
     // custom filters
     if (["gym", "snack", "healthy"].includes(filter)) {
