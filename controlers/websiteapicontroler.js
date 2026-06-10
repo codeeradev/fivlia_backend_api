@@ -1902,14 +1902,8 @@ exports.getTopSeller = async (req, res) => {
       return offerB - offerA;
     });
 
-    let evenSellers = [...storeDetailsWithRatings];
-
-    if (evenSellers.length % 2 !== 0) {
-      evenSellers.pop(); // remove last seller if odd count
-    }
-
     return res.status(200).json({
-      storeDetailsWithRatings: evenSellers,
+      storeDetailsWithRatings,
     });
   } catch (error) {
     console.error("Error fetching seller:", error);

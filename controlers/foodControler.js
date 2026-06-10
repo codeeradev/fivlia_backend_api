@@ -352,15 +352,9 @@ exports.getFoodSeller = async (req, res) => {
           );
         });
 
-      let evenMatchedSellers = [...matchedSellers];
-
-      if (evenMatchedSellers.length % 2 !== 0) {
-        evenMatchedSellers.pop(); // remove last seller if odd count
-      }
-
       return {
         ...food,
-        sellers: evenMatchedSellers,
+        sellers: matchedSellers,
       };
     });
 
@@ -402,15 +396,9 @@ exports.getFoodSeller = async (req, res) => {
         return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
       });
 
-    let evenSellers = [...allSellers];
-
-    if (evenSellers.length % 2 !== 0) {
-      evenSellers.pop(); // remove last seller if odd count
-    }
-
     return res.status(200).json({
       finalFoods,
-      allSellers: evenSellers,
+      allSellers,
     });
   } catch (error) {
     console.error("Error fetching foods with sellers:", error);
