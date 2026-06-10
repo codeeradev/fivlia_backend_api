@@ -837,7 +837,7 @@ exports.getOrders = async (req, res) => {
       .populate({
         path: "addressId",
         select:
-          "fullName address mobileNumber house_No floor landmark city state pincode",
+          "fullName address mobileNumber house_No floor landmark city state pincode driver",
       })
       .populate({
         path: "storeId",
@@ -912,6 +912,7 @@ exports.getOrders = async (req, res) => {
               }
             : null,
           city,
+          driverPhone: order.driver?.mobileNumber || null,
         };
       }),
     );
