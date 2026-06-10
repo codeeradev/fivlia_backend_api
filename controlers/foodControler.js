@@ -137,7 +137,7 @@ exports.getFoodSeller = async (req, res) => {
     // SELLER QUERY
     // =========================================================
     const sellerQuery = {
-      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
+      typeId: new mongoose.Types.ObjectId("69cf8a31ad92aee54ecb1e72"),
       status: true,
       Authorized_Store: false,
     };
