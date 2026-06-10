@@ -1547,7 +1547,7 @@ exports.contactUs = async (req, res) => {
 };
 
 exports.getAllSellerProducts = async (req, res) => {
-  const { id, page, limit } = req.query;
+  const { id, page, limit, veg } = req.query;
   const skip = (page - 1) * limit;
   try {
     // 1. Fetch Stock data for the seller using sellerId
