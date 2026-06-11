@@ -1036,9 +1036,9 @@ exports.forwebsearchProduct = async (req, res) => {
 
     const sellers = name
       ? await Store.find({
-          _id: { $in: allowedStoreIds },
-          storeName: { $regex: name, $options: "i" },
-        }).lean()
+        _id: { $in: allowedStoreIds },
+        storeName: { $regex: name, $options: "i" },
+      }).lean()
       : [];
 
     // Enrich product objects with inventory, price, best store etc.
@@ -1579,7 +1579,7 @@ exports.getAllSellerProducts = async (req, res) => {
 
     const productFilter = { _id: { $in: productIds } };
 
-    if(seller.typeId !== undefined && seller.typeId !== null) {
+    if (seller.typeId !== undefined && seller.typeId !== null) {
       const categoryIds = await Category.find({
         typeId: seller.typeId,
       }).distinct("_id");
@@ -1587,6 +1587,10 @@ exports.getAllSellerProducts = async (req, res) => {
       productFilter["category._id"] = {
         $in: categoryIds,
       };
+    }
+
+    if (veg === true || veg === "true") {
+      productFilter.isVeg = 1
     }
 
     const total = await Products.countDocuments(productFilter);
@@ -1704,15 +1708,15 @@ exports.getAllSellerProducts = async (req, res) => {
   }
 };
 
-const hasMatchingSellerCategory = (store = {}, categoryIdSet = new Set()) => {
-  if (!categoryIdSet.size) return false;
+// const hasMatchingSellerCategory = (store = {}, categoryIdSet = new Set()) => {
+//   if (!categoryIdSet.size) return false;
 
-  return (store.sellerCategories || []).some(
-    (sellerCategory) =>
-      sellerCategory?.categoryId &&
-      categoryIdSet.has(sellerCategory.categoryId.toString()),
-  );
-};
+//   return (store.sellerCategories || []).some(
+//     (sellerCategory) =>
+//       sellerCategory?.categoryId &&
+//       categoryIdSet.has(sellerCategory.categoryId.toString()),
+//   );
+// };
 
 exports.getTopSeller = async (req, res) => {
   const { lat, lng, typeId } = req.query;
@@ -1884,9 +1888,9 @@ exports.getTopSeller = async (req, res) => {
         topProductOffer: offerMap[store._id.toString()]
           ? `${offerMap[store._id.toString()]}`
           : null,
-        
+
         deliveredOrders:
-        deliveredOrderMap[store._id.toString()] || 0,
+          deliveredOrderMap[store._id.toString()] || 0,
 
         totalItems: itemCountMap[store._id.toString()] || 0,
       };
@@ -2128,12 +2132,12 @@ exports.forwebGetSingleProduct = async (req, res) => {
       ...product,
       bestStore: bestOption
         ? {
-            id: bestOption.storeId,
-            name: bestOption.storeName,
-            price: bestOption.price,
-            mrp: bestOption.mrp,
-            distance: bestOption.distance,
-          }
+          id: bestOption.storeId,
+          name: bestOption.storeName,
+          price: bestOption.price,
+          mrp: bestOption.mrp,
+          distance: bestOption.distance,
+        }
         : null,
       inventory: (product.variants || []).map((variant) => {
         const match = variantOptions.find(

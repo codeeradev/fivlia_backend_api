@@ -39,7 +39,6 @@ exports.addSeller = async (req, res) => {
       businessType,
       fullAddress,
       referralCode,
-      filter,
       isVeg,
     } = req.body;
 
@@ -139,7 +138,6 @@ exports.addSeller = async (req, res) => {
       Longitude,
       sellFood,
       businessType,
-      filter,
       fullAddress,
       referralCode: updatedReferralCode,
       isVeg,
@@ -873,7 +871,6 @@ exports.editSellerProfile = async (req, res) => {
       openTime,
       status,
       closeTime,
-      filter,
       isVeg,
       // {bankName, accountHolder, accountNumber, ifsc, branch}
     } = req.body;
@@ -884,7 +881,6 @@ exports.editSellerProfile = async (req, res) => {
 
     if (storeName) updateFields.storeName = storeName;
     if (ownerName) updateFields.ownerName = ownerName;
-    if (filter) updateFields.filter = filter;
     if (email) updateFields.email = email;
     if (invoicePrefix) {
       // Check if the prefix is already used by another seller
