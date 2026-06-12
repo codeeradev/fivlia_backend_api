@@ -103,318 +103,11 @@ exports.deleteFood = async (req, res) => {
   }
 };
 
-// exports.getFoodSeller = async (req, res) => {
-//   try {
-//     const { veg, filter } = req.query;
-
-//     console.log("Fetching foods with sellers..." ,req.query);
-
-//     const userId = req.user._id;
-
-//     const user = await User.findById(userId).lean();
-
-//     if (user?.location?.latitude == null || user?.location?.longitude == null) {
-//       return res.status(400).json({
-//         message: "User location not found",
-//       });
-//     }
-
-//     const userLat = user.location.latitude;
-//     const userLng = user.location.longitude;
-
-//     const storesWithinRadius = await getStoresWithinRadius(userLat, userLng);
-
-//     const allowedStores = Array.isArray(storesWithinRadius?.matchedStores)
-//       ? storesWithinRadius.matchedStores
-//       : [];
-
-//     if (!allowedStores.length) {
-//       return res.status(200).json({
-//         finalFoods: [],
-//         allSellers: [],
-//       });
-//     }
-//     const allowedStoreIds = allowedStores.map((store) => store._id.toString());
-//     // =========================================================
-//     // SELLER QUERY
-//     // =========================================================
-//     const sellerQuery = {
-//       typeId: new mongoose.Types.ObjectId("69cf8a31ad92aee54ecb1e72"),
-//       status: true,
-//       Authorized_Store: false,
-//     };
-
-//     // veg filter
-//     // if (veg === "true") {
-//     //   sellerQuery.isVeg = "veg";
-//     // }
-
-//     // custom filters
-//     if (["gym", "snack", "healthy"].includes(filter)) {
-//       sellerQuery.filter = filter;
-//     }
-
-//     // =========================================================
-//     // GET ALL ACTIVE FOODS
-//     // =========================================================
-//     const foods = await foodTypeModel
-//       .find({ status: true })
-//       .select("-__v -createdAt -updatedAt -orderCount")
-//       .sort({ createdAt: -1 })
-//       .lean();
-
-//     // =========================================================
-//     // GET SELLERS
-//     // =========================================================
-//     let sellers = await Seller.find({
-//       ...sellerQuery,
-//       _id: { $in: allowedStoreIds },
-//     })
-//       .select(
-//         "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
-//       )
-//       .lean();
-
-//     const sellerIds = sellers.map((s) => s._id);
-
-//     const deliveredOrders = await Order.aggregate([
-//       {
-//         $match: {
-//           storeId: { $in: sellerIds },
-//           orderStatus: "Delivered",
-//         },
-//       },
-//       {
-//         $group: {
-//           _id: "$storeId",
-//           totalDeliveredOrders: { $sum: 1 },
-//         },
-//       },
-//     ]);
-
-//     const deliveredOrderMap = {};
-
-//     deliveredOrders.forEach((item) => {
-//       deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
-//     });
-//     // =========================================================
-//     // RATINGS
-//     // =========================================================
-//     const ratings = await Rating.find({
-//       storeId: { $in: sellerIds },
-//     }).lean();
-
-//     // =========================================================
-//     // RATINGS MAP
-//     // =========================================================
-//     const ratingsByStore = ratings.reduce((acc, r) => {
-//       const id = r.storeId.toString();
-
-//       if (!acc[id]) {
-//         acc[id] = {
-//           total: 0,
-//           count: 0,
-//         };
-//       }
-
-//       acc[id].total += r.rating || 0;
-//       acc[id].count += 1;
-
-//       return acc;
-//     }, {});
-
-//     // =========================================================
-//     // TOP OFFERS + ITEM COUNT
-//     // =========================================================
-//     const topOffers = await Stock.aggregate([
-//       {
-//         $match: {
-//           storeId: { $in: sellerIds },
-//         },
-//       },
-//       {
-//         $unwind: "$stock",
-//       },
-//       {
-//         $match: {
-//           "stock.mrp": { $gt: 0 },
-//           "stock.price": { $gt: 0 },
-//         },
-//       },
-//       {
-//         $addFields: {
-//           discount: {
-//             $multiply: [
-//               {
-//                 $divide: [
-//                   { $subtract: ["$stock.mrp", "$stock.price"] },
-//                   "$stock.mrp",
-//                 ],
-//               },
-//               100,
-//             ],
-//           },
-//         },
-//       },
-//       {
-//         $group: {
-//           _id: "$storeId",
-//           maxDiscount: { $max: "$discount" },
-//           totalItems: { $sum: 1 },
-//         },
-//       },
-//       {
-//         $sort: {
-//           maxDiscount: -1,
-//         },
-//       },
-//     ]);
-
-//     // =========================================================
-//     // OFFER + ITEM MAP
-//     // =========================================================
-//     const offerMap = {};
-//     const itemCountMap = {};
-
-//     topOffers.forEach((o) => {
-//       offerMap[o._id.toString()] = Number(o.maxDiscount.toFixed(1));
-//       itemCountMap[o._id.toString()] = o.totalItems;
-//     });
-
-//     // =========================================================
-//     // 50% OFF FILTER
-//     // =========================================================
-//     if (filter === "50%off") {
-//       sellers = sellers.filter((seller) => {
-//         const offer = offerMap[seller._id.toString()] || 0;
-
-//         return offer >= 50;
-//       });
-//     }
-
-//     // =========================================================
-//     // SORT SELLERS BY OFFER DESC
-//     // =========================================================
-//     sellers.sort((a, b) => {
-//       const offerA = offerMap[a._id.toString()] || 0;
-//       const offerB = offerMap[b._id.toString()] || 0;
-
-//       return offerB - offerA;
-//     });
-
-//     const storeDistanceMap = {};
-
-//     allowedStores.forEach((store) => {
-//       storeDistanceMap[store._id.toString()] = store.distance || 999999;
-//     });
-
-//     // =========================================================
-//     // FINAL FOODS
-//     // =========================================================
-//     const finalFoods = foods.map((food) => {
-//       const matchedSellers = sellers
-//         .filter((seller) =>
-//           seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
-//         )
-//         .map((store) => {
-//           const stats = ratingsByStore[store._id.toString()] || {
-//             total: 0,
-//             count: 0,
-//           };
-
-//           const avg = stats.count ? stats.total / stats.count : 0;
-
-//           return {
-//             storeId: store._id,
-//             storeName: store.storeName,
-//             distance: storeDistanceMap[store._id.toString()] || null,
-
-//             topProductOffer: offerMap[store._id.toString()]
-//               ? `${offerMap[store._id.toString()]}`
-//               : null,
-
-//             totalItems: itemCountMap[store._id.toString()] || 0,
-
-//             image: store.image,
-//             referralCode: store.referralCode,
-//             advertisementImages: store.advertisementImages,
-//             sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-//             sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-//             isVeg: store.isVeg,
-//             fullAddress: store.fullAddress,
-//             deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
-//             averageRating: avg.toFixed(1),
-//             ratingCount: stats.count,
-//           };
-//         })
-//         .sort((a, b) => {
-//           return (
-//             Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
-//           );
-//         });
-
-//       return {
-//         ...food,
-//         sellers: matchedSellers,
-//       };
-//     });
-
-//     // =========================================================
-//     // ALL SELLERS
-//     // =========================================================
-//     const allSellers = sellers
-//       .map((store) => {
-//         const stats = ratingsByStore[store._id.toString()] || {
-//           total: 0,
-//           count: 0,
-//         };
-
-//         const avg = stats.count ? stats.total / stats.count : 0;
-
-//         return {
-//           storeId: store._id,
-//           storeName: store.storeName,
-
-//           topProductOffer: offerMap[store._id.toString()]
-//             ? `${offerMap[store._id.toString()]}`
-//             : null,
-
-//           totalItems: itemCountMap[store._id.toString()] || 0,
-
-//           image: store.image,
-//           referralCode: store.referralCode,
-//           advertisementImages: store.advertisementImages,
-//           sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-//           sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-//           isVeg: store.isVeg,
-//           fullAddress: store.fullAddress,
-//           deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
-//           averageRating: avg.toFixed(1),
-//           ratingCount: stats.count,
-//         };
-//       })
-//       .sort((a, b) => {
-//         return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
-//       });
-
-//     return res.status(200).json({
-//       finalFoods,
-//       allSellers,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching foods with sellers:", error);
-
-//     return res.status(500).json({
-//       message: "Internal server error",
-//     });
-//   }
-// };
-
 exports.getFoodSeller = async (req, res) => {
   try {
-    const { veg, filter, foodTypeId } = req.query;
+    const { veg, filter } = req.query;
 
-    console.log("Fetching foods with sellers...", req.query);
+    console.log("Fetching foods with sellers..." ,req.query);
 
     const userId = req.user._id;
 
@@ -442,7 +135,6 @@ exports.getFoodSeller = async (req, res) => {
       });
     }
     const allowedStoreIds = allowedStores.map((store) => store._id.toString());
-
     // =========================================================
     // SELLER QUERY
     // =========================================================
@@ -617,131 +309,55 @@ exports.getFoodSeller = async (req, res) => {
     });
 
     // =========================================================
-    // FOOD TYPE -> CATEGORY MATCHING
-    // =========================================================
-
-    let matchedCategoryIds = [];
-
-    if (foodTypeId) {
-      const selectedFoodType = await foodTypeModel
-        .findById(foodTypeId)
-        .select("name")
-        .lean();
-
-      if (selectedFoodType?.name) {
-        const foodName = selectedFoodType.name.trim();
-
-        const regex = new RegExp(foodName, "i");
-
-        const categories = await Category.find({
-          $or: [
-            { name: regex },
-            { "subcat.name": regex },
-            { "subcat.subsubcat.name": regex },
-          ],
-        })
-          .select("_id name subcat")
-          .lean();
-
-        const categorySet = new Set();
-
-        categories.forEach((cat) => {
-          if (regex.test(cat.name || "")) {
-            categorySet.add(cat._id.toString());
-          }
-
-          (cat.subcat || []).forEach((sub) => {
-            if (regex.test(sub.name || "")) {
-              categorySet.add(cat._id.toString());
-            }
-
-            (sub.subsubcat || []).forEach((subsub) => {
-              if (regex.test(subsub.name || "")) {
-                categorySet.add(cat._id.toString());
-              }
-            });
-          });
-        });
-
-        matchedCategoryIds = [...categorySet];
-      }
-    }
-
-    // =========================================================
     // FINAL FOODS
     // =========================================================
-    const finalFoods = foods
-      .map((food) => {
-        let matchedSellers = sellers.filter((seller) => {
-          const foodMatched = seller.foodTypes?.some(
-            (id) => id.toString() === food._id.toString(),
-          );
+    const finalFoods = foods.map((food) => {
+      const matchedSellers = sellers
+        .filter((seller) =>
+          seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
+        )
+        .map((store) => {
+          const stats = ratingsByStore[store._id.toString()] || {
+            total: 0,
+            count: 0,
+          };
 
-          if (!foodMatched) return false;
+          const avg = stats.count ? stats.total / stats.count : 0;
 
-          // foodType filter nahi aaya
-          if (!foodTypeId) return true;
+          return {
+            storeId: store._id,
+            storeName: store.storeName,
+            distance: storeDistanceMap[store._id.toString()] || null,
 
-          // category match nahi mili
-          if (!matchedCategoryIds.length) return false;
+            topProductOffer: offerMap[store._id.toString()]
+              ? `${offerMap[store._id.toString()]}`
+              : null,
 
-          const sellerCategoryIds = [];
+            totalItems: itemCountMap[store._id.toString()] || 0,
 
-          (seller.sellerCategories || []).forEach((cat) => {
-            if (cat.categoryId) {
-              sellerCategoryIds.push(cat.categoryId.toString());
-            }
-          });
-
-          return sellerCategoryIds.some((id) =>
-            matchedCategoryIds.includes(id),
+            image: store.image,
+            referralCode: store.referralCode,
+            advertisementImages: store.advertisementImages,
+            sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+            sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+            isVeg: store.isVeg,
+            fullAddress: store.fullAddress,
+            deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+            averageRating: avg.toFixed(1),
+            ratingCount: stats.count,
+          };
+        })
+        .sort((a, b) => {
+          return (
+            Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
           );
         });
 
-        matchedSellers = matchedSellers
-          .map((store) => {
-            const stats = ratingsByStore[store._id.toString()] || {
-              total: 0,
-              count: 0,
-            };
-
-            const avg = stats.count ? stats.total / stats.count : 0;
-
-            return {
-              storeId: store._id,
-              storeName: store.storeName,
-              distance: storeDistanceMap[store._id.toString()] || null,
-
-              topProductOffer: offerMap[store._id.toString()]
-                ? `${offerMap[store._id.toString()]}`
-                : null,
-
-              totalItems: itemCountMap[store._id.toString()] || 0,
-
-              image: store.image,
-              referralCode: store.referralCode,
-              advertisementImages: store.advertisementImages,
-              sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-              sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-              isVeg: store.isVeg,
-              fullAddress: store.fullAddress,
-              deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
-              averageRating: avg.toFixed(1),
-              ratingCount: stats.count,
-            };
-          })
-          .sort((a, b) => {
-            return (
-              Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
-            );
-          });
-
-        return {
-          ...food,
-          sellers: matchedSellers,
-        };
-      })
-      .filter((food) => food.sellers.length);
+      return {
+        ...food,
+        sellers: matchedSellers,
+      };
+    });
 
     // =========================================================
     // ALL SELLERS
@@ -793,6 +409,390 @@ exports.getFoodSeller = async (req, res) => {
     });
   }
 };
+
+// exports.getFoodSeller = async (req, res) => {
+//   try {
+//     const { veg, filter, foodTypeId } = req.query;
+
+//     console.log("Fetching foods with sellers...", req.query);
+
+//     const userId = req.user._id;
+
+//     const user = await User.findById(userId).lean();
+
+//     if (user?.location?.latitude == null || user?.location?.longitude == null) {
+//       return res.status(400).json({
+//         message: "User location not found",
+//       });
+//     }
+
+//     const userLat = user.location.latitude;
+//     const userLng = user.location.longitude;
+
+//     const storesWithinRadius = await getStoresWithinRadius(userLat, userLng);
+
+//     const allowedStores = Array.isArray(storesWithinRadius?.matchedStores)
+//       ? storesWithinRadius.matchedStores
+//       : [];
+
+//     if (!allowedStores.length) {
+//       return res.status(200).json({
+//         finalFoods: [],
+//         allSellers: [],
+//       });
+//     }
+//     const allowedStoreIds = allowedStores.map((store) => store._id.toString());
+
+//     // =========================================================
+//     // SELLER QUERY
+//     // =========================================================
+//     const sellerQuery = {
+//       typeId: new mongoose.Types.ObjectId("69cf8a31ad92aee54ecb1e72"),
+//       status: true,
+//       Authorized_Store: false,
+//     };
+
+//     // veg filter
+//     // if (veg === "true") {
+//     //   sellerQuery.isVeg = "veg";
+//     // }
+
+//     // custom filters
+//     if (["gym", "snack", "healthy"].includes(filter)) {
+//       sellerQuery.filter = filter;
+//     }
+
+//     // =========================================================
+//     // GET ALL ACTIVE FOODS
+//     // =========================================================
+//     const foods = await foodTypeModel
+//       .find({ status: true })
+//       .select("-__v -createdAt -updatedAt -orderCount")
+//       .sort({ createdAt: -1 })
+//       .lean();
+
+//     // =========================================================
+//     // GET SELLERS
+//     // =========================================================
+//     let sellers = await Seller.find({
+//       ...sellerQuery,
+//       _id: { $in: allowedStoreIds },
+//     })
+//       .select(
+//         "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
+//       )
+//       .lean();
+
+//     const sellerIds = sellers.map((s) => s._id);
+
+//     const deliveredOrders = await Order.aggregate([
+//       {
+//         $match: {
+//           storeId: { $in: sellerIds },
+//           orderStatus: "Delivered",
+//         },
+//       },
+//       {
+//         $group: {
+//           _id: "$storeId",
+//           totalDeliveredOrders: { $sum: 1 },
+//         },
+//       },
+//     ]);
+
+//     const deliveredOrderMap = {};
+
+//     deliveredOrders.forEach((item) => {
+//       deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
+//     });
+//     // =========================================================
+//     // RATINGS
+//     // =========================================================
+//     const ratings = await Rating.find({
+//       storeId: { $in: sellerIds },
+//     }).lean();
+
+//     // =========================================================
+//     // RATINGS MAP
+//     // =========================================================
+//     const ratingsByStore = ratings.reduce((acc, r) => {
+//       const id = r.storeId.toString();
+
+//       if (!acc[id]) {
+//         acc[id] = {
+//           total: 0,
+//           count: 0,
+//         };
+//       }
+
+//       acc[id].total += r.rating || 0;
+//       acc[id].count += 1;
+
+//       return acc;
+//     }, {});
+
+//     // =========================================================
+//     // TOP OFFERS + ITEM COUNT
+//     // =========================================================
+//     const topOffers = await Stock.aggregate([
+//       {
+//         $match: {
+//           storeId: { $in: sellerIds },
+//         },
+//       },
+//       {
+//         $unwind: "$stock",
+//       },
+//       {
+//         $match: {
+//           "stock.mrp": { $gt: 0 },
+//           "stock.price": { $gt: 0 },
+//         },
+//       },
+//       {
+//         $addFields: {
+//           discount: {
+//             $multiply: [
+//               {
+//                 $divide: [
+//                   { $subtract: ["$stock.mrp", "$stock.price"] },
+//                   "$stock.mrp",
+//                 ],
+//               },
+//               100,
+//             ],
+//           },
+//         },
+//       },
+//       {
+//         $group: {
+//           _id: "$storeId",
+//           maxDiscount: { $max: "$discount" },
+//           totalItems: { $sum: 1 },
+//         },
+//       },
+//       {
+//         $sort: {
+//           maxDiscount: -1,
+//         },
+//       },
+//     ]);
+
+//     // =========================================================
+//     // OFFER + ITEM MAP
+//     // =========================================================
+//     const offerMap = {};
+//     const itemCountMap = {};
+
+//     topOffers.forEach((o) => {
+//       offerMap[o._id.toString()] = Number(o.maxDiscount.toFixed(1));
+//       itemCountMap[o._id.toString()] = o.totalItems;
+//     });
+
+//     // =========================================================
+//     // 50% OFF FILTER
+//     // =========================================================
+//     if (filter === "50%off") {
+//       sellers = sellers.filter((seller) => {
+//         const offer = offerMap[seller._id.toString()] || 0;
+
+//         return offer >= 50;
+//       });
+//     }
+
+//     // =========================================================
+//     // SORT SELLERS BY OFFER DESC
+//     // =========================================================
+//     sellers.sort((a, b) => {
+//       const offerA = offerMap[a._id.toString()] || 0;
+//       const offerB = offerMap[b._id.toString()] || 0;
+
+//       return offerB - offerA;
+//     });
+
+//     const storeDistanceMap = {};
+
+//     allowedStores.forEach((store) => {
+//       storeDistanceMap[store._id.toString()] = store.distance || 999999;
+//     });
+
+//     // =========================================================
+//     // FOOD TYPE -> CATEGORY MATCHING
+//     // =========================================================
+
+//     let matchedCategoryIds = [];
+
+//     if (foodTypeId) {
+//       const selectedFoodType = await foodTypeModel
+//         .findById(foodTypeId)
+//         .select("name")
+//         .lean();
+
+//       if (selectedFoodType?.name) {
+//         const foodName = selectedFoodType.name.trim();
+
+//         const regex = new RegExp(foodName, "i");
+
+//         const categories = await Category.find({
+//           $or: [
+//             { name: regex },
+//             { "subcat.name": regex },
+//             { "subcat.subsubcat.name": regex },
+//           ],
+//         })
+//           .select("_id name subcat")
+//           .lean();
+
+//         const categorySet = new Set();
+
+//         categories.forEach((cat) => {
+//           if (regex.test(cat.name || "")) {
+//             categorySet.add(cat._id.toString());
+//           }
+
+//           (cat.subcat || []).forEach((sub) => {
+//             if (regex.test(sub.name || "")) {
+//               categorySet.add(cat._id.toString());
+//             }
+
+//             (sub.subsubcat || []).forEach((subsub) => {
+//               if (regex.test(subsub.name || "")) {
+//                 categorySet.add(cat._id.toString());
+//               }
+//             });
+//           });
+//         });
+
+//         matchedCategoryIds = [...categorySet];
+//       }
+//     }
+
+//     // =========================================================
+//     // FINAL FOODS
+//     // =========================================================
+//     const finalFoods = foods
+//       .map((food) => {
+//         let matchedSellers = sellers.filter((seller) => {
+//           const foodMatched = seller.foodTypes?.some(
+//             (id) => id.toString() === food._id.toString(),
+//           );
+
+//           if (!foodMatched) return false;
+
+//           // foodType filter nahi aaya
+//           if (!foodTypeId) return true;
+
+//           // category match nahi mili
+//           if (!matchedCategoryIds.length) return false;
+
+//           const sellerCategoryIds = [];
+
+//           (seller.sellerCategories || []).forEach((cat) => {
+//             if (cat.categoryId) {
+//               sellerCategoryIds.push(cat.categoryId.toString());
+//             }
+//           });
+
+//           return sellerCategoryIds.some((id) =>
+//             matchedCategoryIds.includes(id),
+//           );
+//         });
+
+//         matchedSellers = matchedSellers
+//           .map((store) => {
+//             const stats = ratingsByStore[store._id.toString()] || {
+//               total: 0,
+//               count: 0,
+//             };
+
+//             const avg = stats.count ? stats.total / stats.count : 0;
+
+//             return {
+//               storeId: store._id,
+//               storeName: store.storeName,
+//               distance: storeDistanceMap[store._id.toString()] || null,
+
+//               topProductOffer: offerMap[store._id.toString()]
+//                 ? `${offerMap[store._id.toString()]}`
+//                 : null,
+
+//               totalItems: itemCountMap[store._id.toString()] || 0,
+
+//               image: store.image,
+//               referralCode: store.referralCode,
+//               advertisementImages: store.advertisementImages,
+//               sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+//               sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+//               isVeg: store.isVeg,
+//               fullAddress: store.fullAddress,
+//               deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+//               averageRating: avg.toFixed(1),
+//               ratingCount: stats.count,
+//             };
+//           })
+//           .sort((a, b) => {
+//             return (
+//               Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
+//             );
+//           });
+
+//         return {
+//           ...food,
+//           sellers: matchedSellers,
+//         };
+//       })
+//       .filter((food) => food.sellers.length);
+
+//     // =========================================================
+//     // ALL SELLERS
+//     // =========================================================
+//     const allSellers = sellers
+//       .map((store) => {
+//         const stats = ratingsByStore[store._id.toString()] || {
+//           total: 0,
+//           count: 0,
+//         };
+
+//         const avg = stats.count ? stats.total / stats.count : 0;
+
+//         return {
+//           storeId: store._id,
+//           storeName: store.storeName,
+
+//           topProductOffer: offerMap[store._id.toString()]
+//             ? `${offerMap[store._id.toString()]}`
+//             : null,
+
+//           totalItems: itemCountMap[store._id.toString()] || 0,
+
+//           image: store.image,
+//           referralCode: store.referralCode,
+//           advertisementImages: store.advertisementImages,
+//           sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+//           sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+//           isVeg: store.isVeg,
+//           fullAddress: store.fullAddress,
+//           deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+//           averageRating: avg.toFixed(1),
+//           ratingCount: stats.count,
+//         };
+//       })
+//       .sort((a, b) => {
+//         return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
+//       });
+
+//     return res.status(200).json({
+//       finalFoods,
+//       allSellers,
+//     });
+//   } catch (error) {
+//     console.error("Error fetching foods with sellers:", error);
+
+//     return res.status(500).json({
+//       message: "Internal server error",
+//     });
+//   }
+// };
 
 exports.addFoodToSeller = async (req, res) => {
   try {
