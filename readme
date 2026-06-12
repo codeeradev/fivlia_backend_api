@@ -5,3 +5,19 @@ GET
 
 https://res.cloudinary.com/devrowfzo/image/upload/v1748957526/
 https://fivliaproject.s3.eu-north-1.amazonaws.com
+
+
+docker run -d \
+  --name postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password123 \
+  -e POSTGRES_DB=myapp \
+  -p 5432:5432 \
+  -v postgres_data:/var/lib/postgresql/data \
+  postgres:17
+
+  {
+    $set: {
+      foodTypeId: ObjectId("6a2a8d6f5c41969c0cab56f6")
+    }
+}
