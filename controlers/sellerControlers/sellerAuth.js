@@ -873,7 +873,7 @@ exports.editSellerProfile = async (req, res) => {
       closeTime,
       isVeg,
       sellerFreeDeliveryEnabled,
-      sellerFreeDeliveryLimit
+      sellerFreeDeliveryLimit,
       // {bankName, accountHolder, accountNumber, ifsc, branch}
     } = req.body;
 
@@ -922,8 +922,17 @@ exports.editSellerProfile = async (req, res) => {
     if (closeTime) updateFields.closeTime = closeTime;
     if (isVeg !== undefined) updateFields.isVeg = isVeg;
     if (status !== undefined) updateFields.status = status;
-    if (sellerFreeDeliveryEnabled !== undefined) updateFields.sellerFreeDeliveryEnabled = sellerFreeDeliveryEnabled;
-    if (sellerFreeDeliveryLimit !== undefined) updateFields.sellerFreeDeliveryLimit = sellerFreeDeliveryLimit;
+    if (sellerFreeDeliveryEnabled !== undefined) {
+      updateFields.sellerFreeDeliveryEnabled = isTruthyFlag(
+        sellerFreeDeliveryEnabled,
+      );
+    }
+    if (sellerFreeDeliveryLimit !== undefined) {
+      updateFields.sellerFreeDeliveryLimit = Math.max(
+        0,
+        toNumber(sellerFreeDeliveryLimit),
+      );
+    }
     if (bankDetails) {
       // Parse bankDetails if it comes as JSON string (from form-data)
       let parsedBankDetails = bankDetails;
@@ -1028,7 +1037,7 @@ exports.sellerWithdrawalRequest = async (req, res) => {
     //     message: `Email verification required. Please verify your registered email address before making a withdrawal.`,
     //   });
     // }
-    
+
     const settings = await SettingAdmin.findOne();
     const minWithdrawal = settings?.minWithdrawal || 0;
     if (amount < minWithdrawal) {

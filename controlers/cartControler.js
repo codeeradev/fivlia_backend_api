@@ -31,6 +31,8 @@ const {
   applyStoreOfferToPrice,
 } = require("../utils/storeOffer");
 
+const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
+
 const getRequestedTypeFilter = (req) => {
   const requestedTypeId = resolveRequestedTypeId(req);
 
@@ -285,12 +287,21 @@ exports.getCart = async (req, res) => {
     let deliveryDistanceKm = 0;
     let billableKm = 0;
     let deliveryChargeMode = "day";
+    let deliveryBaseCharge = 0;
+    let freeDeliveryApplied = false;
+    let freeDeliverySource = null;
+    let freeDeliveryThreshold = 0;
+    let sellerSponsoredDeliveryPayout = 0;
+    let sellerFreeDeliveryEnabled = false;
+    let sellerFreeDeliveryLimit = 0;
 
     if (address && items?.length) {
       const storeId = items[0].storeId;
       const store = await Store.findById(storeId, {
         Latitude: 1,
         Longitude: 1,
+        sellerFreeDeliveryEnabled: 1,
+        sellerFreeDeliveryLimit: 1,
       }).lean();
 
       const distanceMeters = Math.round(
@@ -323,13 +334,37 @@ exports.getCart = async (req, res) => {
         perKm,
       });
 
+      deliveryBaseCharge = deliveryCharge;
+
       const itemsTotal = items.reduce(
         (sum, item) => sum + item.price * item.quantity,
         0,
       );
-      if (itemsTotal >= (settings?.freeDeliveryLimit || 0)) {
-        deliveryCharge = 0;
-      }
+
+      const deliveryGstPercent = Number(settings?.Delivery_Charges_Gst || 0);
+
+      const deliveryPayout =
+        deliveryBaseCharge > 0
+          ? deliveryBaseCharge / (1 + deliveryGstPercent / 100)
+          : 0;
+
+      const deliveryPricing = resolveSellerDeliveryPricing({
+        itemsTotal,
+        settings,
+        store,
+        deliveryChargeRaw: deliveryBaseCharge,
+        deliveryPayout,
+      });
+
+      deliveryCharge = deliveryPricing.customerDeliveryCharge;
+      deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
+      freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
+      freeDeliverySource = deliveryPricing.freeDeliverySource;
+      freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
+      sellerSponsoredDeliveryPayout =
+        deliveryPricing.sellerSponsoredDeliveryPayout;
+      sellerFreeDeliveryEnabled = deliveryPricing.sellerFreeDeliveryEnabled;
+      sellerFreeDeliveryLimit = deliveryPricing.sellerFreeDeliveryLimit;
     }
 
     return res.status(200).json({
@@ -339,9 +374,17 @@ exports.getCart = async (req, res) => {
       paymentOption: cashOnDelivery,
       StoreID: storeId,
       deliveryCharge,
+      deliveryBaseCharge,
       deliveryChargeMode,
       deliveryDistanceKm,
       billableKm,
+
+      freeDeliveryApplied,
+      freeDeliverySource,
+      freeDeliveryThreshold,
+      sellerSponsoredDeliveryPayout,
+      sellerFreeDeliveryEnabled,
+      sellerFreeDeliveryLimit,
     });
   } catch (error) {
     console.error("❌ Error in getCart:", error);

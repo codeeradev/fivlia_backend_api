@@ -263,6 +263,8 @@ exports.storeEdit = async (req, res) => {
       typeId,
       closeTime,
       isAssured,
+      sellerFreeDeliveryEnabled,
+      sellerFreeDeliveryLimit,
       Category: categoryInput,
     } = req.body;
 
@@ -302,7 +304,7 @@ exports.storeEdit = async (req, res) => {
       }
     }
 
-    if(typeId) updateObj.typeId = typeId;
+    if (typeId) updateObj.typeId = typeId;
     // ✅ Latitude & Longitude
     if (Latitude) updateObj.Latitude = parseFloat(Latitude);
     if (Longitude) updateObj.Longitude = parseFloat(Longitude);
@@ -354,6 +356,17 @@ exports.storeEdit = async (req, res) => {
     if (closeTime) updateObj.closeTime = closeTime;
     if (status !== undefined) updateObj.status = status;
     if (Description) updateObj.Description = Description;
+    if (sellerFreeDeliveryEnabled !== undefined) {
+      updateObj.sellerFreeDeliveryEnabled = isTruthyFlag(
+        sellerFreeDeliveryEnabled,
+      );
+    }
+    if (sellerFreeDeliveryLimit !== undefined) {
+      updateObj.sellerFreeDeliveryLimit = Math.max(
+        0,
+        toNumber(sellerFreeDeliveryLimit),
+      );
+    }
 
     updateObj.gstNumber = gstNumber;
     updateObj.fsiNumber = fsiNumber;
@@ -548,7 +561,10 @@ exports.removeCategoryInStore = async (req, res) => {
 exports.getStoreTransaction = async (req, res) => {
   try {
     const storeId = req.params;
-    const storeData = await store_transaction.find(storeId).sort({ createdAt: -1 }).lean();;
+    const storeData = await store_transaction
+      .find(storeId)
+      .sort({ createdAt: -1 })
+      .lean();
     return res.status(200).json({ message: "Store transactions", storeData });
   } catch (error) {
     console.error(error);

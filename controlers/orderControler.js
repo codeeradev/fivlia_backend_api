@@ -23,6 +23,7 @@ const DriverRating = require("../modals/DriverRating");
 const Transaction = require("../modals/driverModals/transaction");
 const AdminStaff = require("../modals/roleBase/adminStaff");
 const crypto = require("crypto");
+const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
 
 const {
   getStoresWithinRadius,
@@ -251,6 +252,11 @@ exports.placeOrder = async (req, res) => {
     let deliveryGstPercent = chargesData.Delivery_Charges_Gst || 0;
     let totalDeliveryCharge = 0;
     let deliveryDistanceKm = 0;
+    let deliveryBaseCharge = 0;
+    let freeDeliveryApplied = false;
+    let freeDeliverySource = null;
+    let freeDeliveryThreshold = 0;
+    let sellerSponsoredDeliveryPayout = 0;
 
     const itemsTotal = cartItems.reduce((sum, item) => {
       return sum + Number(item.price) * Number(item.quantity);
@@ -303,7 +309,10 @@ exports.placeOrder = async (req, res) => {
     const storeData = await Store.findById(storeId, {
       Latitude: 1,
       Longitude: 1,
+      sellerFreeDeliveryEnabled: 1,
+      sellerFreeDeliveryLimit: 1,
     }).lean();
+
     const storeLat = parseFloat(storeData?.Latitude);
     const storeLng = parseFloat(storeData?.Longitude);
 
@@ -342,15 +351,33 @@ exports.placeOrder = async (req, res) => {
       fixedFirstKm,
       perKm,
     });
-    totalDeliveryCharge = deliveryChargeRaw / (1 + deliveryGstPercent / 100);
 
-    let totalPrice = itemsTotal;
-    if (itemsTotal >= chargesData.freeDeliveryLimit) {
-      totalPrice = itemsTotal + platformFeeAmount;
-      deliveryChargeRaw = 0;
-    } else {
-      totalPrice = itemsTotal + deliveryChargeRaw + platformFeeAmount;
-    }
+    deliveryBaseCharge = deliveryChargeRaw;
+
+    totalDeliveryCharge = deliveryBaseCharge / (1 + deliveryGstPercent / 100);
+
+    const deliveryPricing = resolveSellerDeliveryPricing({
+      itemsTotal,
+      settings: chargesData,
+      store: storeData,
+      deliveryChargeRaw: deliveryBaseCharge,
+      deliveryPayout: totalDeliveryCharge,
+    });
+
+    deliveryChargeRaw = deliveryPricing.customerDeliveryCharge;
+
+    deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
+
+    freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
+
+    freeDeliverySource = deliveryPricing.freeDeliverySource;
+
+    freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
+
+    sellerSponsoredDeliveryPayout =
+      deliveryPricing.sellerSponsoredDeliveryPayout;
+
+    const totalPrice = itemsTotal + deliveryChargeRaw + platformFeeAmount;
 
     const userId = cartItems[0].userId;
     const cashOnDelivery = paymentMode === true;
@@ -411,6 +438,11 @@ exports.placeOrder = async (req, res) => {
         deliveryCharges: deliveryChargeRaw,
         deliveryDistanceKm,
         platformFee: chargesData.Platform_Fee,
+        deliveryBaseCharge,
+        freeDeliveryApplied,
+        freeDeliverySource,
+        freeDeliveryThreshold,
+        sellerSponsoredDeliveryPayout,
       });
 
       console.log(`${nextOrderId} doc created`);
@@ -538,6 +570,11 @@ exports.placeOrder = async (req, res) => {
         deliveryCharges: deliveryChargeRaw,
         deliveryDistanceKm,
         platformFee: chargesData.Platform_Fee,
+        deliveryBaseCharge,
+        freeDeliveryApplied,
+        freeDeliverySource,
+        freeDeliveryThreshold,
+        sellerSponsoredDeliveryPayout,
       });
       const payResponse = await createRazorpayOrder(
         totalPrice,
@@ -728,6 +765,17 @@ exports.verifyPayment = async (req, res) => {
       gst: tempOrder.gst || "",
       deliveryPayout: tempOrder.deliveryPayout,
       deliveryDistanceKm: tempOrder.deliveryDistanceKm,
+
+      deliveryBaseCharge: tempOrder.deliveryBaseCharge,
+
+      freeDeliveryApplied: tempOrder.freeDeliveryApplied,
+
+      freeDeliverySource: tempOrder.freeDeliverySource,
+
+      freeDeliveryThreshold: tempOrder.freeDeliveryThreshold,
+
+      sellerSponsoredDeliveryPayout: tempOrder.sellerSponsoredDeliveryPayout,
+
       storeId: tempOrder.storeId,
       transactionId: transactionId || paymentResult?.raw?.id || "",
       paymentStatus: "Successful",

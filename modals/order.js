@@ -50,6 +50,12 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    deliveryBaseCharge: { type: Number, default: 0 },
+    freeDeliveryApplied: { type: Boolean, default: false },
+    freeDeliverySource: { type: String, default: null },
+    freeDeliveryThreshold: { type: Number, default: 0 },
+    sellerSponsoredDeliveryPayout: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
