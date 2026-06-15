@@ -872,6 +872,8 @@ exports.editSellerProfile = async (req, res) => {
       status,
       closeTime,
       isVeg,
+      sellerFreeDeliveryEnabled,
+      sellerFreeDeliveryLimit
       // {bankName, accountHolder, accountNumber, ifsc, branch}
     } = req.body;
 
@@ -920,6 +922,8 @@ exports.editSellerProfile = async (req, res) => {
     if (closeTime) updateFields.closeTime = closeTime;
     if (isVeg !== undefined) updateFields.isVeg = isVeg;
     if (status !== undefined) updateFields.status = status;
+    if (sellerFreeDeliveryEnabled !== undefined) updateFields.sellerFreeDeliveryEnabled = sellerFreeDeliveryEnabled;
+    if (sellerFreeDeliveryLimit !== undefined) updateFields.sellerFreeDeliveryLimit = sellerFreeDeliveryLimit;
     if (bankDetails) {
       // Parse bankDetails if it comes as JSON string (from form-data)
       let parsedBankDetails = bankDetails;
