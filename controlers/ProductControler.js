@@ -1666,6 +1666,7 @@ exports.updateProduct = async (req, res) => {
       mrp,
       sell_price,
       status,
+      isVeg,
       returnProduct,
       productType,
       foodTypeId
@@ -2068,6 +2069,7 @@ exports.updateProduct = async (req, res) => {
       ...(status && { status }),
       ...(sell_price && { sell_price }),
       ...(productType && { productType }),
+      ...(isVeg !== undefined && { isVeg }),
     };
 
     // console.log("🧾 Update data:", JSON.stringify(updateData, null, 2));
