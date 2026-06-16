@@ -2117,6 +2117,31 @@ exports.bulkOrder = async (req, res) => {
     const userId = req.user;
 
     await BulkOrderRequest.create({ productId, userId });
+
+    // 🔔 ADMIN FCM NOTIFICATION
+    const admin = await AdminStaff.findOne({
+      roleId: "6924308f010bf6509aecedf0",
+    });
+    console.log("noti block next");
+    if (admin?.fcmToken) {
+      console.log("noti block runned");
+      try {
+        await sendNotification(
+          admin.fcmToken,
+          "New Order Received 🛒",
+          `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+          "/orders",
+          {},
+          CUSTOM_PUSH_SOUND,
+        );
+      } catch (err) {
+        console.warn(
+          "⚠️ User notification failed order status change:",
+          err.response?.data?.error?.message || err.message,
+        );
+      }
+    }
+
     return res.status(200).json({ message: "Request Submited" });
   } catch (error) {
     console.error("error", error);
