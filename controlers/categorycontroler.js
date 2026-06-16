@@ -227,11 +227,16 @@ exports.banner = async (req, res) => {
 };
 
 exports.getBanner = async (req, res) => {
+  const totalStart = Date.now();
+
   try {
     const { type } = req.query;
     const userId = req.user;
 
+    console.time("1. User Query");
     const user = await User.findById(userId).lean();
+    console.timeEnd("1. User Query");
+
     if (!user || !user.location?.latitude || !user.location?.longitude) {
       return res.status(400).json({ message: "User location not found" });
     }
@@ -239,12 +244,11 @@ exports.getBanner = async (req, res) => {
     const userLat = user.location.latitude;
     const userLng = user.location.longitude;
 
-    // 🟢 Get active city names
-    const activeCities = await CityData.find({ status: true }, "city").lean();
-    const activeCityNames = activeCities.map((c) => c.city?.toLowerCase());
-
-    // 🟢 Get active zone IDs
+    console.time("4. Active Zones");
     const zoneDocs = await ZoneData.find({ status: true }, "zones").lean();
+    console.timeEnd("4. Active Zones");
+
+    console.time("5. Zone Processing");
     const activeZoneIds = [];
     zoneDocs.forEach((doc) => {
       (doc.zones || []).forEach((zone) => {
@@ -253,25 +257,39 @@ exports.getBanner = async (req, res) => {
         }
       });
     });
+    console.timeEnd("5. Zone Processing");
 
+    console.time("6. Brand Query");
     const brandIds = req.typeId
-      ? (await brand.find({ typeId: req.typeId }).select("_id").lean()).map(
-          (b) => b._id,
-        )
+      ? (
+          await brand.find({ typeId: req.typeId })
+            .select("_id")
+            .lean()
+        ).map((b) => b._id)
       : [];
+    console.timeEnd("6. Brand Query");
 
+    console.time("7. Category ObjectIds");
     const categoryObjectIds = (req.categoryIds || []).map(
-      (id) => new mongoose.Types.ObjectId(id),
-    );
-    const allCategoryObjectIds = (req.allCategoryIds || req.categoryIds || []).map(
-      (id) => new mongoose.Types.ObjectId(id),
+      (id) => new mongoose.Types.ObjectId(id)
     );
 
+    const allCategoryObjectIds = (
+      req.allCategoryIds ||
+      req.categoryIds ||
+      []
+    ).map((id) => new mongoose.Types.ObjectId(id));
+    console.timeEnd("7. Category ObjectIds");
+
+    console.time("8. Banner Scope");
     const bannerScope = [];
+
     if (req.typeId) {
       bannerScope.push(
         {
-          type2: { $in: ["Category", "SubCategory", "Sub Sub-Category"] },
+          type2: {
+            $in: ["Category", "SubCategory", "Sub Sub-Category"],
+          },
           $or: [
             { "mainCategory._id": { $in: categoryObjectIds } },
             { "subCategory._id": { $in: allCategoryObjectIds } },
@@ -287,37 +305,56 @@ exports.getBanner = async (req, res) => {
         },
         {
           type2: "NO",
-        },
+        }
       );
     }
+    console.timeEnd("8. Banner Scope");
 
+    console.time("9. Banner Query");
     const allBanners = await Banner.find({
       status: { $ne: false },
-      ...(req.typeId && { typeId: new mongoose.Types.ObjectId(req.typeId) }),
+      ...(req.typeId && {
+        typeId: new mongoose.Types.ObjectId(req.typeId),
+      }),
       ...(type && { type }),
       ...(bannerScope.length && { $or: bannerScope }),
     })
       .sort({ createdAt: -1 })
       .lean();
+    console.timeEnd("9. Banner Query");
 
+    console.log("Banner Count:", allBanners.length);
+
+    console.time("10. Banner Radius Filter");
     const matchedBanners = await getBannersWithinRadius(
       userLat,
       userLng,
-      allBanners,
+      allBanners
     );
+    console.timeEnd("10. Banner Radius Filter");
 
     let finalBanners = [...matchedBanners];
 
-    // 🔥 ADD SELLER OFFERS ONLY FOR OFFER TYPE
-
     const now = new Date();
 
-    // 1️⃣ Get nearby & open stores
-    const storeResult = await getStoresWithinRadius(userLat, userLng);
-    if (storeResult?.matchedStores?.length) {
-      const nearbyStoreIds = storeResult.matchedStores.map((s) => s._id);
+    console.time("11. Stores Radius");
+    const storeResult = await getStoresWithinRadius(
+      userLat,
+      userLng
+    );
+    console.timeEnd("11. Stores Radius");
 
-      // 2️⃣ Get valid seller coupons
+    if (storeResult?.matchedStores?.length) {
+      const nearbyStoreIds = storeResult.matchedStores.map(
+        (s) => s._id
+      );
+
+      console.log(
+        "Nearby Stores:",
+        nearbyStoreIds.length
+      );
+
+      console.time("12. Coupon Aggregate");
       const sellerCoupons = await Coupon.aggregate([
         {
           $match: {
@@ -328,17 +365,27 @@ exports.getBanner = async (req, res) => {
             expireDate: { $gte: now },
           },
         },
-        { $sort: { createdAt: -1 } }, // 🔑 latest first
+        { $sort: { createdAt: -1 } },
         {
           $group: {
-            _id: "$storeId", // one per seller
+            _id: "$storeId",
             coupon: { $first: "$$ROOT" },
           },
         },
-        { $replaceRoot: { newRoot: "$coupon" } },
+        {
+          $replaceRoot: {
+            newRoot: "$coupon",
+          },
+        },
       ]);
+      console.timeEnd("12. Coupon Aggregate");
 
-      // 3️⃣ Normalize seller coupons → banner shape
+      console.log(
+        "Seller Coupons:",
+        sellerCoupons.length
+      );
+
+      console.time("13. Coupon Mapping");
       const sellerOfferBanners = sellerCoupons.map((c) => ({
         _id: c._id,
         image: c.image,
@@ -347,27 +394,29 @@ exports.getBanner = async (req, res) => {
         offer: Number(c.offer),
         type: "offer",
         type2: "Store",
-        source: "seller", // 🔑 important for frontend
+        source: "seller",
         createdAt: c.createdAt,
       }));
+      console.timeEnd("13. Coupon Mapping");
 
-      // 4️⃣ Tag admin banners
+      console.time("14. Admin Banner Mapping");
       finalBanners = finalBanners.map((b) => ({
         ...b,
         source: "admin",
       }));
+      console.timeEnd("14. Admin Banner Mapping");
 
-      // 5️⃣ Merge seller + admin
-      finalBanners = [...sellerOfferBanners, ...finalBanners];
+      console.time("15. Final Merge");
+      finalBanners = [
+        ...sellerOfferBanners,
+        ...finalBanners,
+      ];
+      console.timeEnd("15. Final Merge");
     }
 
-    if (!finalBanners.length) {
-      return res.status(200).json({
-        message: "No banners found for your location.",
-        count: 0,
-        data: [],
-      });
-    }
+    console.log(
+      `🚀 TOTAL API TIME: ${Date.now() - totalStart}ms`
+    );
 
     return res.status(200).json({
       message: "Banners fetched successfully.",
@@ -375,13 +424,7 @@ exports.getBanner = async (req, res) => {
       data: finalBanners,
     });
   } catch (error) {
-    console.error("❌ Error fetching banners:", error);
-    return res.status(500).json({
-      message: "An error occurred while fetching banners.",
-      error: error.message,
-      count: 0,
-      data: [],
-    });
+    console.error(error);
   }
 };
 

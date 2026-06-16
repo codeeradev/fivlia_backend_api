@@ -1,6 +1,7 @@
 const driver = require("../../modals/driver");
 const seller = require("../../modals/store");
 const sendNotification = require("../../firebase/pushnotification");
+const AdminStaff = require("../../modals/roleBase/adminStaff");
 const { SettingAdmin } = require("../../modals/setting");
 const { ZoneData } = require("../../modals/cityZone");
 const { sendVerificationEmail } = require("../../config/nodeMailer");
@@ -837,6 +838,30 @@ exports.verifyOtpSeller = async (req, res) => {
       await OtpModel.deleteOne({ _id: otpRecord._id });
     } else {
       await otpRecord.save();
+    }
+
+    // 🔔 ADMIN FCM NOTIFICATION
+    const admin = await AdminStaff.findOne({
+      roleId: "6924308f010bf6509aecedf0",
+    });
+    console.log("noti block next");
+    if (admin?.fcmToken) {
+      console.log("noti block runned");
+      try {
+        await sendNotification(
+          admin.fcmToken,
+          "New Order Received 🛒",
+          `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+          "/orders",
+          {},
+          CUSTOM_PUSH_SOUND,
+        );
+      } catch (err) {
+        console.warn(
+          "⚠️ User notification failed order status change:",
+          err.response?.data?.error?.message || err.message,
+        );
+      }
     }
 
     return res.status(200).json({

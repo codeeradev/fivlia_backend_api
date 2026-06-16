@@ -1680,6 +1680,33 @@ exports.driver = async (req, res) => {
         back: dlBackKey ? `/${dlBackKey}` : "",
       },
     });
+
+    if (status === "pending_admin_approval") {
+      // 🔔 ADMIN FCM NOTIFICATION
+      const admin = await AdminStaff.findOne({
+        roleId: "6924308f010bf6509aecedf0",
+      });
+      console.log("noti block of become a driver next");
+      if (admin?.fcmToken) {
+        console.log("noti block runned");
+        try {
+          await sendNotification(
+            admin.fcmToken,
+            "New Delivery Partner Request",
+            `${driverName} has submitted a request to become a delivery partner.`,
+            "/drivers",
+            {},
+            CUSTOM_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
+      }
+    }
+
     return res
       .status(200)
       .json({ message: "Driver added successfully", newDriver });
