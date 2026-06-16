@@ -107,7 +107,7 @@ exports.getFoodSeller = async (req, res) => {
   try {
     const { veg, filter } = req.query;
 
-    console.log("Fetching foods with sellers..." ,req.query);
+    console.log("Fetching foods with sellers...", req.query);
 
     const userId = req.user._id;
 
@@ -296,10 +296,10 @@ exports.getFoodSeller = async (req, res) => {
     // SORT SELLERS BY OFFER DESC
     // =========================================================
     sellers.sort((a, b) => {
-      const offerA = offerMap[a._id.toString()] || 0;
-      const offerB = offerMap[b._id.toString()] || 0;
+      const ordersA = deliveredOrderMap[a._id.toString()] || 0;
+      const ordersB = deliveredOrderMap[b._id.toString()] || 0;
 
-      return offerB - offerA;
+      return ordersB - ordersA;
     });
 
     const storeDistanceMap = {};
@@ -348,9 +348,7 @@ exports.getFoodSeller = async (req, res) => {
           };
         })
         .sort((a, b) => {
-          return (
-            Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0)
-          );
+          return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
         });
 
       return {
@@ -394,7 +392,7 @@ exports.getFoodSeller = async (req, res) => {
         };
       })
       .sort((a, b) => {
-        return Number(b.topProductOffer || 0) - Number(a.topProductOffer || 0);
+        return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
       });
 
     return res.status(200).json({
