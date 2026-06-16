@@ -34,7 +34,7 @@ const {
 } = require("../utils/productTypeFilter");
 const {
   getActiveStoreOffer,
-  applyStoreOfferToPrice,
+  buildOfferPreviewText,
 } = require("../utils/storeOffer");
 const { Order, TempOrder } = require("../modals/order");
 
@@ -1302,6 +1302,13 @@ exports.forwebgetBanner = async (req, res) => {
           title: c.title,
           storeId: c.storeId,
           offer: Number(c.offer),
+          offerType: c.offerType || "cart_discount",
+          discountScope: c.discountScope || "entire_cart",
+          previewText: buildOfferPreviewText(c),
+          minimumOrderAmount: c.minimumOrderAmount ?? c.limit,
+          limit: c.minimumOrderAmount ?? c.limit,
+          freeProductId: c.freeProductId || null,
+          freeProductQuantity: c.freeProductQuantity || 1,
           type: "offer",
           type2: "Store",
           source: "seller", // 🔑 important for frontend
@@ -1623,21 +1630,13 @@ exports.getAllSellerProducts = async (req, res) => {
           );
 
           let sellPrice = stockEntry?.price ?? variant.sell_price;
-          let originalPrice = sellPrice;
-
-          if (activeOffer) {
-            sellPrice = applyStoreOfferToPrice(sellPrice, activeOffer.offer);
-          }
 
           return {
             ...variant,
             stock: stockEntry?.quantity ?? 0,
             mrp: stockEntry?.mrp ?? variant.mrp,
             sell_price: Math.round(sellPrice),
-            original_price:
-              activeOffer && Number.isFinite(originalPrice)
-                ? originalPrice
-                : null,
+            original_price: null,
             status: stockEntry?.status ?? false,
           };
         });
@@ -1697,6 +1696,8 @@ exports.getAllSellerProducts = async (req, res) => {
       products: filteredProductsWithStock,
       offerApplied: !!activeOffer,
       offer: activeOffer?.offer ?? null, // 👈 ADD THIS
+      offerType: activeOffer?.offerType || null,
+      offerPreview: activeOffer ? buildOfferPreviewText(activeOffer) : null,
       total,
       page: parseInt(page),
       limit: parseInt(limit) || 100,
@@ -1846,7 +1847,13 @@ exports.getTopSeller = async (req, res) => {
     const offerByStore = {};
     offers.forEach((offer, index) => {
       const storeId = filteredStores[index]._id.toString();
-      offerByStore[storeId] = offer?.offer || null;
+      offerByStore[storeId] = offer
+        ? {
+            offer: offer.offer || 0,
+            previewText: buildOfferPreviewText(offer),
+            offerType: offer.offerType || null,
+          }
+        : null;
     });
 
     const ratingsByStore = ratings.reduce((acc, rating) => {
@@ -1883,7 +1890,9 @@ exports.getTopSeller = async (req, res) => {
         image: store.image,
         averageRating: averageRating.toFixed(1),
         isAssured: store.fivliaAssured || false,
-        activeOffer, // 👈 added
+        activeOffer: activeOffer?.offer ?? null,
+        offerPreview: activeOffer?.previewText || null,
+        offerType: activeOffer?.offerType || null,
         ratingCount: ratingCount,
         topProductOffer: offerMap[store._id.toString()]
           ? `${offerMap[store._id.toString()]}`

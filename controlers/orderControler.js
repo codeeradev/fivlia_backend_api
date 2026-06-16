@@ -24,6 +24,10 @@ const Transaction = require("../modals/driverModals/transaction");
 const AdminStaff = require("../modals/roleBase/adminStaff");
 const crypto = require("crypto");
 const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
+const {
+  getAppliedOfferContext,
+  buildOfferPreviewText,
+} = require("../utils/storeOffer");
 
 const {
   getStoresWithinRadius,
@@ -59,6 +63,10 @@ const {
   FeeInvoiceId,
   getNextDriverId,
 } = require("../config/counter");
+
+const getOfferContext = async (cartItems, storeId, now = new Date()) => {
+  return getAppliedOfferContext(cartItems, storeId, now);
+};
 const {
   createRazorpayOrder,
   verifyRazorpayPayment,
@@ -238,6 +246,38 @@ exports.placeOrder = async (req, res) => {
       }
     }
 
+    const offerContext = await getOfferContext(cartItems, storeId);
+    const offerSummary = {
+      cartDiscount: offerContext.cartDiscount.offer
+        ? {
+            _id: offerContext.cartDiscount.offer._id,
+            title: offerContext.cartDiscount.offer.title,
+            previewText: buildOfferPreviewText(offerContext.cartDiscount.offer),
+            offerType: offerContext.cartDiscount.offer.offerType,
+            discountScope: offerContext.cartDiscount.offer.discountScope,
+            percent: offerContext.cartDiscount.percent,
+            savings: offerContext.cartDiscount.discountAmount,
+          }
+        : null,
+      freeProduct: offerContext.freeProductItem
+        ? {
+            _id: offerContext.freeProductOffer?._id || null,
+            title: offerContext.freeProductOffer?.title || null,
+            previewText: buildOfferPreviewText(offerContext.freeProductOffer),
+            name: offerContext.freeProductItem.name,
+            quantity: offerContext.freeProductItem.quantity,
+            savings: offerContext.freeProductItem.freeProductSavings,
+          }
+        : null,
+      subtotal: offerContext.cartDiscount.subtotal,
+      discountSavings: offerContext.cartDiscount.discountAmount,
+      freeProductSavings: offerContext.freeProductItem?.freeProductSavings || 0,
+      totalSavings:
+        offerContext.cartDiscount.discountAmount +
+        (offerContext.freeProductItem?.freeProductSavings || 0),
+      finalSubtotal: offerContext.cartDiscount.finalSubtotal,
+    };
+
     let nextOrderId = await getNextOrderId(true);
     console.log(`${nextOrderId} recived`);
     const chargesData = await SettingAdmin.findOne();
@@ -258,9 +298,7 @@ exports.placeOrder = async (req, res) => {
     let freeDeliveryThreshold = 0;
     let sellerSponsoredDeliveryPayout = 0;
 
-    const itemsTotal = cartItems.reduce((sum, item) => {
-      return sum + Number(item.price) * Number(item.quantity);
-    }, 0);
+    const itemsTotal = offerContext.cartDiscount.finalSubtotal;
     const platformFeeRate = (chargesData.Platform_Fee || 0) / 100;
     const platformFeeAmount = itemsTotal * platformFeeRate;
 
@@ -384,7 +422,7 @@ exports.placeOrder = async (req, res) => {
 
     const orderItems = [];
 
-    for (const item of cartItems) {
+    for (const item of offerContext.cartDiscount.items) {
       const product = await Products.findById(item.productId)
         .select("tax category")
         .lean();
@@ -413,13 +451,54 @@ exports.placeOrder = async (req, res) => {
         varientId: item.varientId,
         name: item.name,
         quantity: item.quantity,
-        price: Number(item.price),
+        price: Number(item.finalUnitPrice),
         commision,
         image: item.image,
         gst,
         typeId,
         typeName,
+        offerId: item.offerId || null,
+        offerTitle: item.offerTitle || null,
+        offerType: item.offerType || null,
+        offerPercent: item.offerPercent || 0,
+        isOfferItem: item.isOfferApplied || false,
       });
+    }
+
+    if (offerContext.freeProductItem) {
+      const freeProduct = await Products.findById(
+        offerContext.freeProductItem.productId,
+      )
+        .select("tax category productName productThumbnailUrl")
+        .lean();
+
+      if (freeProduct) {
+        const freeCategoryId = freeProduct?.category?.[0]?._id;
+        const freeCategory = await Category.findById(freeCategoryId)
+          .populate("typeId", "name")
+          .select("typeId")
+          .lean();
+
+        orderItems.push({
+          productId: offerContext.freeProductItem.productId,
+          varientId: offerContext.freeProductItem.varientId,
+          name: `${freeProduct.productName} (Free)`,
+          quantity: offerContext.freeProductItem.quantity,
+          price: 0,
+          commision: 0,
+          image:
+            offerContext.freeProductItem.image ||
+            freeProduct.productThumbnailUrl,
+          gst: freeProduct.tax,
+          typeId: freeCategory?.typeId?._id,
+          typeName: freeCategory?.typeId?.name,
+          offerId: offerContext.freeProductItem.offerId || null,
+          offerTitle: offerContext.freeProductItem.offerTitle || null,
+          offerType: offerContext.freeProductItem.offerType || "free_product",
+          offerPercent: 0,
+          isOfferItem: true,
+        });
+      }
     }
 
     if (paymentMode === true) {
@@ -443,10 +522,11 @@ exports.placeOrder = async (req, res) => {
         freeDeliverySource,
         freeDeliveryThreshold,
         sellerSponsoredDeliveryPayout,
+        offerSummary,
       });
 
       console.log(`${nextOrderId} doc created`);
-      for (const item of cartItems) {
+      for (const item of offerContext.cartDiscount.items) {
         const dataStock = await stock.updateOne(
           {
             storeId: storeId,
@@ -462,10 +542,30 @@ exports.placeOrder = async (req, res) => {
           { _id: item.productId },
           { $inc: { purchases: item.quantity } },
         );
-        await Cart.deleteMany({ _id: { $in: cartIds } });
-
-        console.log(`${nextOrderId} stock deducted cart deleted`);
+        console.log(`${nextOrderId} stock deducted for cart item ${item.productId}`);
       }
+
+      if (offerContext.freeProductItem) {
+        await stock.updateOne(
+          {
+            storeId: storeId,
+            "stock.productId": offerContext.freeProductItem.productId,
+            "stock.variantId": offerContext.freeProductItem.varientId,
+          },
+          {
+            $inc: {
+              "stock.$.quantity": -offerContext.freeProductItem.quantity,
+            },
+          },
+        );
+        await Products.updateOne(
+          { _id: offerContext.freeProductItem.productId },
+          { $inc: { purchases: offerContext.freeProductItem.quantity } },
+        );
+      }
+
+      await Cart.deleteMany({ _id: { $in: cartIds } });
+      console.log(`${nextOrderId} stock deducted cart deleted`);
       const sellerDoc = await Store.findById(storeId);
 
       await telegramOrderLog("📦 ORDER PLACED", {
@@ -575,6 +675,7 @@ exports.placeOrder = async (req, res) => {
         freeDeliverySource,
         freeDeliveryThreshold,
         sellerSponsoredDeliveryPayout,
+        offerSummary,
       });
       const payResponse = await createRazorpayOrder(
         totalPrice,
@@ -775,6 +876,7 @@ exports.verifyPayment = async (req, res) => {
       freeDeliveryThreshold: tempOrder.freeDeliveryThreshold,
 
       sellerSponsoredDeliveryPayout: tempOrder.sellerSponsoredDeliveryPayout,
+      offerSummary: tempOrder.offerSummary || null,
 
       storeId: tempOrder.storeId,
       transactionId: transactionId || paymentResult?.raw?.id || "",

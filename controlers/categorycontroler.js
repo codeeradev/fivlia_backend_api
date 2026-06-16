@@ -22,6 +22,7 @@ const Filters = require("../modals/filter");
 const slugify = require("slugify");
 const { CityData, ZoneData } = require("../modals/cityZone");
 const Coupon = require("../modals/sellerCoupon");
+const { buildOfferPreviewText } = require("../utils/storeOffer");
 
 exports.update = async (req, res) => {
   try {
@@ -392,6 +393,13 @@ exports.getBanner = async (req, res) => {
         title: c.title,
         storeId: c.storeId,
         offer: Number(c.offer),
+        offerType: c.offerType || "cart_discount",
+        discountScope: c.discountScope || "entire_cart",
+        previewText: buildOfferPreviewText(c),
+        minimumOrderAmount: c.minimumOrderAmount ?? c.limit,
+        limit: c.minimumOrderAmount ?? c.limit,
+        freeProductId: c.freeProductId || null,
+        freeProductQuantity: c.freeProductQuantity || 1,
         type: "offer",
         type2: "Store",
         source: "seller",

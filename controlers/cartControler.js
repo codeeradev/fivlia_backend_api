@@ -8,7 +8,6 @@ const mongoose = require("mongoose");
 const haversine = require("haversine-distance");
 const Address = require("../modals/Address");
 const Coupon = require("../modals/sellerCoupon");
-const { getActiveProductOffer } = require("../utils/storeOffer");
 const { SettingAdmin } = require("../modals/setting");
 const {
   getDistanceKm,
@@ -27,8 +26,16 @@ const {
 } = require("../config/google");
 
 const {
-  getActiveStoreOffer,
-  applyStoreOfferToPrice,
+  getActiveStoreOffers,
+  getAppliedOfferContext,
+  isOfferActive,
+  isOfferEligibleForCart,
+  getOfferMinimumAmount,
+  calculateCartSubtotal,
+  buildCartDiscountBreakdown,
+  buildOfferPreviewText,
+  resolveOfferPercent,
+  resolveFreeProductItem,
 } = require("../utils/storeOffer");
 
 const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
@@ -43,6 +50,10 @@ const getRequestedTypeFilter = (req) => {
   return {
     typeId: new mongoose.Types.ObjectId(requestedTypeId),
   };
+};
+
+const getOfferContext = async (cartItems, storeId, now = new Date()) => {
+  return getAppliedOfferContext(cartItems, storeId, now);
 };
 
 exports.addCart = async (req, res) => {
@@ -162,10 +173,7 @@ exports.addCart = async (req, res) => {
       });
     }
 
-    const activeOffer = await getActiveStoreOffer(storeId);
-    const finalPrice = activeOffer
-      ? applyStoreOfferToPrice(price, activeOffer.offer)
-      : Math.round(Number(price));
+    const finalPrice = Math.round(Number(price));
 
     if (finalPrice == null) {
       return res.status(400).json({
@@ -266,6 +274,17 @@ exports.getCart = async (req, res) => {
       };
     });
 
+    const now = new Date();
+    const offerContext = await getOfferContext(updatedItems, storeId, now);
+    const offerItems = offerContext.cartDiscount.items.map((item) => ({
+      ...item,
+      price: item.baseUnitPrice,
+      finalPrice: item.finalUnitPrice,
+      discountAmount: item.lineDiscount,
+      savings: item.lineDiscount,
+    }));
+    const freeProductItem = offerContext.freeProductItem;
+
     const settings = await SettingAdmin.findOne().lean();
     let address = null;
 
@@ -336,8 +355,8 @@ exports.getCart = async (req, res) => {
 
       deliveryBaseCharge = deliveryCharge;
 
-      const itemsTotal = items.reduce(
-        (sum, item) => sum + item.price * item.quantity,
+      const itemsTotal = offerContext.cartDiscount.items.reduce(
+        (sum, item) => sum + item.finalUnitPrice * item.quantity,
         0,
       );
 
@@ -370,7 +389,40 @@ exports.getCart = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: "Cart items fetched successfully.",
-      items: updatedItems,
+      items: offerItems,
+      freeItems: freeProductItem ? [freeProductItem] : [],
+      offerSummary: {
+        cartDiscount: offerContext.cartDiscount.offer
+          ? {
+              _id: offerContext.cartDiscount.offer._id,
+              title: offerContext.cartDiscount.offer.title,
+              previewText: buildOfferPreviewText(offerContext.cartDiscount.offer),
+              offerType: offerContext.cartDiscount.offer.offerType,
+              discountScope: offerContext.cartDiscount.offer.discountScope,
+              percent: offerContext.cartDiscount.percent,
+              savings: offerContext.cartDiscount.discountAmount,
+              subtotal: offerContext.cartDiscount.subtotal,
+              finalSubtotal: offerContext.cartDiscount.finalSubtotal,
+            }
+          : null,
+        freeProduct: freeProductItem
+          ? {
+              _id: offerContext.freeProductOffer._id,
+              title: offerContext.freeProductOffer.title,
+              previewText: buildOfferPreviewText(offerContext.freeProductOffer),
+              freeProductName: freeProductItem.name,
+              freeProductQuantity: freeProductItem.quantity,
+              savings: freeProductItem.freeProductSavings,
+            }
+          : null,
+        subtotal: offerContext.cartDiscount.subtotal,
+        discountSavings: offerContext.cartDiscount.discountAmount,
+        freeProductSavings: freeProductItem?.freeProductSavings || 0,
+        totalSavings:
+          offerContext.cartDiscount.discountAmount +
+          (freeProductItem?.freeProductSavings || 0),
+        finalSubtotal: offerContext.cartDiscount.finalSubtotal,
+      },
       paymentOption: cashOnDelivery,
       StoreID: storeId,
       deliveryCharge,
@@ -481,8 +533,6 @@ exports.recommedProduct = async (req, res) => {
     // 2️⃣ Get seller of first cart item
     const firstCartItem = cartItems[0];
     const seller = await Store.findById(firstCartItem.storeId).lean();
-
-    const activeOffer = await getActiveStoreOffer(seller._id);
 
     if (!seller) {
       return res.status(404).json({ message: "Seller not found" });
@@ -611,27 +661,9 @@ exports.recommedProduct = async (req, res) => {
       req,
     );
 
-    const finalProducts = filteredRecommendedProducts.map((product) => {
-      if (!product.inventory) return product;
-
-      product.inventory = product.inventory.map((item) => {
-        const finalPrice = applyStoreOfferToPrice(
-          item.price,
-          activeOffer?.offer,
-        );
-
-        return {
-          ...item,
-          price: finalPrice ?? item.price,
-        };
-      });
-
-      return product;
-    });
-
     return res.status(200).json({
       message: "Recommended products fetched successfully",
-      relatedProducts: finalProducts,
+      relatedProducts: filteredRecommendedProducts,
     });
   } catch (error) {
     console.error("❌ Error in recommedProduct:", error);
@@ -643,55 +675,111 @@ exports.recommedProduct = async (req, res) => {
 
 exports.getOffers = async (req, res) => {
   try {
-    let { cartIds } = req.body; // array expect karo
+    const { cartIds, userId } = req.body;
 
-    if (!Array.isArray(cartIds) || cartIds.length === 0) {
-      return res.status(400).json({ message: "cartIds array required" });
+    if (!userId && (!Array.isArray(cartIds) || cartIds.length === 0)) {
+      return res.status(400).json({ message: "userId or cartIds array required" });
     }
 
-    const carts = await Cart.find({ _id: { $in: cartIds } }).lean();
+    const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
+    const carts = await Cart.find(cartQuery).lean();
 
     if (!carts.length) {
       return res.status(404).json({ message: "No carts found" });
     }
 
-    const storeId = carts[0].storeId; // assume same store
-    const productIds = carts.map((c) => c.productId);
+    const storeId = carts[0].storeId;
+    const now = new Date();
+    const offers = await getActiveStoreOffers(storeId, now);
+    const subtotal = calculateCartSubtotal(carts);
+    const appliedOfferId =
+      carts.find((cart) => cart.couponId)?.couponId?.toString() || null;
 
-    const offers = await getActiveProductOffer(storeId, new Date(), productIds);
+    const serializeOffer = (offer) => {
+      const eligibility = isOfferEligibleForCart(offer, carts, subtotal, now);
+      const breakdown =
+        offer.offerType === "cart_discount"
+          ? buildCartDiscountBreakdown(carts, offer)
+          : null;
 
-    // 🧠 Map offers per product
+      return {
+        _id: offer._id,
+        title: offer.title,
+        offerType: offer.offerType,
+        discountScope: offer.discountScope,
+        offer: resolveOfferPercent(offer, subtotal),
+        minimumOrderAmount: getOfferMinimumAmount(offer),
+        limit: getOfferMinimumAmount(offer),
+        previewText: buildOfferPreviewText(offer),
+        productId: offer.productId || [],
+        freeProductId: offer.freeProductId || null,
+        freeProductQuantity: offer.freeProductQuantity || 1,
+        isApplicable: eligibility.eligible,
+        ineligibilityReason: eligibility.reason,
+        isApplied: appliedOfferId === offer._id.toString(),
+        estimatedSavings: eligibility.eligible ? breakdown?.discountAmount || 0 : 0,
+        finalSubtotal:
+          eligibility.eligible && breakdown
+            ? breakdown.finalSubtotal
+            : subtotal,
+      };
+    };
+    const serializedOffers = offers.map(serializeOffer);
+    const serializedOfferById = new Map(
+      serializedOffers.map((offer) => [offer._id.toString(), offer]),
+    );
+    const appliedOffer = appliedOfferId
+      ? serializedOfferById.get(appliedOfferId)
+      : null;
+
     const offerMap = {};
     offers.forEach((offer) => {
-      offer.productId.forEach((pid) => {
-        if (!offerMap[pid]) offerMap[pid] = [];
-        offerMap[pid].push({
-          _id: offer._id,
-          title: offer.title,
-          offer: offer.offer,
-        });
+      if (offer.offerType !== "cart_discount") return;
+
+      const productIds = Array.isArray(offer.productId)
+        ? offer.productId.map((pid) => pid.toString())
+        : [];
+
+      if (offer.discountScope === "selected_products" && !productIds.length) {
+        return;
+      }
+
+      carts.forEach((cart) => {
+        const cartProductId = cart.productId.toString();
+
+        if (
+          offer.discountScope === "selected_products" &&
+          !productIds.includes(cartProductId)
+        ) {
+          return;
+        }
+
+        if (!offerMap[cartProductId]) offerMap[cartProductId] = [];
+        offerMap[cartProductId].push(serializedOfferById.get(offer._id.toString()));
       });
-    });
-
-    const isCouponApplied = carts.some((cart) => cart.isCouponApplied === true);
-
-    // TRUE if any product has offer
-    const hasOffer = carts.some((cart) => {
-      const key = cart.productId.toString();
-      return offerMap[key] && offerMap[key].length > 0;
     });
 
     return res.status(200).json({
       message: "Offers fetched successfully",
-      isCouponApplied,
-      noOffer: !hasOffer,
+      isCouponApplied: carts.some((cart) => cart.isCouponApplied === true),
+      noOffer: !offers.length,
+      storeId,
+      subtotal,
+      appliedOfferId,
+      storeOffers: serializedOffers,
+      offerSummary: {
+        subtotal,
+        appliedOfferId,
+        appliedOffer: appliedOffer || null,
+        totalSavings: appliedOffer?.estimatedSavings || 0,
+      },
 
       carts: carts.map((cart) => ({
         cartId: cart._id,
         productId: cart.productId,
         cartCoupon: cart.couponId || null,
         isCouponApplied: cart.isCouponApplied || false,
-        offers: offerMap[cart.productId] || [],
+        offers: offerMap[cart.productId.toString()] || [],
       })),
     });
   } catch (error) {
@@ -706,13 +794,14 @@ exports.getOffers = async (req, res) => {
 exports.applyCoupon = async (req, res) => {
   try {
     const { removeOffer } = req.query;
-    const { cartIds, couponId } = req.body;
+    const { cartIds, couponId, userId } = req.body;
 
-    if (!Array.isArray(cartIds) || cartIds.length === 0) {
-      return res.status(400).json({ message: "cartIds array required" });
+    if (!userId && (!Array.isArray(cartIds) || cartIds.length === 0)) {
+      return res.status(400).json({ message: "userId or cartIds array required" });
     }
 
-    const carts = await Cart.find({ _id: { $in: cartIds } });
+    const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
+    const carts = await Cart.find(cartQuery);
 
     if (!carts.length) {
       return res.status(404).json({ message: "No carts found" });
@@ -730,49 +819,71 @@ exports.applyCoupon = async (req, res) => {
       }
 
       return res.status(200).json({
-        message: "Coupons removed successfully",
+        message: "Offers removed successfully",
         carts,
       });
     }
 
+    if (!couponId) {
+      return res.status(400).json({ message: "couponId is required" });
+    }
+
     const coupon = await Coupon.findById(couponId);
+    const now = new Date();
 
-    if (!coupon || !coupon.status || coupon.approvalStatus !== "approved") {
-      return res.status(400).json({ message: "Invalid coupon" });
+    if (!coupon || !isOfferActive(coupon, now)) {
+      return res.status(400).json({ message: "Invalid offer" });
     }
 
-    if (coupon.expireDate && coupon.expireDate < new Date()) {
-      return res.status(400).json({ message: "Coupon expired" });
+    if (coupon.storeId?.toString() !== carts[0].storeId?.toString()) {
+      return res.status(400).json({ message: "Offer does not belong to this cart store" });
     }
 
-    const percent = Number(coupon.offer);
-    if (isNaN(percent)) {
-      return res.status(400).json({ message: "Invalid coupon value" });
+    const subtotal = calculateCartSubtotal(carts);
+    const eligibility = isOfferEligibleForCart(coupon, carts, subtotal, now);
+    if (!eligibility.eligible) {
+      return res.status(400).json({ message: eligibility.reason || "Offer is not applicable" });
     }
 
+    const freeProductItem =
+      coupon.offerType === "free_product"
+        ? await resolveFreeProductItem({ offer: coupon, storeId: carts[0].storeId })
+        : null;
+
+    if (coupon.offerType === "free_product" && !freeProductItem) {
+      return res.status(400).json({ message: "Free product is not available in stock" });
+    }
+
+    const breakdown =
+      coupon.offerType === "cart_discount"
+        ? buildCartDiscountBreakdown(carts, coupon)
+        : buildCartDiscountBreakdown(carts, null);
     const updatedCarts = [];
+    const skipped = [];
 
-    for (let cart of carts) {
-      // 🔥 skip if already applied
-      if (cart.isCouponApplied) continue;
+    for (let index = 0; index < carts.length; index += 1) {
+      const cart = carts[index];
+      const item = breakdown.items[index];
 
-      // 🔥 match productId inside coupon.productId array
-      const isValidProduct =
-        coupon.productId &&
-        coupon.productId.some(
-          (pid) => pid.toString() === cart.productId.toString(),
-        );
-
-      if (!isValidProduct) continue;
-
-      const basePrice = cart.price;
-      const discount = (basePrice * percent) / 100;
-      const finalPrice = Math.max(0, basePrice - discount);
+      if (coupon.offerType === "cart_discount" && !item?.isOfferApplied) {
+        cart.couponId = null;
+        cart.discountAmount = 0;
+        cart.price = cart.originalPrice || cart.price;
+        cart.originalPrice = null;
+        cart.isCouponApplied = false;
+        await cart.save();
+        skipped.push(cart._id);
+        continue;
+      }
 
       cart.couponId = coupon._id;
-      cart.discountAmount = discount;
-      cart.originalPrice = cart.price;
-      cart.price = finalPrice;
+      cart.discountAmount =
+        coupon.offerType === "cart_discount" ? item.lineDiscount : 0;
+      cart.originalPrice = cart.originalPrice || item.baseUnitPrice;
+      cart.price =
+        coupon.offerType === "cart_discount"
+          ? item.finalUnitPrice
+          : item.baseUnitPrice;
       cart.isCouponApplied = true;
 
       await cart.save();
@@ -780,15 +891,29 @@ exports.applyCoupon = async (req, res) => {
     }
 
     return res.status(200).json({
-      message: "Coupon applied successfully",
+      message: "Offer applied successfully",
       appliedOn: updatedCarts.map((c) => c._id),
-      skipped: carts
-        .filter((c) => !updatedCarts.find((u) => u._id.equals(c._id)))
-        .map((c) => c._id),
+      skipped,
       carts: updatedCarts,
+      offerSummary: {
+        offerId: coupon._id,
+        title: coupon.title,
+        previewText: buildOfferPreviewText(coupon),
+        offerType: coupon.offerType,
+        discountAmount: breakdown.discountAmount,
+        subtotal: breakdown.subtotal,
+        finalSubtotal: breakdown.finalSubtotal,
+        freeProduct: freeProductItem
+          ? {
+              name: freeProductItem.name,
+              quantity: freeProductItem.quantity,
+              savings: freeProductItem.freeProductSavings,
+            }
+          : null,
+      },
     });
   } catch (error) {
-    console.error("❌ Error applying coupon:", error);
+    console.error("❌ Error applying offer:", error);
     return res.status(500).json({ message: "Server error" });
   }
 };

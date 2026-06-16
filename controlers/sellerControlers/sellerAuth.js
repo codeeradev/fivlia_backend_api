@@ -20,6 +20,118 @@ const { whatsappOtp } = require("../../config/whatsappsender");
 const { sendMessages } = require("../../utils/sendMessages");
 const mongoose = require("mongoose");
 const { notifyEntity } = require("../../utils/notifyStore");
+const { buildOfferPreviewText } = require("../../utils/storeOffer");
+
+const parseMaybeJson = (value, fallback) => {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return value;
+  }
+};
+
+const asObjectIdArray = (value) => {
+  const parsed = parseMaybeJson(value, []);
+  const array = Array.isArray(parsed) ? parsed : [parsed];
+
+  return array
+    .map((entry) => {
+      if (!entry) return null;
+      if (typeof entry === "object") {
+        return entry._id || entry.id || null;
+      }
+      return entry;
+    })
+    .filter(Boolean);
+};
+
+const toPositiveNumber = (value, fallback = null) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const toNonNegativeNumber = (value, fallback = null) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const IST_OFFSET_MINUTES = 330;
+
+const parseOfferStartDate = (value) => {
+  if (!value) return null;
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Date(
+      Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+        IST_OFFSET_MINUTES * 60 * 1000,
+    );
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const buildOfferExpireDate = (startDate, validDays) => {
+  const expireDate = new Date(startDate);
+  expireDate.setUTCDate(expireDate.getUTCDate() + Number(validDays));
+  expireDate.setUTCMilliseconds(expireDate.getUTCMilliseconds() - 1);
+  return expireDate;
+};
+
+const normalizeOfferFields = (body, existingCoupon = null) => {
+  const offerType = body.offerType || existingCoupon?.offerType || "cart_discount";
+  const discountScope =
+    body.discountScope || existingCoupon?.discountScope || "entire_cart";
+
+  const productId = asObjectIdArray(body.productId ?? existingCoupon?.productId);
+  const freeProductId =
+    body.freeProductId ||
+    (existingCoupon?.freeProductId?._id || existingCoupon?.freeProductId || null);
+
+  const freeProductQuantity = toPositiveNumber(
+    body.freeProductQuantity,
+    toPositiveNumber(existingCoupon?.freeProductQuantity, 1),
+  );
+
+  const minimumOrderAmount = toNonNegativeNumber(
+    body.minimumOrderAmount ?? body.limit,
+    toNonNegativeNumber(
+      existingCoupon?.minimumOrderAmount ?? existingCoupon?.limit,
+      null,
+    ),
+  );
+  const offerValue = toPositiveNumber(
+    body.offer,
+    toPositiveNumber(existingCoupon?.offer, null),
+  );
+  const cappedOfferValue =
+    offerValue === null || offerValue === undefined
+      ? offerValue
+      : Math.min(offerValue, 100);
+
+  return {
+    offerType,
+    discountScope,
+    productId,
+    freeProductId,
+    freeProductQuantity,
+    minimumOrderAmount,
+    offerValue: cappedOfferValue,
+  };
+};
 
 exports.addSeller = async (req, res) => {
   try {
@@ -1204,29 +1316,140 @@ exports.logoutSeller = async (req, res) => {
 
 exports.createSellerCoupon = async (req, res) => {
   try {
-    const { storeId, offer, title, limit, fromTo, validDays } = req.body;
+    const {
+      storeId,
+      title,
+      fromTo,
+      validDays,
+      offerType = "cart_discount",
+      discountScope = "entire_cart",
+      status = true,
+    } = req.body;
 
-    const image = `/${req.files.image?.[0].key}`;
+    if (!storeId) {
+      return res.status(400).json({ message: "Store ID is required" });
+    }
 
-    const sliderImage = `/${req.files.file?.[0].key}`;
+    const normalized = normalizeOfferFields({
+      ...req.body,
+      offerType,
+      discountScope,
+    });
 
-    const startDate = new Date(fromTo);
+    const startDate = parseOfferStartDate(fromTo);
+    if (!startDate) {
+      return res.status(400).json({ message: "Invalid from date" });
+    }
 
-    const expireDate = new Date(startDate);
-    expireDate.setDate(startDate.getDate() + Number(validDays));
+    const validDaysValue = toPositiveNumber(validDays, null);
+    if (!validDaysValue) {
+      return res.status(400).json({ message: "Valid days must be positive" });
+    }
+
+    const expireDate = buildOfferExpireDate(startDate, validDaysValue);
+
+    if (Number.isNaN(expireDate.getTime()) || expireDate <= new Date()) {
+      return res.status(400).json({ message: "Expiry must be in the future" });
+    }
+
+    if (normalized.offerType === "free_product") {
+      if (!normalized.minimumOrderAmount) {
+        return res
+          .status(400)
+          .json({ message: "Minimum order amount is required" });
+      }
+      if (!normalized.freeProductId) {
+        return res
+          .status(400)
+          .json({ message: "Free product selection is required" });
+      }
+      if (!normalized.freeProductQuantity) {
+        return res
+          .status(400)
+          .json({ message: "Free product quantity is required" });
+      }
+    } else {
+      if (
+        normalized.discountScope !== "selected_products" &&
+        !normalized.minimumOrderAmount
+      ) {
+        return res
+          .status(400)
+          .json({ message: "Minimum order amount is required" });
+      }
+
+      if (!normalized.offerValue) {
+        return res
+          .status(400)
+          .json({ message: "Discount percentage is required" });
+      }
+
+      if (
+        normalized.discountScope === "selected_products" &&
+        !normalized.productId.length
+      ) {
+        return res.status(400).json({
+          message: "Select at least one product for selected product offers",
+        });
+      }
+    }
+
+    const image = req.files?.image?.[0]?.key
+      ? `/${req.files.image[0].key}`
+      : undefined;
+    const sliderImage = req.files?.file?.[0]?.key
+      ? `/${req.files.file[0].key}`
+      : undefined;
+
+    const previewText = buildOfferPreviewText({
+      ...normalized,
+      title,
+      fromTo: startDate,
+      expireDate,
+      freeProductId: normalized.freeProductId,
+    });
 
     const newOffer = await sellerCoupon.create({
       storeId,
-      offer,
+      title: title?.trim() || previewText,
+      offerType: normalized.offerType,
+      discountScope: normalized.discountScope,
+      offer:
+        normalized.offerType === "free_product"
+          ? "0"
+          : String(normalized.offerValue || 0),
+      minimumOrderAmount:
+        normalized.offerType === "free_product"
+          ? normalized.minimumOrderAmount
+          : normalized.minimumOrderAmount || 0,
+      limit:
+        normalized.offerType === "free_product"
+          ? normalized.minimumOrderAmount
+          : normalized.minimumOrderAmount || 0,
+      productId:
+        normalized.discountScope === "selected_products"
+          ? normalized.productId
+          : [],
+      freeProductId:
+        normalized.offerType === "free_product"
+          ? normalized.freeProductId
+          : null,
+      freeProductQuantity:
+        normalized.offerType === "free_product"
+          ? normalized.freeProductQuantity
+          : 1,
       image,
       sliderImage,
-      title,
-      limit,
-      fromTo,
-      validDays,
+      fromTo: startDate,
+      validDays: Number(validDaysValue),
       expireDate,
+      status: status === false || status === "false" ? false : true,
+      approvalStatus: "pending",
     });
-    return res.status(200).json({ message: "New coupon created", newOffer });
+
+    return res
+      .status(200)
+      .json({ message: "New offer created", newOffer });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Server error" });
@@ -1238,18 +1461,22 @@ exports.getCoupons = async (req, res) => {
     const { storeId } = req.params;
     const coupons = await sellerCoupon
       .find({ storeId })
+      .populate([
+        { path: "productId", select: "productName productThumbnailUrl" },
+        { path: "freeProductId", select: "productName productThumbnailUrl" },
+      ])
       .sort({ createdAt: -1 });
-    return res.status(200).json({ message: "New coupon created", coupons });
+    return res.status(200).json({ message: "Offers fetched successfully", coupons });
   } catch (error) {
-    cosnole.error(error);
-    return res.status(200).json({ message: "Server error" });
+    console.error(error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
 exports.editSellerCoupon = async (req, res) => {
   try {
     const { couponId } = req.params;
-    const { title, offer, limit, fromTo, validDays, status } = req.body;
+    const { title, fromTo, validDays, status } = req.body;
 
     if (!couponId) {
       return res.status(400).json({ message: "Coupon ID is required" });
@@ -1262,36 +1489,89 @@ exports.editSellerCoupon = async (req, res) => {
 
     const updateData = {};
     let needsReApproval = false;
+    const normalized = normalizeOfferFields(req.body, existingCoupon);
 
     if (title !== undefined) {
-      updateData.title = title;
+      updateData.title = title?.trim() || existingCoupon.title;
       needsReApproval = true;
     }
 
-    if (offer !== undefined) {
-      if (Number(offer) <= 0 || Number(offer) > 100) {
-        return res.status(400).json({ message: "Offer must be 1–100%" });
+    if (req.body.offerType !== undefined) {
+      updateData.offerType = normalized.offerType;
+      needsReApproval = true;
+    }
+
+    if (req.body.discountScope !== undefined) {
+      updateData.discountScope = normalized.discountScope;
+      needsReApproval = true;
+    }
+
+    if (req.body.offer !== undefined) {
+      if (normalized.offerType !== "free_product") {
+        if (!normalized.offerValue || normalized.offerValue <= 0) {
+          return res.status(400).json({ message: "Discount percentage is required" });
+        }
+        updateData.offer = String(normalized.offerValue);
+      } else {
+        updateData.offer = "0";
       }
-      updateData.offer = Number(offer);
       needsReApproval = true;
     }
 
-    if (limit !== undefined) {
-      if (Number(limit) <= 0) {
+    if (req.body.offerType !== undefined && req.body.offer === undefined) {
+      if (normalized.offerType === "free_product") {
+        if (!normalized.minimumOrderAmount) {
+          return res
+            .status(400)
+            .json({ message: "Minimum order amount is required" });
+        }
+        if (!normalized.freeProductId) {
+          return res
+            .status(400)
+            .json({ message: "Free product selection is required" });
+        }
+        updateData.offer = "0";
+      } else if (!normalized.offerValue || normalized.offerValue <= 0) {
+        return res.status(400).json({ message: "Discount percentage is required" });
+      } else {
+        updateData.offer = String(normalized.offerValue);
+      }
+    }
+
+    if (req.body.minimumOrderAmount !== undefined || req.body.limit !== undefined) {
+      if (
+        normalized.offerType === "free_product" &&
+        !normalized.minimumOrderAmount
+      ) {
         return res
           .status(400)
-          .json({ message: "Limit must be greater than zero" });
+          .json({ message: "Minimum order amount is required" });
       }
-      updateData.limit = Number(limit);
+      updateData.minimumOrderAmount = Number(normalized.minimumOrderAmount || 0);
+      updateData.limit = Number(normalized.minimumOrderAmount || 0);
       needsReApproval = true;
+    }
+
+    if (
+      normalized.offerType === "cart_discount" &&
+      normalized.discountScope !== "selected_products" &&
+      !normalized.minimumOrderAmount &&
+      (req.body.offerType !== undefined ||
+        req.body.discountScope !== undefined ||
+        req.body.minimumOrderAmount !== undefined ||
+        req.body.limit !== undefined)
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Minimum order amount is required" });
     }
 
     let newFromDate = existingCoupon.fromTo;
     let newValidDays = existingCoupon.validDays;
 
     if (fromTo !== undefined) {
-      const parsed = new Date(fromTo);
-      if (isNaN(parsed.getTime())) {
+      const parsed = parseOfferStartDate(fromTo);
+      if (!parsed) {
         return res.status(400).json({ message: "Invalid from date" });
       }
       newFromDate = parsed;
@@ -1310,9 +1590,7 @@ exports.editSellerCoupon = async (req, res) => {
 
     // 🔥 recalc expiry exactly like create API
     if (fromTo !== undefined || validDays !== undefined) {
-      const newExpire = new Date(newFromDate);
-      newExpire.setDate(newExpire.getDate() + Number(newValidDays));
-      updateData.expireDate = newExpire;
+      updateData.expireDate = buildOfferExpireDate(newFromDate, newValidDays);
     }
 
     // status toggle doesn't trigger approval
@@ -1324,7 +1602,51 @@ exports.editSellerCoupon = async (req, res) => {
     }
 
     if (req.files?.image?.[0]) {
-      updateData.images = `/${req.files.image[0].key}`;
+      updateData.image = `/${req.files.image[0].key}`;
+      needsReApproval = true;
+    }
+
+    if (req.files?.file?.[0]) {
+      updateData.sliderImage = `/${req.files.file[0].key}`;
+      needsReApproval = true;
+    }
+
+    if (req.body.productId !== undefined) {
+      if (
+        normalized.discountScope === "selected_products" &&
+        !normalized.productId.length
+      ) {
+        return res.status(400).json({
+          message: "Select at least one product for selected product offers",
+        });
+      }
+
+      updateData.productId =
+        normalized.discountScope === "selected_products"
+          ? normalized.productId
+          : [];
+      needsReApproval = true;
+    }
+
+    if (req.body.freeProductId !== undefined) {
+      if (normalized.offerType === "free_product" && !normalized.freeProductId) {
+        return res.status(400).json({
+          message: "Free product selection is required",
+        });
+      }
+
+      updateData.freeProductId =
+        normalized.offerType === "free_product"
+          ? normalized.freeProductId
+          : null;
+      needsReApproval = true;
+    }
+
+    if (req.body.freeProductQuantity !== undefined) {
+      updateData.freeProductQuantity =
+        normalized.offerType === "free_product"
+          ? normalized.freeProductQuantity || 1
+          : 1;
       needsReApproval = true;
     }
 
@@ -1343,7 +1665,7 @@ exports.editSellerCoupon = async (req, res) => {
     );
 
     res.status(200).json({
-      message: "Coupon updated successfully",
+      message: "Offer updated successfully",
       coupon: updatedCoupon,
     });
   } catch (error) {
@@ -1358,7 +1680,7 @@ exports.deleteCoupon = async (req, res) => {
     await sellerCoupon.findByIdAndDelete(id);
     return res.status(200).json({
       success: true,
-      message: "Coupon deleted successfully",
+      message: "Offer deleted successfully",
     });
   } catch (error) {
     console.error("Edit Coupon Error:", error);

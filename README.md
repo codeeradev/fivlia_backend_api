@@ -204,3 +204,27 @@ exports.getBanner = async (req, res) => {
 
 https://automation.codeeratech.in/webhook/692bc3d3-5d86-4c8a-8770-334b5cd660e8
 EAAOJp6sTKowBRhxjZBsipBI7V6U8M4O9FK6Ge4cMGWRK0tGsnd3lJjbpLrIDElYZBewUI9WoOOghdIyDZAJu1Xw2qfEpOncdredpYvFJ5K0Ukzx3arFdM3dloPx0rRtu3DnIe21DZBK5bkA7PG5AXg1YoSZCX3NfUvgqLER0ureOR5fzeIEFqeNg01xEmJhhkQ0EHcJfE
+
+// 🔔 ADMIN FCM NOTIFICATION
+      const admin = await AdminStaff.findOne({
+        roleId: "6924308f010bf6509aecedf0",
+      });
+      console.log("noti block next");
+      if (admin?.fcmToken) {
+        console.log("noti block runned");
+        try {
+          await sendNotification(
+            admin.fcmToken,
+            "New Order Received 🛒",
+            `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+            "/orders",
+            {},
+            CUSTOM_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
+      }
