@@ -44,7 +44,7 @@ async function sendNotification(
     console.log("✅ Notification sent");
   } catch (err) {
     console.error("❌ Sending error:", err.response?.data || err.message);
-    throw err;
+    // throw err;
   }
 }
 

@@ -80,7 +80,11 @@ async function getActiveStoreOffer(storeId, now = new Date()) {
   return offers[0] || null;
 }
 
-async function getActiveProductOffer(storeId, now = new Date(), productIds = []) {
+async function getActiveProductOffer(
+  storeId,
+  now = new Date(),
+  productIds = [],
+) {
   const offers = await getActiveStoreOffers(storeId, now);
   const requestedProductIds = normalizeIdArray(productIds);
 
@@ -106,7 +110,10 @@ function resolveOfferPercent(offer, subtotal) {
   if (!offer) return 0;
 
   return Math.min(
-    Math.max(toNumber(offer.offer ?? offer.offerValue ?? offer.discountPercent), 0),
+    Math.max(
+      toNumber(offer.offer ?? offer.offerValue ?? offer.discountPercent),
+      0,
+    ),
     100,
   );
 }
@@ -160,18 +167,22 @@ function buildCartDiscountBreakdown(cartItems = [], offer = null) {
   let discountAmount = 0;
 
   const normalizedItems = cartItems.map((item) => {
-    const quantity = Math.max(toNumber(item.quantity, 1), 1);
-    const baseUnitPrice = toNumber(item.originalPrice ?? item.price);
+    const plainItem =
+      typeof item.toObject === "function" ? item.toObject() : item;
+
+    const quantity = Math.max(toNumber(plainItem.quantity, 1), 1);
+    const baseUnitPrice = toNumber(plainItem.originalPrice ?? plainItem.price);
     const lineTotal = baseUnitPrice * quantity;
-    subtotal += lineTotal;
 
     return {
-      ...item,
+      ...plainItem,
       quantity,
       baseUnitPrice,
       lineTotal,
     };
   });
+
+  subtotal = normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0);
 
   const eligibleProductIds = new Set(normalizeIdArray(offer?.productId));
   const minimumAmount = getOfferMinimumAmount(offer);
@@ -223,7 +234,12 @@ function buildEmptyCartDiscountBreakdown(cartItems = []) {
   return buildCartDiscountBreakdown(cartItems, null);
 }
 
-function isOfferEligibleForCart(offer, cartItems = [], subtotal = null, now = new Date()) {
+function isOfferEligibleForCart(
+  offer,
+  cartItems = [],
+  subtotal = null,
+  now = new Date(),
+) {
   if (!isOfferActive(offer, now)) {
     return { eligible: false, reason: "Offer is not active" };
   }
@@ -252,7 +268,10 @@ function isOfferEligibleForCart(offer, cartItems = [], subtotal = null, now = ne
     if (offer.discountScope === DISCOUNT_SCOPES.SELECTED_PRODUCTS) {
       const offerProductIds = normalizeIdArray(offer.productId);
       if (!offerProductIds.length) {
-        return { eligible: false, reason: "No selected products on this offer" };
+        return {
+          eligible: false,
+          reason: "No selected products on this offer",
+        };
       }
 
       const hasProduct = cartItems.some((item) =>
@@ -275,11 +294,17 @@ function isOfferEligibleForCart(offer, cartItems = [], subtotal = null, now = ne
   return { eligible: true, reason: null };
 }
 
-async function getAppliedOfferContext(cartItems = [], storeId, now = new Date()) {
+async function getAppliedOfferContext(
+  cartItems = [],
+  storeId,
+  now = new Date(),
+) {
   const subtotal = calculateCartSubtotal(cartItems);
   const emptyBreakdown = buildEmptyCartDiscountBreakdown(cartItems);
   const appliedOfferIds = [
-    ...new Set(cartItems.map((item) => toIdString(item.couponId)).filter(Boolean)),
+    ...new Set(
+      cartItems.map((item) => toIdString(item.couponId)).filter(Boolean),
+    ),
   ];
 
   if (!appliedOfferIds.length || !storeId) {
@@ -300,11 +325,13 @@ async function getAppliedOfferContext(cartItems = [], storeId, now = new Date())
 
   const activeOffers = offers.filter((offer) => isOfferActive(offer, now));
   const cartDiscountOffer =
-    activeOffers.find((offer) => offer.offerType === OFFER_TYPES.CART_DISCOUNT) ||
-    null;
+    activeOffers.find(
+      (offer) => offer.offerType === OFFER_TYPES.CART_DISCOUNT,
+    ) || null;
   const freeProductOffer =
-    activeOffers.find((offer) => offer.offerType === OFFER_TYPES.FREE_PRODUCT) ||
-    null;
+    activeOffers.find(
+      (offer) => offer.offerType === OFFER_TYPES.FREE_PRODUCT,
+    ) || null;
 
   const cartDiscount =
     cartDiscountOffer &&
@@ -345,26 +372,27 @@ async function resolveFreeProductItem({
   const product = await productsModel.findById(productId).lean();
   if (!product) return null;
 
-  const stockDoc = await stockModel.findOne({
-    storeId,
-    "stock.productId": product._id,
-  }).lean();
+  const stockDoc = await stockModel
+    .findOne({
+      storeId,
+      "stock.productId": product._id,
+    })
+    .lean();
 
   if (!stockDoc?.stock?.length) return null;
 
   const stockEntry = stockDoc.stock.find((entry) => {
     return (
       toIdString(entry.productId) === product._id.toString() &&
-      toNumber(entry.quantity) >= Math.max(toNumber(offer.freeProductQuantity, 1), 1)
+      toNumber(entry.quantity) >=
+        Math.max(toNumber(offer.freeProductQuantity, 1), 1)
     );
   });
 
   if (!stockEntry) return null;
 
   const productVariantId =
-    stockEntry.variantId ||
-    product.variants?.[0]?._id ||
-    null;
+    stockEntry.variantId || product.variants?.[0]?._id || null;
 
   if (!productVariantId) return null;
 
@@ -404,8 +432,7 @@ function applyStoreOfferToPrice(price, offer) {
     return Math.round(numericPrice);
   }
 
-  const discountedPrice =
-    numericPrice - (numericPrice * numericOffer) / 100;
+  const discountedPrice = numericPrice - (numericPrice * numericOffer) / 100;
 
   return Math.max(Math.round(discountedPrice), 0);
 }

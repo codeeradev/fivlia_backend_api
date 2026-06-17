@@ -422,8 +422,11 @@ exports.placeOrder = async (req, res) => {
 
     const orderItems = [];
 
+    console.log(offerContext, "offerContext");
     for (const item of offerContext.cartDiscount.items) {
-      const product = await Products.findById(item.productId)
+      const productId = item.productId || item._doc?.productId;
+
+      const product = await Products.findById(productId)
         .select("tax category")
         .lean();
       if (!product) {
