@@ -962,15 +962,15 @@ exports.verifyOtpSeller = async (req, res) => {
       try {
         await sendNotification(
           admin.fcmToken,
-          "New Order Received 🛒",
-          `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+          "Seller Request Received",
+          `Seller request for registration received.`,
           "/orders",
           {},
           CUSTOM_PUSH_SOUND,
         );
       } catch (err) {
         console.warn(
-          "⚠️ User notification failed order status change:",
+          "⚠️ admin notification for seller request failed:",
           err.response?.data?.error?.message || err.message,
         );
       }

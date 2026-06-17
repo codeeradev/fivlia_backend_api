@@ -1783,7 +1783,7 @@ exports.driver = async (req, res) => {
       },
     });
 
-    if (status === "pending_admin_approval") {
+    if (drivingLicenseNumber || vehicleRegistrationNumber) {
       // 🔔 ADMIN FCM NOTIFICATION
       const admin = await AdminStaff.findOne({
         roleId: "6924308f010bf6509aecedf0",
@@ -1802,7 +1802,7 @@ exports.driver = async (req, res) => {
           );
         } catch (err) {
           console.warn(
-            "⚠️ User notification failed order status change:",
+            "⚠️ admin notification failed driver request:",
             err.response?.data?.error?.message || err.message,
           );
         }
@@ -2230,15 +2230,15 @@ exports.bulkOrder = async (req, res) => {
       try {
         await sendNotification(
           admin.fcmToken,
-          "New Order Received 🛒",
-          `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
+          "Bulk Order request received",
+          `Bulk Order request received.`,
           "/orders",
           {},
           CUSTOM_PUSH_SOUND,
         );
       } catch (err) {
         console.warn(
-          "⚠️ User notification failed order status change:",
+          "⚠️ admin notification for bulk order failed:",
           err.response?.data?.error?.message || err.message,
         );
       }
