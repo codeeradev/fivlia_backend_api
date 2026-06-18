@@ -796,6 +796,7 @@ exports.applyCoupon = async (req, res) => {
     const { removeOffer } = req.query;
     const { cartIds, couponId, userId } = req.body;
 
+    console.log(req.body, "applyCoupon request body");
     if (!userId && (!Array.isArray(cartIds) || cartIds.length === 0)) {
       return res.status(400).json({ message: "userId or cartIds array required" });
     }
