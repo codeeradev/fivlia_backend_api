@@ -49,7 +49,7 @@ exports.settings = async (req, res) => {
             data: aboutUs.pageContent,
           }
         : null,
-
+      freeDeliveryLimit: settings.freeDeliveryLimit || 5000,
       privacy_Policy: privacyPolicy
         ? {
             title: privacyPolicy.pageSlug,
