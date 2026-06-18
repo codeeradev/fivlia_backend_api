@@ -1,230 +1,112 @@
-exports.getBanner = async (req, res) => {
-  const totalStart = Date.now();
+Replace the current coupon system with a simple Offer System similar to Zomato/Swiggy. Do not over-engineer it. Reuse as much of the existing coupon code, APIs, database structure, and UI components as possible.
 
-  try {
-    const { type } = req.query;
-    const userId = req.user;
+## Offer Types
 
-    console.time("1. User Query");
-    const user = await User.findById(userId).lean();
-    console.timeEnd("1. User Query");
+### 1. Free Product Offer
 
-    if (!user || !user.location?.latitude || !user.location?.longitude) {
-      return res.status(400).json({ message: "User location not found" });
-    }
+If cart/order value reaches a minimum amount, automatically add a free product.
 
-    const userLat = user.location.latitude;
-    const userLng = user.location.longitude;
+Example:
 
-    console.time("4. Active Zones");
-    const zoneDocs = await ZoneData.find({ status: true }, "zones").lean();
-    console.timeEnd("4. Active Zones");
+* Order ₹500+ → Get 1 Coke free
 
-    console.time("5. Zone Processing");
-    const activeZoneIds = [];
-    zoneDocs.forEach((doc) => {
-      (doc.zones || []).forEach((zone) => {
-        if (zone.status && zone._id) {
-          activeZoneIds.push(zone._id.toString());
-        }
-      });
-    });
-    console.timeEnd("5. Zone Processing");
+Seller config:
 
-    console.time("6. Brand Query");
-    const brandIds = req.typeId
-      ? (
-          await brand.find({ typeId: req.typeId })
-            .select("_id")
-            .lean()
-        ).map((b) => b._id)
-      : [];
-    console.timeEnd("6. Brand Query");
+* Minimum order amount
+* Free product selection
+* Free product quantity
 
-    console.time("7. Category ObjectIds");
-    const categoryObjectIds = (req.categoryIds || []).map(
-      (id) => new mongoose.Types.ObjectId(id)
-    );
+### 2. Cart Value Discount Offer
 
-    const allCategoryObjectIds = (
-      req.allCategoryIds ||
-      req.categoryIds ||
-      []
-    ).map((id) => new mongoose.Types.ObjectId(id));
-    console.timeEnd("7. Category ObjectIds");
+Discount is applied when cart reaches a minimum amount.
 
-    console.time("8. Banner Scope");
-    const bannerScope = [];
+Support:
 
-    if (req.typeId) {
-      bannerScope.push(
-        {
-          type2: {
-            $in: ["Category", "SubCategory", "Sub Sub-Category"],
-          },
-          $or: [
-            { "mainCategory._id": { $in: categoryObjectIds } },
-            { "subCategory._id": { $in: allCategoryObjectIds } },
-            { "subSubCategory._id": { $in: allCategoryObjectIds } },
-          ],
-        },
-        {
-          type2: "Brand",
-          "brand._id": { $in: brandIds },
-        },
-        {
-          type2: "Store",
-        },
-        {
-          type2: "NO",
-        }
-      );
-    }
-    console.timeEnd("8. Banner Scope");
+* Flat discount percentage
+* Tiered discounts
 
-    console.time("9. Banner Query");
-    const allBanners = await Banner.find({
-      status: { $ne: false },
-      ...(req.typeId && {
-        typeId: new mongoose.Types.ObjectId(req.typeId),
-      }),
-      ...(type && { type }),
-      ...(bannerScope.length && { $or: bannerScope }),
-    })
-      .sort({ createdAt: -1 })
-      .lean();
-    console.timeEnd("9. Banner Query");
+Examples:
 
-    console.log("Banner Count:", allBanners.length);
+* ₹500+ → 10% off
+* ₹1000+ → 20% off
 
-    console.time("10. Banner Radius Filter");
-    const matchedBanners = await getBannersWithinRadius(
-      userLat,
-      userLng,
-      allBanners
-    );
-    console.timeEnd("10. Banner Radius Filter");
+Tiered Example:
 
-    let finalBanners = [...matchedBanners];
+* ₹300+ → 5% off
+* ₹500+ → 10% off
+* ₹1000+ → 20% off
 
-    const now = new Date();
+Discount should support:
 
-    console.time("11. Stores Radius");
-    const storeResult = await getStoresWithinRadius(
-      userLat,
-      userLng
-    );
-    console.timeEnd("11. Stores Radius");
+* Entire cart
+* Selected products only
 
-    if (storeResult?.matchedStores?.length) {
-      const nearbyStoreIds = storeResult.matchedStores.map(
-        (s) => s._id
-      );
+For selected products, seller can choose one or more products from their catalog and discount will apply only to those products.
 
-      console.log(
-        "Nearby Stores:",
-        nearbyStoreIds.length
-      );
+## Seller Panel
 
-      console.time("12. Coupon Aggregate");
-      const sellerCoupons = await Coupon.aggregate([
-        {
-          $match: {
-            storeId: { $in: nearbyStoreIds },
-            status: true,
-            approvalStatus: "approved",
-            fromTo: { $lte: now },
-            expireDate: { $gte: now },
-          },
-        },
-        { $sort: { createdAt: -1 } },
-        {
-          $group: {
-            _id: "$storeId",
-            coupon: { $first: "$$ROOT" },
-          },
-        },
-        {
-          $replaceRoot: {
-            newRoot: "$coupon",
-          },
-        },
-      ]);
-      console.timeEnd("12. Coupon Aggregate");
+Replace "Coupons" with "Offers".
 
-      console.log(
-        "Seller Coupons:",
-        sellerCoupons.length
-      );
+Create a clean, modern, mobile-friendly UI.
 
-      console.time("13. Coupon Mapping");
-      const sellerOfferBanners = sellerCoupons.map((c) => ({
-        _id: c._id,
-        image: c.image,
-        title: c.title,
-        storeId: c.storeId,
-        offer: Number(c.offer),
-        type: "offer",
-        type2: "Store",
-        source: "seller",
-        createdAt: c.createdAt,
-      }));
-      console.timeEnd("13. Coupon Mapping");
+Offer creation should be simple:
 
-      console.time("14. Admin Banner Mapping");
-      finalBanners = finalBanners.map((b) => ({
-        ...b,
-        source: "admin",
-      }));
-      console.timeEnd("14. Admin Banner Mapping");
+Step 1:
 
-      console.time("15. Final Merge");
-      finalBanners = [
-        ...sellerOfferBanners,
-        ...finalBanners,
-      ];
-      console.timeEnd("15. Final Merge");
-    }
+* Select Offer Type
 
-    console.log(
-      `🚀 TOTAL API TIME: ${Date.now() - totalStart}ms`
-    );
+  * Free Product Offer
+  * Cart Discount Offer
 
-    return res.status(200).json({
-      message: "Banners fetched successfully.",
-      count: finalBanners.length,
-      data: finalBanners,
-    });
-  } catch (error) {
-    console.error(error);
-  }
-};
+Step 2:
 
+* Configure offer details based on selected type
 
+Show a live preview card:
 
-https://automation.codeeratech.in/webhook/692bc3d3-5d86-4c8a-8770-334b5cd660e8
-EAAOJp6sTKowBRhxjZBsipBI7V6U8M4O9FK6Ge4cMGWRK0tGsnd3lJjbpLrIDElYZBewUI9WoOOghdIyDZAJu1Xw2qfEpOncdredpYvFJ5K0Ukzx3arFdM3dloPx0rRtu3DnIe21DZBK5bkA7PG5AXg1YoSZCX3NfUvgqLER0ureOR5fzeIEFqeNg01xEmJhhkQ0EHcJfE
+* "Spend ₹500 and get 1 Coke free"
+* "Get 10% off above ₹500"
+* "Get up to 20% off on selected products"
 
-// 🔔 ADMIN FCM NOTIFICATION
-      const admin = await AdminStaff.findOne({
-        roleId: "6924308f010bf6509aecedf0",
-      });
-      console.log("noti block next");
-      if (admin?.fcmToken) {
-        console.log("noti block runned");
-        try {
-          await sendNotification(
-            admin.fcmToken,
-            "New Order Received 🛒",
-            `Order #${newOrder.orderId} worth ₹${newOrder.totalPrice} placed.`,
-            "/orders",
-            {},
-            CUSTOM_PUSH_SOUND,
-          );
-        } catch (err) {
-          console.warn(
-            "⚠️ User notification failed order status change:",
-            err.response?.data?.error?.message || err.message,
-          );
-        }
-      }
+## Seller Guidance
+
+Add a language toggle:
+
+* हिन्दी (Default)
+* English
+
+Each field should have a short explanation/help text.
+
+Hindi Example:
+"ग्राहक ₹500 या उससे अधिक का ऑर्डर करेगा तो चुना गया मुफ्त उत्पाद अपने आप जुड़ जाएगा।"
+
+English Example:
+"When the customer places an order of ₹500 or more, the selected free product will be automatically added."
+
+Keep explanations short and easy to understand.
+
+## Customer Side
+
+Offers should automatically apply when conditions are met.
+
+Customers should clearly see:
+
+* Offer name
+* Discount amount
+* Free product received
+* Savings
+
+No coupon codes required.
+
+## Important
+
+Keep the implementation simple and maintainable.
+
+Avoid creating unnecessary offer types, complex rule engines, or excessive abstractions.
+
+The system should focus only on:
+
+1. Free Product Offers
+2. Cart Value Discount Offers
+
+while keeping the codebase clean and easy to extend later if needed.

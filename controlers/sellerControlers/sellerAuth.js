@@ -775,6 +775,7 @@ exports.verifyOtpSeller = async (req, res) => {
         storeName: store.storeName,
         sellFood: store.sellFood,
         businessType: store.businessType,
+        typeId: store.typeId,
         token: jwttoken,
         activeDevices:
           store.devices?.map((d) => ({
@@ -898,6 +899,7 @@ exports.verifyOtpSeller = async (req, res) => {
         storeName: sellerDoc.storeName,
         sellFood: sellerDoc.sellFood,
         businessType: sellerDoc.businessType,
+        typeId: sellerDoc.typeId,
         token: jwttoken,
         activeDevices: sellerDoc.devices.map((d) => ({
           deviceId: d.deviceId,
