@@ -396,7 +396,9 @@ exports.getCart = async (req, res) => {
           ? {
               _id: offerContext.cartDiscount.offer._id,
               title: offerContext.cartDiscount.offer.title,
-              previewText: buildOfferPreviewText(offerContext.cartDiscount.offer),
+              previewText: buildOfferPreviewText(
+                offerContext.cartDiscount.offer,
+              ),
               offerType: offerContext.cartDiscount.offer.offerType,
               discountScope: offerContext.cartDiscount.offer.discountScope,
               percent: offerContext.cartDiscount.percent,
@@ -678,7 +680,9 @@ exports.getOffers = async (req, res) => {
     const { cartIds, userId } = req.body;
 
     if (!userId && (!Array.isArray(cartIds) || cartIds.length === 0)) {
-      return res.status(400).json({ message: "userId or cartIds array required" });
+      return res
+        .status(400)
+        .json({ message: "userId or cartIds array required" });
     }
 
     const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
@@ -717,7 +721,9 @@ exports.getOffers = async (req, res) => {
         isApplicable: eligibility.eligible,
         ineligibilityReason: eligibility.reason,
         isApplied: appliedOfferId === offer._id.toString(),
-        estimatedSavings: eligibility.eligible ? breakdown?.discountAmount || 0 : 0,
+        estimatedSavings: eligibility.eligible
+          ? breakdown?.discountAmount || 0
+          : 0,
         finalSubtotal:
           eligibility.eligible && breakdown
             ? breakdown.finalSubtotal
@@ -755,7 +761,9 @@ exports.getOffers = async (req, res) => {
         }
 
         if (!offerMap[cartProductId]) offerMap[cartProductId] = [];
-        offerMap[cartProductId].push(serializedOfferById.get(offer._id.toString()));
+        offerMap[cartProductId].push(
+          serializedOfferById.get(offer._id.toString()),
+        );
       });
     });
 
@@ -798,7 +806,9 @@ exports.applyCoupon = async (req, res) => {
 
     console.log(req.body, "applyCoupon request body");
     if (!userId && (!Array.isArray(cartIds) || cartIds.length === 0)) {
-      return res.status(400).json({ message: "userId or cartIds array required" });
+      return res
+        .status(400)
+        .json({ message: "userId or cartIds array required" });
     }
 
     const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
@@ -819,6 +829,15 @@ exports.applyCoupon = async (req, res) => {
         await cart.save();
       }
 
+      const couponIds = carts.map((c) => c.couponId).filter(Boolean);
+
+      await Cart.deleteMany({
+        userId: carts[0].userId,
+        storeId: carts[0].storeId,
+        couponId: { $in: couponIds },
+        isFreeProduct: true,
+      });
+
       return res.status(200).json({
         message: "Offers removed successfully",
         carts,
@@ -837,22 +856,66 @@ exports.applyCoupon = async (req, res) => {
     }
 
     if (coupon.storeId?.toString() !== carts[0].storeId?.toString()) {
-      return res.status(400).json({ message: "Offer does not belong to this cart store" });
+      return res
+        .status(400)
+        .json({ message: "Offer does not belong to this cart store" });
     }
 
     const subtotal = calculateCartSubtotal(carts);
     const eligibility = isOfferEligibleForCart(coupon, carts, subtotal, now);
     if (!eligibility.eligible) {
-      return res.status(400).json({ message: eligibility.reason || "Offer is not applicable" });
+      return res
+        .status(400)
+        .json({ message: eligibility.reason || "Offer is not applicable" });
     }
 
     const freeProductItem =
       coupon.offerType === "free_product"
-        ? await resolveFreeProductItem({ offer: coupon, storeId: carts[0].storeId })
+        ? await resolveFreeProductItem({
+            offer: coupon,
+            storeId: carts[0].storeId,
+          })
         : null;
 
     if (coupon.offerType === "free_product" && !freeProductItem) {
-      return res.status(400).json({ message: "Free product is not available in stock" });
+      return res
+        .status(400)
+        .json({ message: "Free product is not available in stock" });
+    }
+
+    if (coupon.offerType === "free_product" && freeProductItem) {
+      const existingFreeItem = await Cart.findOne({
+        userId: carts[0].userId,
+        storeId: carts[0].storeId,
+        couponId: coupon._id,
+        isFreeProduct: true,
+        productId: freeProductItem.productId,
+        varientId: freeProductItem.varientId,
+      });
+
+      if (!existingFreeItem) {
+        await Cart.create({
+          image: freeProductItem.image,
+          price: 0,
+          mrp: freeProductItem.mrp,
+          tax: freeProductItem.tax,
+          name: freeProductItem.name,
+          quantity: freeProductItem.quantity,
+          productId: freeProductItem.productId,
+          storeId: carts[0].storeId,
+          varientId: freeProductItem.varientId,
+          userId: carts[0].userId,
+          paymentOption: false,
+          isFreeProduct: true,
+
+          couponId: coupon._id,
+          isCouponApplied: true,
+
+          originalPrice: freeProductItem.basePrice,
+          discountAmount: freeProductItem.basePrice * freeProductItem.quantity,
+          finalPrice: 0,
+        });
+      }
     }
 
     const breakdown =
