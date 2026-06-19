@@ -823,7 +823,7 @@ exports.addFoodToSeller = async (req, res) => {
 
     const seller = await Seller.findOne({
       _id: sellerId,
-      $or: [{ sellFood: true }, { businessType: "FSSAI" }],
+      typeId: "69cf8a31ad92aee54ecb1e72",
       status: true,
       Authorized_Store: false,
     });
