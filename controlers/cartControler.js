@@ -829,12 +829,11 @@ exports.applyCoupon = async (req, res) => {
         await cart.save();
       }
 
-      const couponIds = carts.map((c) => c.couponId).filter(Boolean);
-
       await Cart.deleteMany({
         userId: carts[0].userId,
-        storeId: carts[0].storeId,
-        couponId: { $in: couponIds },
+        _id: {
+          $in: carts.map((c) => c._id),
+        },
         isFreeProduct: true,
       });
 
