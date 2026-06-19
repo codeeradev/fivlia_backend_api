@@ -596,8 +596,7 @@ exports.getExistingProductList = async (req, res) => {
           .json({ success: false, message: "Seller not found" });
       }
 
-      const isFoodSeller =
-        store.sellFood === true || store.businessType === "FSSAI";
+      const isFoodSeller = store.typeId === "69cf8a31ad92aee54ecb1e72";
       const sellerFoodTypes = (store.foodTypes || []).map((id) =>
         id.toString(),
       );
@@ -610,7 +609,10 @@ exports.getExistingProductList = async (req, res) => {
         }
 
         matchConditions.push({
-          isVeg: { $in: [1, 2] },
+          $or: [
+            { typeId: "69cf8a31ad92aee54ecb1e72" }, // first check new food type
+            { isVeg: { $in: [1, 2] } }, // fallback legacy food products
+          ],
         });
       } else {
         matchConditions.push({
