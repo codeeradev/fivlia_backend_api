@@ -182,7 +182,11 @@ function buildCartDiscountBreakdown(cartItems = [], offer = null) {
     };
   });
 
-  subtotal = normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  subtotal = normalizedItems.reduce((sum, item) => {
+    if (item.isFreeProduct) return sum;
+
+    return sum + item.lineTotal;
+  }, 0);
 
   const eligibleProductIds = new Set(normalizeIdArray(offer?.productId));
   const minimumAmount = getOfferMinimumAmount(offer);
