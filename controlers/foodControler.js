@@ -311,51 +311,55 @@ exports.getFoodSeller = async (req, res) => {
     // =========================================================
     // FINAL FOODS
     // =========================================================
-    const finalFoods = foods.map((food) => {
-      const matchedSellers = sellers
-        .filter((seller) =>
-          seller.foodTypes?.some((id) => id.toString() === food._id.toString()),
-        )
-        .map((store) => {
-          const stats = ratingsByStore[store._id.toString()] || {
-            total: 0,
-            count: 0,
-          };
+    const finalFoods = foods
+      .map((food) => {
+        const matchedSellers = sellers
+          .filter((seller) =>
+            seller.foodTypes?.some(
+              (id) => id.toString() === food._id.toString(),
+            ),
+          )
+          .map((store) => {
+            const stats = ratingsByStore[store._id.toString()] || {
+              total: 0,
+              count: 0,
+            };
 
-          const avg = stats.count ? stats.total / stats.count : 0;
+            const avg = stats.count ? stats.total / stats.count : 0;
 
-          return {
-            storeId: store._id,
-            storeName: store.storeName,
-            distance: storeDistanceMap[store._id.toString()] || null,
+            return {
+              storeId: store._id,
+              storeName: store.storeName,
+              distance: storeDistanceMap[store._id.toString()] || null,
 
-            topProductOffer: offerMap[store._id.toString()]
-              ? `${offerMap[store._id.toString()]}`
-              : null,
+              topProductOffer: offerMap[store._id.toString()]
+                ? `${offerMap[store._id.toString()]}`
+                : null,
 
-            totalItems: itemCountMap[store._id.toString()] || 0,
+              totalItems: itemCountMap[store._id.toString()] || 0,
 
-            image: store.image,
-            referralCode: store.referralCode,
-            advertisementImages: store.advertisementImages,
-            sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
-            sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
-            isVeg: store.isVeg,
-            fullAddress: store.fullAddress,
-            deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
-            averageRating: avg.toFixed(1),
-            ratingCount: stats.count,
-          };
-        })
-        .sort((a, b) => {
-          return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
-        });
+              image: store.image,
+              referralCode: store.referralCode,
+              advertisementImages: store.advertisementImages,
+              sellerFreeDeliveryEnabled: store.sellerFreeDeliveryEnabled,
+              sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
+              isVeg: store.isVeg,
+              fullAddress: store.fullAddress,
+              deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+              averageRating: avg.toFixed(1),
+              ratingCount: stats.count,
+            };
+          })
+          .sort((a, b) => {
+            return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
+          });
 
-      return {
-        ...food,
-        sellers: matchedSellers,
-      };
-    });
+        return {
+          ...food,
+          sellers: matchedSellers,
+        };
+      })
+      .filter((food) => food.sellers.length > 0);
 
     // =========================================================
     // ALL SELLERS
