@@ -496,116 +496,14 @@ exports.quantity = async (req, res) => {
 exports.deleteCart = async (req, res) => {
   try {
     const { id } = req.params;
+    const cart = await Cart.findByIdAndDelete(id);
 
-    const cart = await Cart.findById(id);
-
-    if (!cart) {
-      return res.status(404).json({ message: "Cart item not found" });
-    }
-
-    const couponId = cart.couponId;
-    const userId = cart.userId;
-    const storeId = cart.storeId;
-
-    await Cart.findByIdAndDelete(id);
-
-    if (cart.isFreeProduct) {
-      await Cart.updateMany(
-        {
-          userId: cart.userId,
-          storeId: cart.storeId,
-          couponId: cart.couponId,
-        },
-        {
-          $unset: {
-            couponId: 1,
-            originalPrice: 1,
-          },
-          $set: {
-            isCouponApplied: false,
-            discountAmount: 0,
-          },
-        },
-      );
-      return res.status(200).json({
-        message: "Cart Item Removed",
-      });
-    }
-    // If coupon applied, check remaining eligible items
-    if (couponId) {
-      const remainingItems = await Cart.find({
-        userId,
-        storeId,
-        isFreeProduct: false,
-      });
-
-      // No paid items left -> remove free products
-      if (remainingItems.length === 0) {
-        await Cart.deleteMany({
-          userId,
-          storeId,
-          couponId,
-          isFreeProduct: true,
-        });
-      } else {
-        const coupon = await Coupon.findById(couponId);
-
-        if (!coupon) {
-          await Cart.deleteMany({
-            userId,
-            storeId,
-            couponId,
-            isFreeProduct: true,
-          });
-        } else {
-          const subtotal = calculateCartSubtotal(remainingItems);
-
-          const eligibility = isOfferEligibleForCart(
-            coupon,
-            remainingItems,
-            subtotal,
-            new Date(),
-          );
-
-          if (!eligibility.eligible) {
-            await Cart.deleteMany({
-              userId,
-              storeId,
-              couponId,
-              isFreeProduct: true,
-            });
-
-            await Cart.updateMany(
-              {
-                userId,
-                storeId,
-                couponId,
-              },
-              {
-                $unset: {
-                  couponId: 1,
-                  originalPrice: 1,
-                },
-                $set: {
-                  isCouponApplied: false,
-                  discountAmount: 0,
-                },
-              },
-            );
-          }
-        }
-      }
-    }
-
-    return res.status(200).json({
-      message: "Cart Item Removed",
-    });
+    return res.status(200).json({ message: "Cart Item Removed:", cart });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({
-      message: "An error occured!",
-      error: error.message,
-    });
+    return res
+      .status(500)
+      .json({ message: "An error occured!", error: error.message });
   }
 };
 
