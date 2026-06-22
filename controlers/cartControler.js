@@ -605,7 +605,7 @@ exports.recommedProduct = async (req, res) => {
               $match: {
                 $expr: {
                   $and: [
-                    { $gt: ["$stock.quantity", 0] }, // only include stock > 0
+                    // { $gt: ["$stock.quantity", 0] }, // only include stock > 0
                     {
                       $or: [
                         {
@@ -652,7 +652,7 @@ exports.recommedProduct = async (req, res) => {
           storeName: seller.storeName,
         },
       },
-      { $match: { maxQuantity: { $gt: 0 } } }, // filter products with no stock
+      // { $match: { maxQuantity: { $gt: 0 } } }, // filter products with no stock
       { $sort: { maxQuantity: -1 } },
       { $limit: 20 },
       { $project: { maxQuantity: 0 } }, // remove temporary field
