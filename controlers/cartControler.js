@@ -278,8 +278,8 @@ exports.getCart = async (req, res) => {
     const offerContext = await getOfferContext(updatedItems, storeId, now);
     const offerItems = offerContext.cartDiscount.items.map((item) => ({
       ...item,
-      price: item.baseUnitPrice,
-      finalPrice: item.finalUnitPrice,
+      price: item.isFreeProduct ? 0 : item.baseUnitPrice,
+      finalPrice: item.isFreeProduct ? 0 : item.finalUnitPrice,
       discountAmount: item.lineDiscount,
       savings: item.lineDiscount,
     }));
