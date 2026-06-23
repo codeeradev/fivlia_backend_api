@@ -231,6 +231,8 @@ exports.placeOrder = async (req, res) => {
         .json({ message: `Cart item with ID ${cartIds} not found.` });
     }
 
+    const userId = cartItems[0].userId;
+
     for (const item of cartItems) {
       const hasStock = await stock.exists({
         storeId: storeId,
@@ -348,6 +350,11 @@ exports.placeOrder = async (req, res) => {
     );
     console.log(`${storeExistsInZone} storeExistsInZone`);
     if (!storeExistsInZone) {
+      await Cart.deleteMany({
+        userId,
+        storeId,
+      });
+
       return res.status(400).json({
         message: "This store does not deliver to your address location.",
       });
@@ -428,7 +435,6 @@ exports.placeOrder = async (req, res) => {
 
     const totalPrice = itemsTotal + deliveryChargeRaw + platformFeeAmount;
 
-    const userId = cartItems[0].userId;
     const cashOnDelivery = paymentMode === true;
 
     const orderItems = [];
@@ -556,7 +562,9 @@ exports.placeOrder = async (req, res) => {
           { _id: item.productId },
           { $inc: { purchases: item.quantity } },
         );
-        console.log(`${nextOrderId} stock deducted for cart item ${item.productId}`);
+        console.log(
+          `${nextOrderId} stock deducted for cart item ${item.productId}`,
+        );
       }
 
       if (offerContext.freeProductItem) {
