@@ -338,9 +338,10 @@ exports.getSellerRequest = async (req, res) => {
       }),
       sellerCoupon.find({ approvalStatus: "pending" }).sort({
         createdAt: -1,
-      }),
+      }).populate("storeId", "storeName"),
     ]);
 
+    console.log("Seller Requests:", sellerOfferRequest);
     return res.status(200).json({
       message: "Seller Approval Requests",
       requests,

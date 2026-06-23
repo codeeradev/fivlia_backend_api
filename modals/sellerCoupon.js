@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const couponSchema = new mongoose.Schema(
   {
-    storeId: { type: mongoose.Schema.ObjectId, ref: "stores" },
+    storeId: { type: mongoose.Schema.ObjectId, ref: "Store" },
     image: String,
     sliderImage: String,
     offerType: {
