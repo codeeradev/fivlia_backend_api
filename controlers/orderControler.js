@@ -350,13 +350,11 @@ exports.placeOrder = async (req, res) => {
     );
     console.log(`${storeExistsInZone} storeExistsInZone`);
     if (!storeExistsInZone) {
-
-      console.log("This store does not deliver to your address location.", userId, storeId);
-     const card = await Cart.deleteMany({
+      await Cart.deleteMany({
         userId,
         storeId,
       });
-console.log("card", card);
+
       return res.status(400).json({
         message: "This store does not deliver to your address location.",
       });
