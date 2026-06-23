@@ -5,6 +5,8 @@ const axios = require("axios");
 const Product = require("../../modals/Product");
 const Category = require("../../modals/category");
 const Stock = require("../../modals/StoreStock");
+const foodTypeModel = require("../../modals/foodType");
+const { SettingAdmin } = require("../../modals/setting");
 
 exports.addCategoryInSeller = async (req, res) => {
   try {
@@ -367,6 +369,10 @@ exports.getSellerProducts = async (req, res) => {
     const stockData = await Stock.findOne({ storeId: sellerId }).lean();
     const stockEntries = stockData?.stock || [];
 
+    const settings = await SettingAdmin.findOne().lean();
+
+    const foodSellerTaxPercent = Number(settings?.foodSellerTaxPercent || 0);
+
     const productIds = stockEntries
       .map((s) => s.productId)
       .filter(Boolean)
@@ -396,7 +402,7 @@ exports.getSellerProducts = async (req, res) => {
       .skip(skip)
       .limit(numericLimit)
       .select(
-        "productName mrp sku sell_price productThumbnailUrl category subCategory subSubCategory variants isVeg",
+        "productName mrp sku sell_price productThumbnailUrl category subCategory subSubCategory variants isVeg typeId foodTypeId",
       )
       .lean();
 
@@ -417,6 +423,26 @@ exports.getSellerProducts = async (req, res) => {
       categoryMap[cat._id.toString()] = cat;
     });
 
+    const FOOD_TYPE_ID = "69cf8a31ad92aee54ecb1e72";
+
+    const foodTypeIds = [
+      ...new Set(
+        sellerProducts
+          .filter((p) => p.typeId?.toString() === FOOD_TYPE_ID && p.foodTypeId)
+          .map((p) => p.foodTypeId.toString()),
+      ),
+    ];
+
+    const foodTypes = await foodTypeModel.find({
+      _id: { $in: foodTypeIds },
+    }).lean();
+
+    const foodTypeMap = {};
+
+    foodTypes.forEach((foodType) => {
+      foodTypeMap[foodType._id.toString()] = foodType;
+    });
+
     const products = await Promise.all(
       sellerProducts.map(async (prod) => {
         const productIdStr = prod._id.toString();
@@ -426,26 +452,40 @@ exports.getSellerProducts = async (req, res) => {
         const categoryId = prod.category?.[0]?._id?.toString();
 
         let commission = 0;
+        let foodTax = 0;
         let categoryName = "Uncategorized";
 
-        const fullCategory = categoryMap[categoryId];
+        const isFoodProduct = prod.typeId?.toString() === FOOD_TYPE_ID;
 
-        if (fullCategory) {
-          categoryName = fullCategory.name ?? "Uncategorized";
+        if (isFoodProduct) {
+          const foodType = foodTypeMap[prod.foodTypeId?.toString()];
 
-          if (fullCategory.subcat && (subSubCategoryId || subCategoryId)) {
-            const matchedSubcat = fullCategory.subcat.find(
-              (sub) => sub._id.toString() === subCategoryId,
-            );
+          commission = Number(foodType?.commission || 0);
 
-            if (matchedSubcat?.subsubcat?.length) {
-              const matchedSubSubCat = matchedSubcat.subsubcat.find(
-                (ss) => ss._id.toString() === subSubCategoryId,
+          foodTax = foodSellerTaxPercent;
+
+          categoryName = foodType?.name || "Food";
+        } else {
+          const fullCategory = categoryMap[categoryId];
+
+          if (fullCategory) {
+            categoryName = fullCategory.name ?? "Uncategorized";
+
+            if (fullCategory.subcat && (subSubCategoryId || subCategoryId)) {
+              const matchedSubcat = fullCategory.subcat.find(
+                (sub) => sub._id.toString() === subCategoryId,
               );
-              commission =
-                matchedSubSubCat?.commison ?? matchedSubcat?.commison ?? 0;
-            } else {
-              commission = matchedSubcat?.commison ?? 0;
+
+              if (matchedSubcat?.subsubcat?.length) {
+                const matchedSubSubCat = matchedSubcat.subsubcat.find(
+                  (ss) => ss._id.toString() === subSubCategoryId,
+                );
+
+                commission =
+                  matchedSubSubCat?.commison ?? matchedSubcat?.commison ?? 0;
+              } else {
+                commission = matchedSubcat?.commison ?? 0;
+              }
             }
           }
         }
@@ -484,6 +524,8 @@ exports.getSellerProducts = async (req, res) => {
           variants: variantsWithStock,
           status: firstStockEntry?.status ?? false,
           commission,
+          foodTax,
+          isFoodProduct,
         };
       }),
     );
