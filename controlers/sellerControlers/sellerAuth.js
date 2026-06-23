@@ -92,6 +92,8 @@ const buildOfferExpireDate = (startDate, validDays) => {
   return expireDate;
 };
 
+const SELLER_OFFER_TYPES = ["free_product", "cart_discount", "free_delivery"];
+
 const normalizeOfferFields = (body, existingCoupon = null) => {
   const offerType = body.offerType || existingCoupon?.offerType || "cart_discount";
   const discountScope =
@@ -1355,6 +1357,10 @@ exports.createSellerCoupon = async (req, res) => {
       return res.status(400).json({ message: "Expiry must be in the future" });
     }
 
+    if (!SELLER_OFFER_TYPES.includes(normalized.offerType)) {
+      return res.status(400).json({ message: "Invalid offer type" });
+    }
+
     if (normalized.offerType === "free_product") {
       if (!normalized.minimumOrderAmount) {
         return res
@@ -1370,6 +1376,12 @@ exports.createSellerCoupon = async (req, res) => {
         return res
           .status(400)
           .json({ message: "Free product quantity is required" });
+      }
+    } else if (normalized.offerType === "free_delivery") {
+      if (!normalized.minimumOrderAmount) {
+        return res
+          .status(400)
+          .json({ message: "Minimum order amount is required" });
       }
     } else {
       if (
@@ -1416,20 +1428,26 @@ exports.createSellerCoupon = async (req, res) => {
       storeId,
       title: title?.trim() || previewText,
       offerType: normalized.offerType,
-      discountScope: normalized.discountScope,
+      discountScope:
+        normalized.offerType === "cart_discount"
+          ? normalized.discountScope
+          : "entire_cart",
       offer:
-        normalized.offerType === "free_product"
-          ? "0"
-          : String(normalized.offerValue || 0),
+        normalized.offerType === "cart_discount"
+          ? String(normalized.offerValue || 0)
+          : "0",
       minimumOrderAmount:
-        normalized.offerType === "free_product"
+        normalized.offerType === "free_product" ||
+        normalized.offerType === "free_delivery"
           ? normalized.minimumOrderAmount
           : normalized.minimumOrderAmount || 0,
       limit:
-        normalized.offerType === "free_product"
+        normalized.offerType === "free_product" ||
+        normalized.offerType === "free_delivery"
           ? normalized.minimumOrderAmount
           : normalized.minimumOrderAmount || 0,
       productId:
+        normalized.offerType === "cart_discount" &&
         normalized.discountScope === "selected_products"
           ? normalized.productId
           : [],
@@ -1494,6 +1512,10 @@ exports.editSellerCoupon = async (req, res) => {
     let needsReApproval = false;
     const normalized = normalizeOfferFields(req.body, existingCoupon);
 
+    if (!SELLER_OFFER_TYPES.includes(normalized.offerType)) {
+      return res.status(400).json({ message: "Invalid offer type" });
+    }
+
     if (title !== undefined) {
       updateData.title = title?.trim() || existingCoupon.title;
       needsReApproval = true;
@@ -1501,16 +1523,28 @@ exports.editSellerCoupon = async (req, res) => {
 
     if (req.body.offerType !== undefined) {
       updateData.offerType = normalized.offerType;
+      if (normalized.offerType !== "cart_discount") {
+        updateData.discountScope = "entire_cart";
+        updateData.offer = "0";
+        updateData.productId = [];
+      }
+      if (normalized.offerType !== "free_product") {
+        updateData.freeProductId = null;
+        updateData.freeProductQuantity = 1;
+      }
       needsReApproval = true;
     }
 
     if (req.body.discountScope !== undefined) {
-      updateData.discountScope = normalized.discountScope;
+      updateData.discountScope =
+        normalized.offerType === "cart_discount"
+          ? normalized.discountScope
+          : "entire_cart";
       needsReApproval = true;
     }
 
     if (req.body.offer !== undefined) {
-      if (normalized.offerType !== "free_product") {
+      if (normalized.offerType === "cart_discount") {
         if (!normalized.offerValue || normalized.offerValue <= 0) {
           return res.status(400).json({ message: "Discount percentage is required" });
         }
@@ -1534,6 +1568,13 @@ exports.editSellerCoupon = async (req, res) => {
             .json({ message: "Free product selection is required" });
         }
         updateData.offer = "0";
+      } else if (normalized.offerType === "free_delivery") {
+        if (!normalized.minimumOrderAmount) {
+          return res
+            .status(400)
+            .json({ message: "Minimum order amount is required" });
+        }
+        updateData.offer = "0";
       } else if (!normalized.offerValue || normalized.offerValue <= 0) {
         return res.status(400).json({ message: "Discount percentage is required" });
       } else {
@@ -1543,7 +1584,8 @@ exports.editSellerCoupon = async (req, res) => {
 
     if (req.body.minimumOrderAmount !== undefined || req.body.limit !== undefined) {
       if (
-        normalized.offerType === "free_product" &&
+        (normalized.offerType === "free_product" ||
+          normalized.offerType === "free_delivery") &&
         !normalized.minimumOrderAmount
       ) {
         return res
@@ -1616,6 +1658,7 @@ exports.editSellerCoupon = async (req, res) => {
 
     if (req.body.productId !== undefined) {
       if (
+        normalized.offerType === "cart_discount" &&
         normalized.discountScope === "selected_products" &&
         !normalized.productId.length
       ) {
@@ -1625,6 +1668,7 @@ exports.editSellerCoupon = async (req, res) => {
       }
 
       updateData.productId =
+        normalized.offerType === "cart_discount" &&
         normalized.discountScope === "selected_products"
           ? normalized.productId
           : [];

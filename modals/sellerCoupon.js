@@ -6,7 +6,7 @@ const couponSchema = new mongoose.Schema(
     sliderImage: String,
     offerType: {
       type: String,
-      enum: ["free_product", "cart_discount"],
+      enum: ["free_product", "cart_discount", "free_delivery"],
       default: "cart_discount",
     },
     discountScope: {

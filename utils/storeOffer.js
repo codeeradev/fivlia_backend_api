@@ -5,6 +5,7 @@ const stock = require("../modals/StoreStock");
 const OFFER_TYPES = {
   FREE_PRODUCT: "free_product",
   CART_DISCOUNT: "cart_discount",
+  FREE_DELIVERY: "free_delivery",
 };
 
 const DISCOUNT_SCOPES = {
@@ -141,6 +142,10 @@ function buildOfferPreviewText(offer) {
 
   if (offer.offerType === OFFER_TYPES.FREE_PRODUCT) {
     return `Spend ₹${threshold} and get ${freeQuantity} ${freeProductName} free`;
+  }
+
+  if (offer.offerType === OFFER_TYPES.FREE_DELIVERY) {
+    return `Get free delivery above ₹${threshold}`;
   }
 
   const percent = resolveOfferPercent(offer, threshold);
@@ -317,6 +322,7 @@ async function getAppliedOfferContext(
       cartDiscount: emptyBreakdown,
       freeProductOffer: null,
       freeProductItem: null,
+      freeDeliveryOffer: null,
     };
   }
 
@@ -328,14 +334,16 @@ async function getAppliedOfferContext(
     .lean();
 
   const activeOffers = offers.filter((offer) => isOfferActive(offer, now));
+  const appliedOffer = activeOffers[0] || null;
   const cartDiscountOffer =
-    activeOffers.find(
-      (offer) => offer.offerType === OFFER_TYPES.CART_DISCOUNT,
-    ) || null;
+    appliedOffer?.offerType === OFFER_TYPES.CART_DISCOUNT ? appliedOffer : null;
   const freeProductOffer =
-    activeOffers.find(
-      (offer) => offer.offerType === OFFER_TYPES.FREE_PRODUCT,
-    ) || null;
+    appliedOffer?.offerType === OFFER_TYPES.FREE_PRODUCT ? appliedOffer : null;
+  const freeDeliveryOffer =
+    appliedOffer?.offerType === OFFER_TYPES.FREE_DELIVERY &&
+    isOfferEligibleForCart(appliedOffer, cartItems, subtotal, now).eligible
+      ? appliedOffer
+      : null;
 
   const cartDiscount =
     cartDiscountOffer &&
@@ -353,10 +361,11 @@ async function getAppliedOfferContext(
       : null;
 
   return {
-    offers: activeOffers,
+    offers: appliedOffer ? [appliedOffer] : [],
     cartDiscount,
     freeProductOffer: freeProductItem ? freeProductOffer : null,
     freeProductItem,
+    freeDeliveryOffer,
   };
 }
 

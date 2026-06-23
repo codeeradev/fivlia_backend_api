@@ -15,10 +15,24 @@ const isTruthyFlag = (value) => {
   return false;
 };
 
-const getSellerFreeDeliverySettings = (store = {}) => {
+const getSellerFreeDeliverySettings = (freeDeliveryOffer = null) => {
+  if (!freeDeliveryOffer) {
+    return {
+      enabled: false,
+      limit: 0,
+    };
+  }
+
   return {
-    enabled: isTruthyFlag(store?.sellerFreeDeliveryEnabled),
-    limit: Math.max(0, toNumber(store?.sellerFreeDeliveryLimit)),
+    enabled: true,
+    limit: Math.max(
+      0,
+      toNumber(
+        freeDeliveryOffer?.minimumOrderAmount ?? freeDeliveryOffer?.limit,
+      ),
+    ),
+    offerId: freeDeliveryOffer?._id || null,
+    title: freeDeliveryOffer?.title || null,
   };
 };
 
@@ -26,6 +40,7 @@ const resolveSellerDeliveryPricing = ({
   itemsTotal = 0,
   settings = {},
   store = {},
+  freeDeliveryOffer = null,
   deliveryChargeRaw = 0,
   deliveryPayout = 0,
 } = {}) => {
@@ -36,7 +51,7 @@ const resolveSellerDeliveryPricing = ({
     0,
     toNumber(settings?.freeDeliveryLimit),
   );
-  const sellerSettings = getSellerFreeDeliverySettings(store);
+  const sellerSettings = getSellerFreeDeliverySettings(freeDeliveryOffer);
 
   const isPlatformFreeDeliveryApplied =
     globalFreeDeliveryLimit > 0 && itemSubtotal >= globalFreeDeliveryLimit;
@@ -71,6 +86,7 @@ const resolveSellerDeliveryPricing = ({
     globalFreeDeliveryLimit,
     sellerFreeDeliveryEnabled: sellerSettings.enabled,
     sellerFreeDeliveryLimit: sellerSettings.limit,
+    sellerFreeDeliveryOfferId: sellerSettings.offerId || null,
   };
 };
 

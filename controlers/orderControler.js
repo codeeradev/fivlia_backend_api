@@ -269,6 +269,16 @@ exports.placeOrder = async (req, res) => {
             savings: offerContext.freeProductItem.freeProductSavings,
           }
         : null,
+      freeDelivery: offerContext.freeDeliveryOffer
+        ? {
+            _id: offerContext.freeDeliveryOffer._id,
+            title: offerContext.freeDeliveryOffer.title,
+            previewText: buildOfferPreviewText(offerContext.freeDeliveryOffer),
+            minimumOrderAmount:
+              offerContext.freeDeliveryOffer.minimumOrderAmount ??
+              offerContext.freeDeliveryOffer.limit,
+          }
+        : null,
       subtotal: offerContext.cartDiscount.subtotal,
       discountSavings: offerContext.cartDiscount.discountAmount,
       freeProductSavings: offerContext.freeProductItem?.freeProductSavings || 0,
@@ -398,6 +408,7 @@ exports.placeOrder = async (req, res) => {
       itemsTotal,
       settings: chargesData,
       store: storeData,
+      freeDeliveryOffer: offerContext.freeDeliveryOffer,
       deliveryChargeRaw: deliveryBaseCharge,
       deliveryPayout: totalDeliveryCharge,
     });

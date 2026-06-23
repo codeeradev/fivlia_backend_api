@@ -56,6 +56,33 @@ const getOfferContext = async (cartItems, storeId, now = new Date()) => {
   return getAppliedOfferContext(cartItems, storeId, now);
 };
 
+const clearAppliedOffersForStore = async ({ userId, storeId }) => {
+  if (!userId || !storeId) return [];
+
+  const regularCarts = await Cart.find({
+    userId,
+    storeId,
+    isFreeProduct: { $ne: true },
+  });
+
+  for (const cart of regularCarts) {
+    cart.couponId = null;
+    cart.discountAmount = 0;
+    cart.price = cart.originalPrice || cart.price;
+    cart.originalPrice = null;
+    cart.isCouponApplied = false;
+    await cart.save();
+  }
+
+  await Cart.deleteMany({
+    userId,
+    storeId,
+    isFreeProduct: true,
+  });
+
+  return regularCarts;
+};
+
 exports.addCart = async (req, res) => {
   try {
     const userId = req.user;
@@ -274,8 +301,9 @@ exports.getCart = async (req, res) => {
       };
     });
 
+    const regularItems = updatedItems.filter((cartItem) => !cartItem.isFreeProduct);
     const now = new Date();
-    const offerContext = await getOfferContext(updatedItems, storeId, now);
+    const offerContext = await getOfferContext(regularItems, storeId, now);
     const offerItems = offerContext.cartDiscount.items.map((item) => ({
       ...item,
       price: item.isFreeProduct ? 0 : item.baseUnitPrice,
@@ -371,6 +399,7 @@ exports.getCart = async (req, res) => {
         itemsTotal,
         settings,
         store,
+        freeDeliveryOffer: offerContext.freeDeliveryOffer,
         deliveryChargeRaw: deliveryBaseCharge,
         deliveryPayout,
       });
@@ -415,6 +444,18 @@ exports.getCart = async (req, res) => {
               freeProductName: freeProductItem.name,
               freeProductQuantity: freeProductItem.quantity,
               savings: freeProductItem.freeProductSavings,
+            }
+          : null,
+        freeDelivery: offerContext.freeDeliveryOffer
+          ? {
+              _id: offerContext.freeDeliveryOffer._id,
+              title: offerContext.freeDeliveryOffer.title,
+              previewText: buildOfferPreviewText(
+                offerContext.freeDeliveryOffer,
+              ),
+              minimumOrderAmount:
+                offerContext.freeDeliveryOffer.minimumOrderAmount ??
+                offerContext.freeDeliveryOffer.limit,
             }
           : null,
         subtotal: offerContext.cartDiscount.subtotal,
@@ -787,7 +828,9 @@ exports.getOffers = async (req, res) => {
         .json({ message: "userId or cartIds array required" });
     }
 
-    const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
+    const cartQuery = userId
+      ? { userId, isFreeProduct: { $ne: true } }
+      : { _id: { $in: cartIds }, isFreeProduct: { $ne: true } };
     const carts = await Cart.find(cartQuery).lean();
 
     if (!carts.length) {
@@ -913,8 +956,10 @@ exports.applyCoupon = async (req, res) => {
         .json({ message: "userId or cartIds array required" });
     }
 
-    const cartQuery = userId ? { userId } : { _id: { $in: cartIds } };
-    const carts = await Cart.find(cartQuery);
+    const cartQuery = userId
+      ? { userId, isFreeProduct: { $ne: true } }
+      : { _id: { $in: cartIds }, isFreeProduct: { $ne: true } };
+    let carts = await Cart.find(cartQuery);
 
     if (!carts.length) {
       return res.status(404).json({ message: "No carts found" });
@@ -922,26 +967,14 @@ exports.applyCoupon = async (req, res) => {
 
     // 🔴 REMOVE FLOW
     if (removeOffer === "true" || removeOffer === true) {
-      for (let cart of carts) {
-        cart.couponId = null;
-        cart.discountAmount = 0;
-        cart.price = cart.originalPrice || cart.price;
-        cart.originalPrice = null;
-        cart.isCouponApplied = false;
-        await cart.save();
-      }
-
-      await Cart.deleteMany({
+      const clearedCarts = await clearAppliedOffersForStore({
         userId: carts[0].userId,
-        _id: {
-          $in: carts.map((c) => c._id),
-        },
-        isFreeProduct: true,
+        storeId: carts[0].storeId,
       });
 
       return res.status(200).json({
         message: "Offers removed successfully",
-        carts,
+        carts: clearedCarts,
       });
     }
 
@@ -962,8 +995,22 @@ exports.applyCoupon = async (req, res) => {
         .json({ message: "Offer does not belong to this cart store" });
     }
 
-    const subtotal = calculateCartSubtotal(carts);
-    const eligibility = isOfferEligibleForCart(coupon, carts, subtotal, now);
+    let subtotal = calculateCartSubtotal(carts);
+    let eligibility = isOfferEligibleForCart(coupon, carts, subtotal, now);
+    if (!eligibility.eligible) {
+      return res
+        .status(400)
+        .json({ message: eligibility.reason || "Offer is not applicable" });
+    }
+
+    await clearAppliedOffersForStore({
+      userId: carts[0].userId,
+      storeId: carts[0].storeId,
+    });
+
+    carts = await Cart.find(cartQuery);
+    subtotal = calculateCartSubtotal(carts);
+    eligibility = isOfferEligibleForCart(coupon, carts, subtotal, now);
     if (!eligibility.eligible) {
       return res
         .status(400)
@@ -1075,6 +1122,13 @@ exports.applyCoupon = async (req, res) => {
               savings: freeProductItem.freeProductSavings,
             }
           : null,
+        freeDelivery:
+          coupon.offerType === "free_delivery"
+            ? {
+                minimumOrderAmount:
+                  coupon.minimumOrderAmount ?? coupon.limit,
+              }
+            : null,
       },
     });
   } catch (error) {
