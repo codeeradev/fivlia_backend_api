@@ -301,7 +301,9 @@ exports.getCart = async (req, res) => {
       };
     });
 
-    const regularItems = updatedItems.filter((cartItem) => !cartItem.isFreeProduct);
+    const regularItems = updatedItems.filter(
+      (cartItem) => !cartItem.isFreeProduct,
+    );
     const now = new Date();
     const offerContext = await getOfferContext(regularItems, storeId, now);
     const offerItems = offerContext.cartDiscount.items.map((item) => ({
@@ -312,6 +314,11 @@ exports.getCart = async (req, res) => {
       savings: item.lineDiscount,
     }));
     const freeProductItem = offerContext.freeProductItem;
+
+    const allCartItems = [
+      ...offerItems,
+      ...(freeProductItem ? [freeProductItem] : []),
+    ];
 
     const settings = await SettingAdmin.findOne().lean();
     let address = null;
@@ -418,7 +425,7 @@ exports.getCart = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: "Cart items fetched successfully.",
-      items: offerItems,
+      items: allCartItems,
       freeItems: freeProductItem ? [freeProductItem] : [],
       offerSummary: {
         cartDiscount: offerContext.cartDiscount.offer
@@ -1125,8 +1132,7 @@ exports.applyCoupon = async (req, res) => {
         freeDelivery:
           coupon.offerType === "free_delivery"
             ? {
-                minimumOrderAmount:
-                  coupon.minimumOrderAmount ?? coupon.limit,
+                minimumOrderAmount: coupon.minimumOrderAmount ?? coupon.limit,
               }
             : null,
       },
