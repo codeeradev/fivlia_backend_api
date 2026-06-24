@@ -127,6 +127,10 @@ exports.addCategoryInSeller = async (req, res) => {
       const pid = productId.$oid || productId;
       if (!mongoose.isValidObjectId(pid)) continue;
 
+      console.log("========== STOCK PROCESS START ==========");
+console.log("sellerProducts:", sellerProducts);
+console.log("Current Stock:", storeStock.stock.length);
+
       const adminProduct = await Product.findById(pid).lean();
       if (!adminProduct) continue;
 
@@ -629,7 +633,7 @@ exports.getExistingProductList = async (req, res) => {
 
     if (sellerId) {
       const store = await Store.findById(sellerId)
-        .select("sellFood businessType foodTypes")
+        .select("sellFood businessType foodTypes typeId")
         .lean();
 
       if (!store) {
@@ -638,7 +642,7 @@ exports.getExistingProductList = async (req, res) => {
           .json({ success: false, message: "Seller not found" });
       }
 
-      const isFoodSeller = store.typeId === "69cf8a31ad92aee54ecb1e72";
+      const isFoodSeller = store.typeId?.toString() === "69cf8a31ad92aee54ecb1e72";
       const sellerFoodTypes = (store.foodTypes || []).map((id) =>
         id.toString(),
       );
