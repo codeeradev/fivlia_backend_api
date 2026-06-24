@@ -128,8 +128,8 @@ exports.addCategoryInSeller = async (req, res) => {
       if (!mongoose.isValidObjectId(pid)) continue;
 
       console.log("========== STOCK PROCESS START ==========");
-console.log("sellerProducts:", sellerProducts);
-console.log("Current Stock:", storeStock.stock.length);
+      console.log("sellerProducts:", sellerProducts);
+      console.log("Current Stock:", storeStock.stock.length);
 
       const adminProduct = await Product.findById(pid).lean();
       if (!adminProduct) continue;
@@ -437,9 +437,11 @@ exports.getSellerProducts = async (req, res) => {
       ),
     ];
 
-    const foodTypes = await foodTypeModel.find({
-      _id: { $in: foodTypeIds },
-    }).lean();
+    const foodTypes = await foodTypeModel
+      .find({
+        _id: { $in: foodTypeIds },
+      })
+      .lean();
 
     const foodTypeMap = {};
 
@@ -459,7 +461,8 @@ exports.getSellerProducts = async (req, res) => {
         let foodTax = 0;
         let categoryName = "Uncategorized";
 
-        const isFoodProduct = prod.typeId?.toString() === FOOD_TYPE_ID;
+        const isFoodProduct =
+          prod.typeId?.toString() === FOOD_TYPE_ID || !!prod.foodTypeId;
 
         if (isFoodProduct) {
           const foodType = foodTypeMap[prod.foodTypeId?.toString()];
@@ -642,7 +645,8 @@ exports.getExistingProductList = async (req, res) => {
           .json({ success: false, message: "Seller not found" });
       }
 
-      const isFoodSeller = store.typeId?.toString() === "69cf8a31ad92aee54ecb1e72";
+      const isFoodSeller =
+        store.typeId?.toString() === "69cf8a31ad92aee54ecb1e72";
       const sellerFoodTypes = (store.foodTypes || []).map((id) =>
         id.toString(),
       );
