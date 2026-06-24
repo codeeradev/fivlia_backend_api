@@ -1457,10 +1457,18 @@ exports.orderStatus = async (req, res) => {
 
         const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
 
+        // ===> Handle seller-sponsored free delivery payout
+        const sellerSponsoredPayout = updatedOrder.sellerSponsoredDeliveryPayout || 0;
+
         // 🏦 Credit Store Wallet
         let creditToStore = itemTotal;
         if (!store.Authorized_Store) {
           creditToStore = itemTotal - totalAdminDeduction;
+        }
+        
+        // Deduct seller-sponsored delivery payout if applicable
+        if (sellerSponsoredPayout > 0) {
+          creditToStore = creditToStore - sellerSponsoredPayout;
         }
 
         const storeData = await Store.findByIdAndUpdate(
@@ -1468,6 +1476,29 @@ exports.orderStatus = async (req, res) => {
           { $inc: { wallet: creditToStore } },
           { new: true },
         );
+
+        // ===> Build transaction description
+        let transactionDescription = "";
+        if (store.Authorized_Store) {
+          transactionDescription = sellerSponsoredPayout > 0
+            ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
+            : "Full amount credited (Authorized Store)";
+        } else {
+          const deductions = [];
+          if (totalCommission > 0) {
+            deductions.push(`₹${totalCommission.toFixed(2)} commission`);
+          }
+          if (foodSellerTaxAmount > 0) {
+            deductions.push(`₹${foodSellerTaxAmount.toFixed(2)} food seller tax`);
+          }
+          if (sellerSponsoredPayout > 0) {
+            deductions.push(`₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`);
+          }
+          
+          transactionDescription = deductions.length > 0
+            ? `Credited after deductions (${deductions.join(", ")} deducted)`
+            : "Amount credited";
+        }
 
         // ➕ Create Store Transaction
         await store_transaction.create({
@@ -1477,11 +1508,7 @@ exports.orderStatus = async (req, res) => {
           amount: creditToStore,
           orderId: updatedOrder.orderId,
           storeId: updatedOrder.storeId,
-          description: store.Authorized_Store
-            ? "Full amount credited (Authorized Store)"
-            : foodSellerTaxAmount > 0
-              ? `Credited after commission + food seller tax cut (${totalCommission.toFixed(2)} commission and ${foodSellerTaxAmount.toFixed(2)} tax deducted)`
-              : `Credited after commission cut (${totalCommission.toFixed(2)} deducted)`,
+          description: transactionDescription,
         });
 
         // 2. Credit admin with the old commission plus the new food-seller tax in one delivered settlement.

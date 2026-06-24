@@ -42,10 +42,22 @@ module.exports.deliverOrderCommon = async ({
     return sum + commissionAmount;
   }, 0);
 
+  const itemTotal = order.items.reduce((sum, item) => {
+    return sum + item.price * item.quantity;
+  }, 0);
+
+  // ===> Handle seller-sponsored free delivery payout
+  const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
+
   // 🏦 Store wallet credit
-  let creditToStore = order.itemTotal;
+  let creditToStore = itemTotal;
   if (!store.Authorized_Store) {
     creditToStore -= totalCommission;
+  }
+  
+  // Deduct seller-sponsored delivery payout if applicable
+  if (sellerSponsoredPayout > 0) {
+    creditToStore = creditToStore - sellerSponsoredPayout;
   }
 
   const storeData = await Store.findByIdAndUpdate(
@@ -54,6 +66,26 @@ module.exports.deliverOrderCommon = async ({
     { new: true }
   );
 
+  // ===> Build transaction description
+  let transactionDescription = "";
+  if (store.Authorized_Store) {
+    transactionDescription = sellerSponsoredPayout > 0
+      ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
+      : "Full amount credited (Authorized Store)";
+  } else {
+    const deductions = [];
+    if (totalCommission > 0) {
+      deductions.push(`₹${totalCommission.toFixed(2)} commission`);
+    }
+    if (sellerSponsoredPayout > 0) {
+      deductions.push(`₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`);
+    }
+    
+    transactionDescription = deductions.length > 0
+      ? `Credited after deductions (${deductions.join(", ")} deducted)`
+      : "Amount credited";
+  }
+
   await store_transaction.create({
     currentAmount: storeData.wallet,
     lastAmount: storeBefore.wallet,
@@ -61,9 +93,7 @@ module.exports.deliverOrderCommon = async ({
     amount: creditToStore,
     orderId: order.orderId,
     storeId: order.storeId,
-    description: store.Authorized_Store
-      ? "Full amount credited (Authorized Store)"
-      : `Credited after commission cut (${totalCommission} deducted)`,
+    description: transactionDescription,
   });
 
   // 🏛️ Admin wallet commission
