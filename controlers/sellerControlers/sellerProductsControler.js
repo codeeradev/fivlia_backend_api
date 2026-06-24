@@ -432,7 +432,7 @@ exports.getSellerProducts = async (req, res) => {
     const foodTypeIds = [
       ...new Set(
         sellerProducts
-          .filter((p) => p.typeId?.toString() === FOOD_TYPE_ID && p.foodTypeId)
+          .filter((p) => p.typeId?.toString() === FOOD_TYPE_ID || p.foodTypeId)
           .map((p) => p.foodTypeId.toString()),
       ),
     ];
