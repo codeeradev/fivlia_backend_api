@@ -1177,8 +1177,16 @@ exports.getOrderDetails = async (req, res) => {
         order.deliveryCharges = 0;
       }
 
+      const subtotal = order.items.reduce((total, item) => {
+        return total + Number(item.price) * Number(item.quantity);
+      }, 0);
+
       const platformFee = Number(
-        ((order.items.price * settings.Platform_Fee) / 100).toFixed(2),
+        ((subtotal * settings.platformFeePercentage) / 100).toFixed(2),
+      );
+
+      const platformFee = Number(
+        ((subtotal * settings.Platform_Fee) / 100).toFixed(2),
       );
 
       const itemsWithDetails = await Promise.all(
