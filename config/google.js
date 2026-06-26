@@ -190,6 +190,7 @@ function getCurrentZoneWindowMode(zoneWindowConfig = null, nowMoment = null) {
 
   return "day";
 }
+
 const calculateDeliveryTime = async (
   storeLat,
   storeLng,

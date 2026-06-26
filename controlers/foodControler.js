@@ -7,6 +7,7 @@ const { getStoresWithinRadius } = require("../config/google");
 const { Order, TempOrder } = require("../modals/order");
 const mongoose = require("mongoose");
 const Category = require("../modals/category");
+const Coupon = require("../modals/sellerCoupon");
 
 exports.addFood = async (req, res) => {
   try {
@@ -177,26 +178,26 @@ exports.getFoodSeller = async (req, res) => {
 
     const sellerIds = sellers.map((s) => s._id);
 
-    const deliveredOrders = await Order.aggregate([
-      {
-        $match: {
-          storeId: { $in: sellerIds },
-          orderStatus: "Delivered",
-        },
-      },
-      {
-        $group: {
-          _id: "$storeId",
-          totalDeliveredOrders: { $sum: 1 },
-        },
-      },
-    ]);
+    // const deliveredOrders = await Order.aggregate([
+    //   {
+    //     $match: {
+    //       storeId: { $in: sellerIds },
+    //       orderStatus: "Delivered",
+    //     },
+    //   },
+    //   {
+    //     $group: {
+    //       _id: "$storeId",
+    //       totalDeliveredOrders: { $sum: 1 },
+    //     },
+    //   },
+    // ]);
 
-    const deliveredOrderMap = {};
+    // const deliveredOrderMap = {};
 
-    deliveredOrders.forEach((item) => {
-      deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
-    });
+    // deliveredOrders.forEach((item) => {
+    //   deliveredOrderMap[item._id.toString()] = item.totalDeliveredOrders;
+    // });
     // =========================================================
     // RATINGS
     // =========================================================
@@ -270,6 +271,27 @@ exports.getFoodSeller = async (req, res) => {
       },
     ]);
 
+    const couponCounts = await Coupon.aggregate([
+      {
+        $match: {
+          storeId: { $in: sellerIds },
+          status: true,
+          approvalStatus: "approved",
+        },
+      },
+      {
+        $group: {
+          _id: "$storeId",
+          totalOffers: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const offerCountMap = {};
+
+    couponCounts.forEach((c) => {
+      offerCountMap[c._id.toString()] = c.totalOffers;
+    });
     // =========================================================
     // OFFER + ITEM MAP
     // =========================================================
@@ -296,10 +318,10 @@ exports.getFoodSeller = async (req, res) => {
     // SORT SELLERS BY OFFER DESC
     // =========================================================
     sellers.sort((a, b) => {
-      const ordersA = deliveredOrderMap[a._id.toString()] || 0;
-      const ordersB = deliveredOrderMap[b._id.toString()] || 0;
+      const offersA = offerCountMap[a._id.toString()] || 0;
+      const offersB = offerCountMap[b._id.toString()] || 0;
 
-      return ordersB - ordersA;
+      return offersB - offersA;
     });
 
     const storeDistanceMap = {};
@@ -336,6 +358,8 @@ exports.getFoodSeller = async (req, res) => {
                 ? `${offerMap[store._id.toString()]}`
                 : null,
 
+              totalOffers: offerCountMap[store._id.toString()] || 0,
+
               totalItems: itemCountMap[store._id.toString()] || 0,
 
               image: store.image,
@@ -345,13 +369,13 @@ exports.getFoodSeller = async (req, res) => {
               sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
               isVeg: store.isVeg,
               fullAddress: store.fullAddress,
-              deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+              // deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
               averageRating: avg.toFixed(1),
               ratingCount: stats.count,
             };
           })
           .sort((a, b) => {
-            return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
+            return (b.totalOffers || 0) - (a.totalOffers || 0);
           });
 
         return {
@@ -390,13 +414,14 @@ exports.getFoodSeller = async (req, res) => {
           sellerFreeDeliveryLimit: store.sellerFreeDeliveryLimit,
           isVeg: store.isVeg,
           fullAddress: store.fullAddress,
-          deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
+          totalOffers: offerCountMap[store._id.toString()] || 0,
+          // deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
           averageRating: avg.toFixed(1),
           ratingCount: stats.count,
         };
       })
       .sort((a, b) => {
-        return (b.deliveredOrders || 0) - (a.deliveredOrders || 0);
+        return (b.totalOffers || 0) - (a.totalOffers || 0);
       });
 
     return res.status(200).json({
