@@ -1177,6 +1177,10 @@ exports.getOrderDetails = async (req, res) => {
         order.deliveryCharges = 0;
       }
 
+      const platformFee = Number(
+        ((order.totalPrice * settings.Platform_Fee) / 100).toFixed(2),
+      );
+
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {
           const product = await Products.findById(item.productId).lean();
@@ -1458,14 +1462,15 @@ exports.orderStatus = async (req, res) => {
         const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
 
         // ===> Handle seller-sponsored free delivery payout
-        const sellerSponsoredPayout = updatedOrder.sellerSponsoredDeliveryPayout || 0;
+        const sellerSponsoredPayout =
+          updatedOrder.sellerSponsoredDeliveryPayout || 0;
 
         // 🏦 Credit Store Wallet
         let creditToStore = itemTotal;
         if (!store.Authorized_Store) {
           creditToStore = itemTotal - totalAdminDeduction;
         }
-        
+
         // Deduct seller-sponsored delivery payout if applicable
         if (sellerSponsoredPayout > 0) {
           creditToStore = creditToStore - sellerSponsoredPayout;
@@ -1480,24 +1485,30 @@ exports.orderStatus = async (req, res) => {
         // ===> Build transaction description
         let transactionDescription = "";
         if (store.Authorized_Store) {
-          transactionDescription = sellerSponsoredPayout > 0
-            ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
-            : "Full amount credited (Authorized Store)";
+          transactionDescription =
+            sellerSponsoredPayout > 0
+              ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
+              : "Full amount credited (Authorized Store)";
         } else {
           const deductions = [];
           if (totalCommission > 0) {
             deductions.push(`₹${totalCommission.toFixed(2)} commission`);
           }
           if (foodSellerTaxAmount > 0) {
-            deductions.push(`₹${foodSellerTaxAmount.toFixed(2)} food seller tax`);
+            deductions.push(
+              `₹${foodSellerTaxAmount.toFixed(2)} food seller tax`,
+            );
           }
           if (sellerSponsoredPayout > 0) {
-            deductions.push(`₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`);
+            deductions.push(
+              `₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`,
+            );
           }
-          
-          transactionDescription = deductions.length > 0
-            ? `Credited after deductions (${deductions.join(", ")} deducted)`
-            : "Amount credited";
+
+          transactionDescription =
+            deductions.length > 0
+              ? `Credited after deductions (${deductions.join(", ")} deducted)`
+              : "Amount credited";
         }
 
         // ➕ Create Store Transaction
