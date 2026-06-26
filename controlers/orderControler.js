@@ -1178,7 +1178,7 @@ exports.getOrderDetails = async (req, res) => {
       }
 
       const platformFee = Number(
-        ((order.totalPrice * settings.Platform_Fee) / 100).toFixed(2),
+        ((order.items.price * settings.Platform_Fee) / 100).toFixed(2),
       );
 
       const itemsWithDetails = await Promise.all(
