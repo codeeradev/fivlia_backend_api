@@ -1182,10 +1182,6 @@ exports.getOrderDetails = async (req, res) => {
       }, 0);
 
       const platformFee = Number(
-        ((subtotal * settings.platformFeePercentage) / 100).toFixed(2),
-      );
-
-      const platformFee = Number(
         ((subtotal * settings.Platform_Fee) / 100).toFixed(2),
       );
 
