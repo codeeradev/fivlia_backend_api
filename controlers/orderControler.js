@@ -1210,7 +1210,7 @@ exports.getOrderDetails = async (req, res) => {
         totalPrice: order.totalPrice,
         cashOnDelivery: order.cashOnDelivery,
         deliveryCharges: order.deliveryCharges,
-        platformFee: order.platformFee,
+        platformFee,
         transactionId: order.transactionId || "",
         items: itemsWithDetails,
         address,
