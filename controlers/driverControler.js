@@ -37,6 +37,7 @@ const {
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const order = require("../modals/order");
+const { updateAt } = require("./categorycontroler");
 
 const isFoodPreparingOrder = (order) => {
   const normalizedStatus = String(order?.orderStatus || "")
@@ -50,6 +51,19 @@ const isFoodPreparingOrder = (order) => {
       String(item?.typeName || "")
         .trim()
         .toLowerCase() === "food",
+  );
+};
+
+const toIST = (date) => {
+  if (!date) return null;
+
+  return (
+    new Date(date)
+      .toLocaleString("sv-SE", {
+        timeZone: "Asia/Kolkata",
+        hour12: false,
+      })
+      .replace(" ", "T") + "+05:30"
   );
 };
 
@@ -593,6 +607,8 @@ exports.acceptedOrder = async (req, res) => {
           storeContact: storeAddress?.PhoneNumber,
           userLat: address1?.latitude,
           userLng: address1?.longitude,
+          createdAt: toIST(order.createdAt),
+          updateAt:  toIST(order.updatedAt),
         };
       }),
     );
