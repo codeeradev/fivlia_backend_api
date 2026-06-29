@@ -239,6 +239,7 @@ const {
   GetSubCategories,
   setCommison,
   EditSubCategory,
+  deleteCatergory
 } = require("../controlers/categorycontroler");
 
 const {
@@ -565,6 +566,7 @@ router.get("/get-repeated-orders", verifyToken, getRepeatedOrders);
 router.delete("/deleteNotification/:id", deleteNotification);
 
 router.post("/edit-category/:id", upload, EditSubCategory);
+router.delete("/deleteCategory/:id", deleteCatergory);
 
 router.put("/setCommison", setCommison);
 

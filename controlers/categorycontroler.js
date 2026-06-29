@@ -1218,6 +1218,72 @@ exports.editCat = async (req, res) => {
   }
 };
 
+exports.deleteCatergory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Main Category Delete
+    let category = await Category.findById(id);
+
+    if (category) {
+      await Category.findByIdAndDelete(id);
+
+      return res.status(200).json({
+        message: "Category deleted successfully",
+      });
+    }
+
+    // 2. Sub Category Delete
+    category = await Category.findOne({
+      "subcat._id": id,
+    });
+
+    if (category) {
+      category.subcat = category.subcat.filter(
+        (sub) => sub._id.toString() !== id,
+      );
+
+      await category.save();
+
+      return res.status(200).json({
+        message: "Sub Category deleted successfully",
+      });
+    }
+
+    // 3. Sub Sub Category Delete
+    category = await Category.findOne({
+      "subcat.subsubcat._id": id,
+    });
+
+    if (category) {
+      const subCategory = category.subcat.find((sub) =>
+        sub.subsubcat.some((ssc) => ssc._id.toString() === id),
+      );
+
+      subCategory.subsubcat = subCategory.subsubcat.filter(
+        (ssc) => ssc._id.toString() !== id,
+      );
+
+      await category.save();
+
+      return res.status(200).json({
+        message: "Sub Sub Category deleted successfully",
+      });
+    }
+
+    return res.status(404).json({
+      message: "Category not found",
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Error",
+      error: error.message,
+    });
+  }
+};
+
 exports.updateAt = async (req, res) => {
   try {
     const { id } = req.params;
