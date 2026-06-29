@@ -822,7 +822,7 @@ exports.completedOrders = async (req, res) => {
     const order = await Order.find({
       "driver.mobileNumber": mobileNumber,
       orderStatus: "Delivered",
-    });
+    }).sort({ createdAt: -1 });
 
     const driverId = order[0]?.driver?.driverId;
 
@@ -830,7 +830,6 @@ exports.completedOrders = async (req, res) => {
       ? await DriverRating.find({ driverId }).select("rating")
       : [];
 
-    console.log("Ratings for driver", driverId, ratings);
     const totalRatings = ratings.length;
 
     const averageRating =
