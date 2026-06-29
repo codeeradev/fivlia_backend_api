@@ -4,6 +4,10 @@ const admin = require("../firebase/firebase");
 const Products = require("../modals/Product");
 const { Cart } = require("../modals/cart");
 const autoAssignDriver = require("../config/driverOrderAccept/AutoAssignDriver");
+const {
+  updateDispatchState,
+  clearDispatchTimeout,
+} = require("../config/driverOrderAccept/assignDriver");
 const driver = require("../modals/driver");
 const User = require("../modals/User");
 const Status = require("../modals/deliveryStatus");
@@ -1370,6 +1374,7 @@ exports.orderStatus = async (req, res) => {
     });
 
     if (status === "Cancelled") {
+      clearDispatchTimeout(updatedOrder.orderId);
       const deleteAssignments = await Assign.deleteMany({
         orderId: updatedOrder.orderId,
         orderStatus: "Accepted",

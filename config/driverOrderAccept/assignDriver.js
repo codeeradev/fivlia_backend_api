@@ -27,6 +27,18 @@ const {
 
 // Tracks the active retry timer for each orderId.
 const orderTimeouts = new Map();
+
+const clearDispatchTimeout = (orderId) => {
+  orderId = orderId.toString();
+
+  if (orderTimeouts.has(orderId)) {
+    clearTimeout(orderTimeouts.get(orderId));
+    orderTimeouts.delete(orderId);
+
+    console.log(`🧹 Cleared timeout for order ${orderId}`);
+  }
+};
+
 const DISPATCH_REDIS_TTL_SECONDS = Number(
   process.env.DISPATCH_REDIS_TTL_SECONDS || 24 * 60 * 60,
 );
@@ -535,11 +547,7 @@ const assignWithBroadcast = async (order, drivers) => {
           driverName: driver.driverName,
         });
 
-        if (orderTimeouts.has(orderId)) {
-          clearTimeout(orderTimeouts.get(orderId));
-          orderTimeouts.delete(orderId);
-          console.log(`🧹 Cleared timeout for order ${orderId}`);
-        }
+        clearDispatchTimeout(orderId);
 
         await Assign.updateOne(
           { driverId, orderId },
@@ -640,14 +648,25 @@ const assignWithBroadcast = async (order, drivers) => {
   broadcastOrder();
 
   // Ensure only one active retry timer exists for this order.
-  if (orderTimeouts.has(orderId)) {
-    clearTimeout(orderTimeouts.get(orderId));
-    orderTimeouts.delete(orderId);
-  }
+  clearDispatchTimeout(orderId);
 
   const timeout = setTimeout(async () => {
     orderTimeouts.delete(orderId);
     const existingOrder = await Order.findOne({ orderId }).lean();
+
+    if (existingOrder.orderStatus === "Cancelled") {
+      console.log(`Order ${orderId} already cancelled.`);
+
+      cleanupAllListeners();
+
+      await Promise.all(
+        availableDrivers.map((d) =>
+          removePendingDriverOffer(d._id.toString(), orderId),
+        ),
+      );
+
+      return;
+    }
 
     if (
       existingOrder?.driver &&
@@ -735,3 +754,4 @@ const assignWithBroadcast = async (order, drivers) => {
 
 module.exports = assignWithBroadcast;
 module.exports.updateDispatchState = updateDispatchState;
+module.exports.clearDispatchTimeout = clearDispatchTimeout;
