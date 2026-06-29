@@ -213,6 +213,19 @@ const notifySeller = async (
   }
 };
 
+const toIST = (date) => {
+  if (!date) return null;
+
+  return (
+    new Date(date)
+      .toLocaleString("sv-SE", {
+        timeZone: "Asia/Kolkata",
+        hour12: false,
+      })
+      .replace(" ", "T") + "+05:30"
+  );
+};
+
 exports.placeOrder = async (req, res) => {
   try {
     const { cartIds, addressId, instructions, storeId, paymentMode } = req.body;
@@ -1089,6 +1102,8 @@ exports.getOrders = async (req, res) => {
             : null,
           city,
           driverPhone: order.driver?.mobileNumber || null,
+          createdAt: toIST(order.createdAt),
+          updatedAt: toIST(order.updatedAt),
         };
       }),
     );
