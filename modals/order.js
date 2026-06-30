@@ -42,6 +42,11 @@ const orderSchema = new mongoose.Schema(
     transactionId: String,
     deliverBy: String,
     note: String,
+    instructionStatus: {
+      type: String,
+      enum: ["pending", "read"],
+      default: "pending",
+    },
     driver: { driverId: String, name: String, mobileNumber: String },
     deliverStatus: { type: Boolean, default: false },
     foodSellerTaxPercent: { type: Number, default: 0 },
