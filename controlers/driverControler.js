@@ -15,6 +15,8 @@ const admin_transaction = require("../modals/adminTranaction");
 const store_transaction = require("../modals/storeTransaction");
 const { FeeInvoiceId } = require("../config/counter");
 const { sendMessages } = require("../utils/sendMessages");
+
+const { sellerSocketMap } = require("../utils/driverSocketMap");
 // sendDriverLocationToUser intentionally ignored for now
 // const sendDriverLocationToUser = require("../utils/sendLatLongToUser");
 // new socket code of user order status
