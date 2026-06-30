@@ -114,9 +114,9 @@ exports.addCategoryInSeller = async (req, res) => {
     await store.save();
 
     // ✅ Handle Products (update if exists, else add new)
-    let storeStock = await Products.findOne({ storeId: id });
+    let storeStock = await Stock.findOne({ storeId: id });
     if (!storeStock) {
-      storeStock = await Products.create({ storeId: id, stock: [] });
+      storeStock = await Stock.create({ storeId: id, stock: [] });
     }
 
     if (!Array.isArray(storeStock.stock)) {
