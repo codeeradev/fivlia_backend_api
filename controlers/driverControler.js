@@ -338,12 +338,12 @@ exports.driverOrderStatus = async (req, res) => {
 
         // ===> Handle seller-sponsored free delivery payout
         const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
-        
+
         let creditToStore = itemTotal;
         if (!store.Authorized_Store) {
           creditToStore = itemTotal - totalAdminDeduction; // deduct commission + food seller tax
         }
-        
+
         // Deduct seller-sponsored delivery payout if applicable
         if (sellerSponsoredPayout > 0) {
           creditToStore = creditToStore - sellerSponsoredPayout;
@@ -355,30 +355,36 @@ exports.driverOrderStatus = async (req, res) => {
           { $inc: { wallet: creditToStore } },
           { new: true },
         );
-        
+
         // ===> Build transaction description
         let transactionDescription = "";
         if (store.Authorized_Store) {
-          transactionDescription = sellerSponsoredPayout > 0
-            ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
-            : "Full amount credited (Authorized Store)";
+          transactionDescription =
+            sellerSponsoredPayout > 0
+              ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
+              : "Full amount credited (Authorized Store)";
         } else {
           const deductions = [];
           if (totalCommission > 0) {
             deductions.push(`₹${totalCommission.toFixed(2)} commission`);
           }
           if (foodSellerTaxAmount > 0) {
-            deductions.push(`₹${foodSellerTaxAmount.toFixed(2)} food seller tax`);
+            deductions.push(
+              `₹${foodSellerTaxAmount.toFixed(2)} food seller tax`,
+            );
           }
           if (sellerSponsoredPayout > 0) {
-            deductions.push(`₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`);
+            deductions.push(
+              `₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`,
+            );
           }
-          
-          transactionDescription = deductions.length > 0
-            ? `Credited after deductions (${deductions.join(", ")} deducted)`
-            : "Amount credited";
+
+          transactionDescription =
+            deductions.length > 0
+              ? `Credited after deductions (${deductions.join(", ")} deducted)`
+              : "Amount credited";
         }
-        
+
         // ===> Update Store Transaction
         const data = await store_transaction.create({
           currentAmount: storeData.wallet,
@@ -608,7 +614,7 @@ exports.acceptedOrder = async (req, res) => {
           userLat: address1?.latitude,
           userLng: address1?.longitude,
           createdAt: toIST(order.createdAt),
-          updateAt:  toIST(order.updatedAt),
+          updateAt: toIST(order.updatedAt),
         };
       }),
     );
@@ -1156,9 +1162,23 @@ exports.tipDriver = async (req, res) => {
     if (type === "instruction") {
       const order = await Order.findOneAndUpdate(
         { orderId: orderId },
-        { note },
+        {
+          note,
+          instructionStatus: "pending",
+        },
         { new: true },
       );
+
+      const sellerSocket = sellerSocketMap.get(order.storeId.toString());
+
+      if (sellerSocket) {
+        sellerSocket.emit("newInstruction", {
+          orderId: order.orderId,
+          note,
+          status: "pending",
+        });
+      }
+
       return res.status(200).json({ message: "Instruction Given" });
     }
     const order = await Order.findOne({ orderId });

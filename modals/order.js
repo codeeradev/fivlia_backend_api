@@ -107,6 +107,12 @@ const TempOrderSchema = new mongoose.Schema(
     foodSellerTaxPercent: { type: Number, default: 0 },
     foodSellerTaxAmount: { type: Number, default: 0 },
     instructions: String,
+    instructionStatus: {
+      type: String,
+      enum: ["pending", "read"],
+      default: "pending",
+    },
+
     cartIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "carts" }],
     offerSummary: { type: mongoose.Schema.Types.Mixed, default: null },
   },

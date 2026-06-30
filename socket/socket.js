@@ -40,7 +40,9 @@ module.exports = (io) => {
           console.log("driverSocketMap entries:", [...driverSocketMap.keys()]);
           const replayed = await replayPendingOrdersToDriver(socket, driverId);
           if (replayed > 0) {
-            console.log(`Replayed ${replayed} pending orders to driver ${driverId}`);
+            console.log(
+              `Replayed ${replayed} pending orders to driver ${driverId}`,
+            );
           }
         } else {
           driverSocketMap.delete(driverId);
@@ -114,7 +116,10 @@ module.exports = (io) => {
         try {
           payload = JSON.parse(payload);
         } catch (e) {
-          console.error("Failed to parse driverReadyForOrders payload:", payload);
+          console.error(
+            "Failed to parse driverReadyForOrders payload:",
+            payload,
+          );
           return;
         }
       }
@@ -127,6 +132,29 @@ module.exports = (io) => {
         driverId,
         replayed,
       });
+    });
+
+    socket.on("instructionRead", async ({ orderId }) => {
+      const order = await Order.findOneAndUpdate(
+        { orderId },
+        {
+          instructionStatus: "read",
+        },
+        {
+          new: true,
+        },
+      );
+
+      if (!order) return;
+
+      const userSocket = userSocketMap.get(order.userId.toString());
+
+      if (userSocket) {
+        userSocket.emit("instructionRead", {
+          orderId,
+          status: "read",
+        });
+      }
     });
 
     socket.on("disconnect", () => {
