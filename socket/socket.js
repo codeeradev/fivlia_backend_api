@@ -6,6 +6,8 @@ const {
 } = require("../utils/driverSocketMap");
 const { updateDriverStatus } = require("../controlers/driverControler");
 const { getPendingDriverOffers } = require("../utils/pendingDriverOffers");
+const { Order } = require("../modals/order");
+
 
 const replayPendingOrdersToDriver = async (socket, driverId) => {
   if (!driverId) return 0;
