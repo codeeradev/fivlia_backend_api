@@ -370,9 +370,11 @@ exports.getSellerProducts = async (req, res) => {
       });
     }
 
+    console.log("isFoodSeller", isFoodSeller)
     const stockData = await Stock.findOne({ storeId: sellerId }).lean();
     const stockEntries = stockData?.stock || [];
 
+    console.log("stockEntries", stockEntries)
     const settings = await SettingAdmin.findOne().lean();
 
     const foodSellerTaxPercent = Number(settings?.foodSellerTaxPercent || 0);
@@ -395,8 +397,10 @@ exports.getSellerProducts = async (req, res) => {
     }
 
     if (isFoodSeller) {
+      console.log("food run")
       productQuery.isVeg = { $in: [1, 2] };
     } else {
+      console.log("non food run")
       productQuery.isVeg = 0;
     }
 
