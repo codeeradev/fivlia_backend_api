@@ -135,6 +135,7 @@ module.exports = (io) => {
     });
 
     socket.on("instructionRead", async ({ orderId }) => {
+      console.log('i run', orderId)
       const order = await Order.findOneAndUpdate(
         { orderId },
         {
