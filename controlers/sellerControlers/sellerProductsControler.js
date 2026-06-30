@@ -374,7 +374,6 @@ exports.getSellerProducts = async (req, res) => {
     const stockData = await Stock.findOne({ storeId: sellerId }).lean();
     const stockEntries = stockData?.stock || [];
 
-    console.log("stockEntries", stockEntries)
     const settings = await SettingAdmin.findOne().lean();
 
     const foodSellerTaxPercent = Number(settings?.foodSellerTaxPercent || 0);
