@@ -305,7 +305,16 @@ exports.storeEdit = async (req, res) => {
       }
     }
 
-    if (typeId) updateObj.typeId = typeId;
+    if (typeId) {
+      updateObj.typeId = typeId;
+
+      if (typeId === "69cf8a31ad92aee54ecb1e72") {
+        updateObj.sellFood = true;
+      }
+      else{
+        updateObj.sellFood = false;
+      }
+    }
     // ✅ Latitude & Longitude
     if (Latitude) updateObj.Latitude = parseFloat(Latitude);
     if (Longitude) updateObj.Longitude = parseFloat(Longitude);
