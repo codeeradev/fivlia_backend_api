@@ -87,26 +87,6 @@ const normalizeOrderStatus = (status) =>
     .trim()
     .toLowerCase();
 
-const isFoodOrder = (order) =>
-  (order?.items || []).some(
-    (item) =>
-      String(item?.typeName || "")
-        .trim()
-        .toLowerCase() === "food",
-  );
-
-const getPreparationTimeMinutes = (body) => {
-  const rawTime =
-    body?.preparationTimeMinutes ??
-    body?.preparationTime ??
-    body?.preparingTime ??
-    body?.prepareTime;
-
-  if (rawTime === undefined || rawTime === null || rawTime === "") return null;
-
-  const minutes = Number(rawTime);
-  return Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
-};
 const RETRY_INTERVAL = 10000;
 
 // Helper: send repeated notifications until accepted
@@ -1259,22 +1239,29 @@ exports.getOrderDetails = async (req, res) => {
 exports.orderStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, driverId } = req.body;
-    console.log(req.body);
+    const { status, driverId, type } = req.body;
     const normalizedStatus = normalizeOrderStatus(status);
 
     const updateData = { orderStatus: status };
 
-    if (normalizedStatus === "preparing") {
-      const preparationTime = getPreparationTimeMinutes(req.body);
-      if (preparationTime !== null) {
-        updateData.preparationTime = preparationTime;
-      }
-
-      updateData.instantTime = new Date().toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata",
-      });
+    if (normalizedStatus === "accepted") {
+      updateData.orderAcceptedBy = type === "admin" ? "admin" : "seller";
+      updateData.orderAceptedTime = new Date();
     }
+console.log(req.body, "req.body");
+    if (normalizedStatus === "cancelled") {
+      updateData.orderRejectedBy = type === "admin" ? "admin" : "seller";
+    }
+
+    if (normalizedStatus === "going to pickup") {
+      updateData.orderPickedTime = new Date();
+    }
+
+    if (normalizedStatus === "delivered") {
+      updateData.orderDeliveredTime = new Date();
+    }
+
+    const orderDoc = await Order.findById(id).lean();
 
     if (driverId) {
       const driverDoc = await driver.findOne({ _id: driverId });
@@ -1289,10 +1276,9 @@ exports.orderStatus = async (req, res) => {
 
       if (!status || status === "" || status === undefined) {
         updateData.orderStatus = "Going to Pickup";
+        updateData.orderPickedTime = new Date();
       }
       // ✅ Fetch the order before update to get user & store info for notification
-      const orderDoc = await Order.findById(id).lean();
-
       if (orderDoc) {
         const user = await User.findById(orderDoc.userId).lean();
         const storeData = await Store.findById(orderDoc.storeId).lean();
@@ -1355,6 +1341,21 @@ exports.orderStatus = async (req, res) => {
     if (orderOnTheWay && status === "Accepted") {
       return res.status(200).json({ message: "Order Already Accepted" });
     }
+
+    if (normalizedStatus === "ready") {
+      const readyTime = new Date();
+
+      updateData.orderReadyTime = readyTime;
+      if (orderDoc.orderAcceptedBy === "seller") {
+        const acceptedTime = new Date(orderDoc.orderAceptedTime);
+
+        const diffMs = readyTime - acceptedTime;
+
+        // minutes
+        updateData.avgPreparationTime = Math.round(diffMs / 60000);
+      }
+    }
+
     // 1. Update order status
     const updatedOrder = await Order.findByIdAndUpdate(id, updateData, {
       new: true,
@@ -1423,11 +1424,7 @@ exports.orderStatus = async (req, res) => {
     if (!updatedOrder)
       return res.status(404).json({ message: "Order not found" });
 
-    const shouldAutoAssignDriver =
-      normalizedStatus === "accepted" ||
-      (normalizedStatus === "preparing" && isFoodOrder(updatedOrder));
-
-    if (shouldAutoAssignDriver) {
+    if (normalizedStatus === "ready") {
       autoAssignDriver(updatedOrder._id).catch((err) => {
         console.error("Driver assignment failed:", err.message);
       });

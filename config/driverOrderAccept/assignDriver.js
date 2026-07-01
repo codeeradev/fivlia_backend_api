@@ -219,21 +219,6 @@ const removeSocketOrderListeners = (socket, orderKey) => {
   socket.__orderListenerRegistry.delete(orderKey);
 };
 
-const isFoodPreparingOrder = (order) => {
-  const normalizedStatus = String(order?.orderStatus || "")
-    .trim()
-    .toLowerCase();
-
-  if (normalizedStatus !== "preparing") return false;
-
-  return (order?.items || []).some(
-    (item) =>
-      String(item?.typeName || "")
-        .trim()
-        .toLowerCase() === "food",
-  );
-};
-
 // Main order broadcast flow with retry, acceptance race protection, and cleanup.
 const assignWithBroadcast = async (order, drivers) => {
   const orderId = order.orderId.toString();
@@ -481,7 +466,6 @@ const assignWithBroadcast = async (order, drivers) => {
 
         // Atomic DB update to prevent race condition
         const latestOrder = await Order.findOne({ orderId }).lean();
-        const shouldKeepPreparingStatus = isFoodPreparingOrder(latestOrder);
 
         const orderUpdate = {
           driver: {
@@ -490,10 +474,6 @@ const assignWithBroadcast = async (order, drivers) => {
             mobileNumber: driver.address?.mobileNo,
           },
         };
-
-        if (!shouldKeepPreparingStatus) {
-          orderUpdate.orderStatus = "Going to Pickup";
-        }
 
         const updateResult = await Order.findOneAndUpdate(
           { orderId, "driver.driverId": { $exists: false } },

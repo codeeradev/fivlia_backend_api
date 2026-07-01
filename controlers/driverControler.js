@@ -41,21 +41,6 @@ const jwt = require("jsonwebtoken");
 const order = require("../modals/order");
 const { updateAt } = require("./categorycontroler");
 
-const isFoodPreparingOrder = (order) => {
-  const normalizedStatus = String(order?.orderStatus || "")
-    .trim()
-    .toLowerCase();
-
-  if (normalizedStatus !== "preparing") return false;
-
-  return (order?.items || []).some(
-    (item) =>
-      String(item?.typeName || "")
-        .trim()
-        .toLowerCase() === "food",
-  );
-};
-
 const toIST = (date) => {
   if (!date) return null;
 
@@ -188,10 +173,6 @@ exports.acceptOrder = async (req, res) => {
           mobileNumber: driverData.address.mobileNo,
         },
       };
-
-      if (!isFoodPreparingOrder(existingOrder)) {
-        orderUpdate.orderStatus = "Going to Pickup";
-      }
 
       updatedOrder = await Order.findOneAndUpdate({ orderId }, orderUpdate, {
         new: true,
@@ -592,8 +573,6 @@ exports.acceptedOrder = async (req, res) => {
           "On The Way",
           "Going to Pickup",
           "On Way",
-          "Preparing",
-          "preparing",
           "Ready",
         ],
       },
