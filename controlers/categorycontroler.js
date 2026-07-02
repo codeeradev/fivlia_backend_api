@@ -1147,8 +1147,11 @@ exports.editCat = async (req, res) => {
     const { id } = req.params;
     let { name, description, filter, attribute, status, typeId } = req.body;
 
+    console.log("Request body:", req.body);
     const image = req.file ? req.file.filename : undefined;
 
+    console.log("Request file:", req.file);
+    console.log("req.params:", req.params);
     if (filter) {
       filter = JSON.parse(filter);
 
@@ -1195,7 +1198,12 @@ exports.editCat = async (req, res) => {
         }
 
         for (let subsub of sub.subsubcat || []) {
+          console.log(
+            "Updating sub-subcategory for loop:",
+            subsub._id.toString(),
+          );
           if (subsub._id.toString() === id) {
+            console.log("Updating sub-subcategory:", subsub._id.toString());
             if (name !== undefined) subsub.name = name;
             if (description !== undefined) subsub.description = description;
             if (image !== undefined) subsub.image = image;
