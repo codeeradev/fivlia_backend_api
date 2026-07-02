@@ -1185,14 +1185,22 @@ exports.editCat = async (req, res) => {
     } else {
       for (let sub of mainCat.subcat) {
         if (sub._id.toString() === id) {
-          sub.status = status;
+          if (name !== undefined) sub.name = name;
+          if (description !== undefined) sub.description = description;
+          if (image !== undefined) sub.image = image;
+          if (status !== undefined) sub.status = status;
+
           updated = true;
           break;
         }
 
         for (let subsub of sub.subsubcat || []) {
           if (subsub._id.toString() === id) {
-            subsub.status = status;
+            if (name !== undefined) subsub.name = name;
+            if (description !== undefined) subsub.description = description;
+            if (image !== undefined) subsub.image = image;
+            if (status !== undefined) subsub.status = status;
+
             updated = true;
             break;
           }
