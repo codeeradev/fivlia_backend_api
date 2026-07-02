@@ -1248,7 +1248,7 @@ exports.orderStatus = async (req, res) => {
       updateData.orderAcceptedBy = type === "admin" ? "admin" : "seller";
       updateData.orderAceptedTime = new Date();
     }
-console.log(req.body, "req.body");
+    console.log(req.body, "req.body");
     if (normalizedStatus === "cancelled") {
       updateData.orderRejectedBy = type === "admin" ? "admin" : "seller";
     }
@@ -1338,7 +1338,7 @@ console.log(req.body, "req.body");
       },
     });
 
-    if (orderOnTheWay && status === "Accepted") {
+    if (orderOnTheWay && status === "accepted") {
       return res.status(200).json({ message: "Order Already Accepted" });
     }
 
@@ -1424,7 +1424,7 @@ console.log(req.body, "req.body");
     if (!updatedOrder)
       return res.status(404).json({ message: "Order not found" });
 
-    if (normalizedStatus === "ready") {
+    if (normalizedStatus === "accepted") {
       autoAssignDriver(updatedOrder._id).catch((err) => {
         console.error("Driver assignment failed:", err.message);
       });
