@@ -1148,7 +1148,9 @@ exports.editCat = async (req, res) => {
     let { name, description, filter, attribute, status, typeId } = req.body;
 
     console.log("Request body:", req.body);
-    const image = req.file ? req.file.filename : undefined;
+    const image = req.files?.image?.[0]?.key
+      ? `/${req.files.image[0].key}`
+      : undefined;
 
     console.log("Request file:", req.file);
     console.log("req.params:", req.params);
