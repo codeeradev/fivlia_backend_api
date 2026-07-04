@@ -436,6 +436,10 @@ const assignWithBroadcast = async (order, drivers) => {
         storeLng: orderStore?.Longitude || null,
         userLat: userLocation.latitude || null,
         userLng: userLocation.longitude || null,
+        deliveryPayout:
+          order.deliveryPayout != null
+            ? Number(order.deliveryPayout).toFixed(2)
+            : null,
       };
 
       socket.emit("newOrder", {
