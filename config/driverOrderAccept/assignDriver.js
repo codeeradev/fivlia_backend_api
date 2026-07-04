@@ -405,14 +405,14 @@ const assignWithBroadcast = async (order, drivers) => {
               },
             },
           })
-          // .then(async () => {
-          //   console.log(`📩 Push sent to driver ${driverId}`);
+          .then(async () => {
+            console.log(`📩 Push sent to driver ${driverId}`);
 
-          //   await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
-          //     driverId,
-          //   });
-          // })
-          // .catch((err) => console.error("Push error:", err));
+            await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
+              driverId,
+            });
+          })
+          .catch((err) => console.error("Push error:", err));
       }
     });
 
