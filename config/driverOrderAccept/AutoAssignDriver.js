@@ -121,10 +121,10 @@ const autoAssignDriver = async (orderId) => {
 
     availableDrivers.sort((a, b) => a.distance - b.distance);
 
-    await telegramOrderLog("🚚 RAW DRIVERS", {
-      orderId: order.orderId,
-      drivers: rawDriversWithDistance,
-    });
+    // await telegramOrderLog("🚚 RAW DRIVERS", {
+    //   orderId: order.orderId,
+    //   drivers: rawDriversWithDistance,
+    // });
 
     await telegramOrderLog("📍 AVAILABLE DRIVERS", {
       orderId: order.orderId,

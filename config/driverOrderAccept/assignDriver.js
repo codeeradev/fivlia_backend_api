@@ -405,14 +405,14 @@ const assignWithBroadcast = async (order, drivers) => {
               },
             },
           })
-          .then(async () => {
-            console.log(`📩 Push sent to driver ${driverId}`);
+          // .then(async () => {
+          //   console.log(`📩 Push sent to driver ${driverId}`);
 
-            await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
-              driverId,
-            });
-          })
-          .catch((err) => console.error("Push error:", err));
+          //   await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
+          //     driverId,
+          //   });
+          // })
+          // .catch((err) => console.error("Push error:", err));
       }
     });
 
@@ -573,13 +573,6 @@ const assignWithBroadcast = async (order, drivers) => {
           cleanupAllListeners();
         } catch (err) {
           console.error("Accept Order Error:", err);
-
-          // Client response
-          callback?.({
-            status: false,
-            message: "Unable to accept order",
-          });
-
           // Telegram Error Log
           try {
             await telegramOrderLog("❌ DRIVER ACCEPT FAILED", {
