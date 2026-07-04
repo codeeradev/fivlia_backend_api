@@ -438,7 +438,7 @@ const assignWithBroadcast = async (order, drivers) => {
         userLng: userLocation.longitude || null,
         deliveryPayout:
           order.deliveryPayout != null
-            ? Number(order.deliveryPayout).toFixed(2)
+            ? Math.round(Number(order.deliveryPayout) * 100) / 100
             : null,
       };
 
