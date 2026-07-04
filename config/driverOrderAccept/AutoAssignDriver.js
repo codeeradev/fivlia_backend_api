@@ -74,6 +74,15 @@ const autoAssignDriver = async (orderId) => {
     const availableDrivers = [];
     const rawDriversWithDistance = [];
 
+    const SPECIAL_STORE_ID = "68c24838f9cf1104714f2f23";
+
+    const SPECIAL_DRIVER_IDS = [
+      "69c66c8b11e3744c3d212e7a", // test driver rishur
+      "68f1d8c5a72119a8c21c6c34", // TestDriver
+    ];
+
+    const isSpecialStore = String(order.storeId) === SPECIAL_STORE_ID;
+
     for (let d of drivers) {
       if (busyDriverIds.includes(String(d._id))) continue;
       if (rejectedDriverIdsForOrder.includes(String(d._id))) continue;
@@ -97,7 +106,13 @@ const autoAssignDriver = async (orderId) => {
 
       rawDriversWithDistance.push(`${d.driverName} (${d._id}) | ${distance}m`);
 
-      if (distance <= (zoneRange || 5000)) {
+      if (
+        String(order.storeId) === SPECIAL_STORE_ID &&
+        !SPECIAL_DRIVER_IDS.includes(String(d._id))
+      ) {
+        continue;
+      }
+      if (isSpecialStore || distance <= (zoneRange || 5000)) {
         console.log(
           "Raw Drivers",
           drivers.map((dr) => String(dr.driverName)),
