@@ -276,6 +276,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
         // ===== send to user =====
         if (user?.fcmToken) {
+          try{
           await admin.messaging().send({
             token: user.fcmToken,
             notification: {
@@ -289,6 +290,9 @@ const assignWithBroadcast = async (order, drivers) => {
             ),
             data: { type: "cancelled", orderId },
           });
+          }catch(err){
+            console.error(`❌ Push to user ${user._id} failed:`, err.message);
+          }
         }
 
         // ===== send to store =====
@@ -521,10 +525,12 @@ const assignWithBroadcast = async (order, drivers) => {
 
         console.log(`🎉 Driver ${driverId} accepted order ${orderId}`);
 
-        await telegramOrderLog("✅ DRIVER ACCEPTED", {
+        telegramOrderLog("✅ DRIVER ACCEPTED", {
           orderId,
           driverId,
           driverName: driver.driverName,
+        }).catch((err) => {
+          console.error("Telegram Log:", err.message);
         });
 
         clearDispatchTimeout(orderId);
