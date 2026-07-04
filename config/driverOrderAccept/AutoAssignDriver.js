@@ -105,15 +105,15 @@ const autoAssignDriver = async (orderId) => {
 
         console.log("Busy Drivers", busyDriverIds);
 
-        await telegramOrderLog("🚚 BUSY DRIVERS", {
-          orderId: order.orderId,
-          busyDrivers: busyDriverIds,
-        });
+        // await telegramOrderLog("🚚 BUSY DRIVERS", {
+        //   orderId: order.orderId,
+        //   busyDrivers: busyDriverIds,
+        // });
         console.log("Rejected Drivers for Order", rejectedDriverIdsForOrder);
-        await telegramOrderLog("❌ REJECTED DRIVERS", {
-          orderId: order.orderId,
-          rejectedDrivers: rejectedDriverIdsForOrder,
-        });
+        // await telegramOrderLog("❌ REJECTED DRIVERS", {
+        //   orderId: order.orderId,
+        //   rejectedDrivers: rejectedDriverIdsForOrder,
+        // });
         availableDrivers.push({ driverz: d, distance });
         console.log("Available driver:", availableDrivers);
       }

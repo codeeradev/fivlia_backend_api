@@ -276,21 +276,21 @@ const assignWithBroadcast = async (order, drivers) => {
 
         // ===== send to user =====
         if (user?.fcmToken) {
-          try{
-          await admin.messaging().send({
-            token: user.fcmToken,
-            notification: {
-              title: "Order Cancelled ❌",
-              body: `Your order #${orderId} was cancelled as no driver accepted.`,
-            },
-            ...buildPlatformPushConfig(
-              "Order Cancelled ❌",
-              `Your order #${orderId} was cancelled as no driver accepted.`,
-              DEFAULT_PUSH_SOUND,
-            ),
-            data: { type: "cancelled", orderId },
-          });
-          }catch(err){
+          try {
+            await admin.messaging().send({
+              token: user.fcmToken,
+              notification: {
+                title: "Order Cancelled ❌",
+                body: `Your order #${orderId} was cancelled as no driver accepted.`,
+              },
+              ...buildPlatformPushConfig(
+                "Order Cancelled ❌",
+                `Your order #${orderId} was cancelled as no driver accepted.`,
+                DEFAULT_PUSH_SOUND,
+              ),
+              data: { type: "cancelled", orderId },
+            });
+          } catch (err) {
             console.error(`❌ Push to user ${user._id} failed:`, err.message);
           }
         }
@@ -461,111 +461,134 @@ const assignWithBroadcast = async (order, drivers) => {
         { driverId: incomingDriverId, orderId: incomingOrderId },
         callback,
       ) => {
-        if (
-          incomingOrderId !== orderId ||
-          incomingDriverId !== driverId ||
-          orderAssigned
-        )
-          return;
+        try {
+          if (
+            incomingOrderId !== orderId ||
+            incomingDriverId !== driverId ||
+            orderAssigned
+          )
+            return;
 
-        // Atomic DB update to prevent race condition
-        const latestOrder = await Order.findOne({ orderId }).lean();
+          // Atomic DB update to prevent race condition
+          const latestOrder = await Order.findOne({ orderId }).lean();
 
-        const orderUpdate = {
-          driver: {
+          const orderUpdate = {
+            driver: {
+              driverId,
+              name: driver.driverName,
+              mobileNumber: driver.address?.mobileNo,
+            },
+          };
+
+          orderUpdate.orderStatus = "Going to Pickup";
+
+          const updateResult = await Order.findOneAndUpdate(
+            { orderId, "driver.driverId": { $exists: false } },
+            orderUpdate,
+            { new: true },
+          );
+
+          if (!updateResult) {
+            socket.emit("orderAlreadyAccepted", { orderId });
+            if (callback) {
+              callback({
+                status: false,
+                message: "Order already accepted",
+              });
+            }
+
+            console.warn(
+              `🉑 orderAlreadyAccepted for ${driverId} - ${orderId}`,
+            );
+            return;
+          }
+
+          // new socket code of user order status
+          await emitUserOrderStatusUpdate(
+            updateResult,
+            "assignDriver.driverAccepted",
+          );
+
+          orderAssigned = true;
+          respondedDriversThisCycle.add(driverId);
+          await updateDispatchState(
+            orderId,
+            {
+              $set: { assigned: true, status: "assigned" },
+              $addToSet: { respondedDrivers: driverId },
+            },
+            async (redis, keys) => {
+              await Promise.all([
+                redis.hSet(keys.state, {
+                  assigned: "1",
+                  status: "assigned",
+                }),
+                redis.sAdd(keys.respondedDrivers, driverId),
+              ]);
+            },
+          );
+
+          console.log(`🎉 Driver ${driverId} accepted order ${orderId}`);
+
+          telegramOrderLog("✅ DRIVER ACCEPTED", {
+            orderId,
             driverId,
-            name: driver.driverName,
-            mobileNumber: driver.address?.mobileNo,
-          },
-        };
+            driverName: driver.driverName,
+          }).catch((err) => {
+            console.error("Telegram Log:", err.message);
+          });
 
-        orderUpdate.orderStatus = "Going to Pickup";
-        
-        const updateResult = await Order.findOneAndUpdate(
-          { orderId, "driver.driverId": { $exists: false } },
-          orderUpdate,
-          { new: true },
-        );
+          clearDispatchTimeout(orderId);
 
-        if (!updateResult) {
-          socket.emit("orderAlreadyAccepted", { orderId });
+          await Assign.updateOne(
+            { driverId, orderId },
+            { $set: { orderStatus: "Accepted" } },
+            { upsert: true },
+          );
+
+          availableDrivers.forEach((d) => {
+            const otherSocket = driverSocketMap.get(d._id.toString());
+            if (d._id.toString() !== driverId && otherSocket) {
+              otherSocket.emit("orderTaken", { orderId });
+            }
+          });
+          await Promise.all(
+            availableDrivers.map((d) =>
+              removePendingDriverOffer(d._id.toString(), orderId),
+            ),
+          );
+
           if (callback) {
             callback({
-              status: false,
-              message: "Order already accepted",
+              status: true,
+              message: "Order accepted successfully",
+              orderId,
             });
           }
 
-          console.warn(`🉑 orderAlreadyAccepted for ${driverId} - ${orderId}`);
-          return;
-        }
+          cleanupAllListeners();
+        } catch (err) {
+          console.error("Accept Order Error:", err);
 
-        // new socket code of user order status
-        await emitUserOrderStatusUpdate(
-          updateResult,
-          "assignDriver.driverAccepted",
-        );
-
-        orderAssigned = true;
-        respondedDriversThisCycle.add(driverId);
-        await updateDispatchState(
-          orderId,
-          {
-            $set: { assigned: true, status: "assigned" },
-            $addToSet: { respondedDrivers: driverId },
-          },
-          async (redis, keys) => {
-            await Promise.all([
-              redis.hSet(keys.state, {
-                assigned: "1",
-                status: "assigned",
-              }),
-              redis.sAdd(keys.respondedDrivers, driverId),
-            ]);
-          },
-        );
-
-        console.log(`🎉 Driver ${driverId} accepted order ${orderId}`);
-
-        telegramOrderLog("✅ DRIVER ACCEPTED", {
-          orderId,
-          driverId,
-          driverName: driver.driverName,
-        }).catch((err) => {
-          console.error("Telegram Log:", err.message);
-        });
-
-        clearDispatchTimeout(orderId);
-
-        await Assign.updateOne(
-          { driverId, orderId },
-          { $set: { orderStatus: "Accepted" } },
-          { upsert: true },
-        );
-
-        availableDrivers.forEach((d) => {
-          const otherSocket = driverSocketMap.get(d._id.toString());
-          if (d._id.toString() !== driverId && otherSocket) {
-            otherSocket.emit("orderTaken", { orderId });
-          }
-        });
-        await Promise.all(
-          availableDrivers.map((d) =>
-            removePendingDriverOffer(d._id.toString(), orderId),
-          ),
-        );
-
-        if (callback) {
-          callback({
-            status: true,
-            message: "Order accepted successfully",
-            orderId,
+          // Client response
+          callback?.({
+            status: false,
+            message: "Unable to accept order",
           });
+
+          // Telegram Error Log
+          try {
+            await telegramOrderLog("❌ DRIVER ACCEPT FAILED", {
+              orderId,
+              driverId,
+              driverName: driver?.driverName,
+              reason: err.message,
+            });
+          } catch (e) {
+            console.error("Telegram Log Error:", e.message);
+          }
         }
-
-        cleanupAllListeners();
       };
-
       // --- Reject Handler ---
       const handleReject = async ({
         driverId: incomingDriverId,
