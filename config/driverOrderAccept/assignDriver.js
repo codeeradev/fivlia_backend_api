@@ -479,6 +479,8 @@ const assignWithBroadcast = async (order, drivers) => {
           },
         };
 
+        orderUpdate.orderStatus = "Going to Pickup";
+        
         const updateResult = await Order.findOneAndUpdate(
           { orderId, "driver.driverId": { $exists: false } },
           orderUpdate,
