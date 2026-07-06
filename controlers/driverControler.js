@@ -565,21 +565,20 @@ exports.driverOrderStatus = async (req, res) => {
 
 exports.acceptedOrder = async (req, res) => {
   try {
-    console.log("i hit")
+    console.log("i hit");
     const { mobileNumber } = req.params;
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
       orderStatus: {
-        $in: [
-          "On The Way",
-          "Going to Pickup",
-          "On Way",
-          "Ready",
-        ],
+        $in: ["On The Way", "Going to Pickup", "On Way", "Ready"],
       },
     });
     const enrichedOrders = await Promise.all(
       AcceptedOrders.map(async (order) => {
+        console.log("Order id:", order.orderId);
+        console.log("createdAt (UTC):", order.createdAt);
+        console.log("createdAt (IST):", toIST(order.createdAt));
+
         const address1 = await Address.findById(order.addressId);
         const storeAddress = await Store.findById(order.storeId);
 
@@ -600,7 +599,6 @@ exports.acceptedOrder = async (req, res) => {
         };
       }),
     );
-
     return res.status(200).json({ message: "Orders", enrichedOrders });
   } catch (error) {
     console.error(error);
