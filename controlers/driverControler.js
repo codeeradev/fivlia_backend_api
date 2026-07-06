@@ -594,8 +594,8 @@ exports.acceptedOrder = async (req, res) => {
           storeContact: storeAddress?.PhoneNumber,
           userLat: address1?.latitude,
           userLng: address1?.longitude,
-          // createdAt: toIST(order.createdAt),
-          // updateAt: toIST(order.updatedAt),
+          createdAt: toIST(order.createdAt),
+          updateAt: toIST(order.updatedAt),
         };
       }),
     );
