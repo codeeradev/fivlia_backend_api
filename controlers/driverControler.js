@@ -565,7 +565,6 @@ exports.driverOrderStatus = async (req, res) => {
 
 exports.acceptedOrder = async (req, res) => {
   try {
-    console.log("i hit");
     const { mobileNumber } = req.params;
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
@@ -575,9 +574,6 @@ exports.acceptedOrder = async (req, res) => {
     });
     const enrichedOrders = await Promise.all(
       AcceptedOrders.map(async (order) => {
-        console.log("Order id:", order.orderId);
-        console.log("createdAt (UTC):", order.createdAt);
-        console.log("createdAt (IST):", toIST(order.createdAt));
 
         const address1 = await Address.findById(order.addressId);
         const storeAddress = await Store.findById(order.storeId);
