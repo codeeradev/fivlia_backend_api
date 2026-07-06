@@ -565,6 +565,7 @@ exports.driverOrderStatus = async (req, res) => {
 
 exports.acceptedOrder = async (req, res) => {
   try {
+    console.log("i hit")
     const { mobileNumber } = req.params;
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
@@ -594,8 +595,8 @@ exports.acceptedOrder = async (req, res) => {
           storeContact: storeAddress?.PhoneNumber,
           userLat: address1?.latitude,
           userLng: address1?.longitude,
-          // createdAt: toIST(order.createdAt),
-          // updateAt: toIST(order.updatedAt),
+          createdAt: toIST(order.createdAt),
+          updateAt: toIST(order.updatedAt),
         };
       }),
     );
