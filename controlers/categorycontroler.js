@@ -1627,7 +1627,7 @@ exports.getMainCategory = async (req, res) => {
         _id: { $in: req.categoryIds },
       });
 
-      console.log("categories", categories)
+      console.log("categories", categories.name)
       return res.status(200).send({
         message: "Success",
         typeId: req.typeId,
@@ -1673,7 +1673,7 @@ exports.getMainCategory = async (req, res) => {
       }),
     );
 
-    console.log('enriched', enriched)
+    console.log('enriched', enriched.name)
     res.status(200).send({
       message: "Success",
       limit,
