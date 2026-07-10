@@ -1615,7 +1615,9 @@ exports.getMainCategory = async (req, res) => {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;
 
+    console.log("req.typeId", req.typeId)
     if (req.typeId) {
+      console.log('i run')
       const categories = await Category.find({ _id: { $in: req.categoryIds } })
         .skip(skip)
         .limit(Number(limit))
@@ -1625,6 +1627,7 @@ exports.getMainCategory = async (req, res) => {
         _id: { $in: req.categoryIds },
       });
 
+      console.log("categories", categories)
       return res.status(200).send({
         message: "Success",
         typeId: req.typeId,
@@ -1636,6 +1639,7 @@ exports.getMainCategory = async (req, res) => {
       });
     }
 
+    console.log('i run2')
     // Get total categories for pagination
     const totalCategories = await Category.countDocuments();
 
@@ -1669,6 +1673,7 @@ exports.getMainCategory = async (req, res) => {
       }),
     );
 
+    console.log('enriched', enriched)
     res.status(200).send({
       message: "Success",
       limit,
