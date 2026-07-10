@@ -16,6 +16,22 @@ require("./jobs/orderNotificationRetry");
 
 const app = express();
 app.set("etag", false);
+
+app.use((req, res, next) => {
+  const start = process.hrtime.bigint();
+
+  res.on("finish", () => {
+    const end = process.hrtime.bigint();
+    const duration = Number(end - start) / 1_000_000; // ms
+
+    console.log(
+      `[${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration.toFixed(2)} ms`
+    );
+  });
+
+  next();
+});
+
 app.use(cors());
 
 app.use(
