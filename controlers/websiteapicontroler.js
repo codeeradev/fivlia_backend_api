@@ -37,6 +37,7 @@ const {
   buildOfferPreviewText,
 } = require("../utils/storeOffer");
 const { Order, TempOrder } = require("../modals/order");
+const foodTypeModel = require("../modals/foodType");
 
 exports.forwebbestselling = async (req, res) => {
   try {
@@ -1036,9 +1037,9 @@ exports.forwebsearchProduct = async (req, res) => {
 
     const sellers = name
       ? await Store.find({
-        _id: { $in: allowedStoreIds },
-        storeName: { $regex: name, $options: "i" },
-      }).lean()
+          _id: { $in: allowedStoreIds },
+          storeName: { $regex: name, $options: "i" },
+        }).lean()
       : [];
 
     // Enrich product objects with inventory, price, best store etc.
@@ -1586,7 +1587,11 @@ exports.getAllSellerProducts = async (req, res) => {
 
     const productFilter = { _id: { $in: productIds } };
 
-    if (seller.typeId !== undefined && seller.typeId !== null) {
+    const FOOD_TYPE_ID = "69cf8a31ad92aee54ecb1e72";
+
+    const isFoodSeller = seller.typeId?.toString() === FOOD_TYPE_ID;
+
+    if (!isFoodSeller && seller.typeId) {
       const categoryIds = await Category.find({
         typeId: seller.typeId,
       }).distinct("_id");
@@ -1594,10 +1599,15 @@ exports.getAllSellerProducts = async (req, res) => {
       productFilter["category._id"] = {
         $in: categoryIds,
       };
+    } else {
+      // Food seller
+      productFilter.typeId = new mongoose.Types.ObjectId(FOOD_TYPE_ID);
+      // ya agar foodTypeId compulsory hai:
+      productFilter.foodTypeId = { $exists: true };
     }
 
     if (veg === true || veg === "true") {
-      productFilter.isVeg = 1
+      productFilter.isVeg = 1;
     }
 
     const total = await Products.countDocuments(productFilter);
@@ -1652,7 +1662,37 @@ exports.getAllSellerProducts = async (req, res) => {
         });
 
         // Determine category name + commission if needed
-        const categoryName = prod.category?.name ?? "Uncategorized";
+        const FOOD_TYPE_ID = "69cf8a31ad92aee54ecb1e72";
+
+        const foodTypeIds = [
+          ...new Set(
+            sellerProducts
+              .filter(
+                (p) => p.typeId?.toString() === FOOD_TYPE_ID && p.foodTypeId,
+              )
+              .map((p) => p.foodTypeId.toString()),
+          ),
+        ];
+
+        const foodTypes = await foodTypeModel
+          .find({
+            _id: { $in: foodTypeIds },
+          })
+          .lean();
+
+        const foodTypeMap = {};
+        foodTypes.forEach((f) => {
+          foodTypeMap[f._id.toString()] = f;
+        });
+
+        let categoryName = "Uncategorized";
+
+        if (prod.typeId?.toString() === FOOD_TYPE_ID) {
+          categoryName =
+            foodTypeMap[prod.foodTypeId?.toString()]?.name || "Food";
+        } else {
+          categoryName = prod.category?.[0]?.name || "Uncategorized";
+        }
 
         return {
           ...prod,
@@ -1898,8 +1938,7 @@ exports.getTopSeller = async (req, res) => {
           ? `${offerMap[store._id.toString()]}`
           : null,
 
-        deliveredOrders:
-          deliveredOrderMap[store._id.toString()] || 0,
+        deliveredOrders: deliveredOrderMap[store._id.toString()] || 0,
 
         totalItems: itemCountMap[store._id.toString()] || 0,
       };
@@ -2141,12 +2180,12 @@ exports.forwebGetSingleProduct = async (req, res) => {
       ...product,
       bestStore: bestOption
         ? {
-          id: bestOption.storeId,
-          name: bestOption.storeName,
-          price: bestOption.price,
-          mrp: bestOption.mrp,
-          distance: bestOption.distance,
-        }
+            id: bestOption.storeId,
+            name: bestOption.storeName,
+            price: bestOption.price,
+            mrp: bestOption.mrp,
+            distance: bestOption.distance,
+          }
         : null,
       inventory: (product.variants || []).map((variant) => {
         const match = variantOptions.find(

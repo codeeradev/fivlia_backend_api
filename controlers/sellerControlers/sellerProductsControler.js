@@ -334,7 +334,7 @@ exports.getSellerProducts = async (req, res) => {
     search = "",
     category = "",
   } = req.query;
-console.log('i getSellerProducts run')
+
   try {
     if (!sellerId) {
       return res
