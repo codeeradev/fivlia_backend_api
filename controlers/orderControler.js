@@ -1244,6 +1244,7 @@ exports.orderStatus = async (req, res) => {
 
     const updateData = { orderStatus: status };
 
+    let isDelivered = false
     if (normalizedStatus === "accepted") {
       updateData.orderAcceptedBy = type === "admin" ? "admin" : "seller";
       updateData.orderAceptedTime = new Date();
@@ -1259,6 +1260,7 @@ exports.orderStatus = async (req, res) => {
 
     if (normalizedStatus === "delivered") {
       updateData.orderDeliveredTime = new Date();
+      isDelivered = true
     }
 
     const orderDoc = await Order.findById(id).lean();
@@ -1700,7 +1702,7 @@ exports.orderStatus = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Order Status Updated", update: updatedOrder });
+      .json({ message: "Order Status Updated", isDelivered, update: updatedOrder });
   } catch (error) {
     console.error("Order status error:", error.message);
     return res
