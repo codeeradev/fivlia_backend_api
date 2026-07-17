@@ -200,6 +200,8 @@ exports.driverOrderStatus = async (req, res) => {
   try {
     const { orderStatus, orderId, otp } = req.body;
 
+    let isDelivered = false
+
     // ===> On The Way block
     if (orderStatus === "On Way") {
       //On Way
@@ -254,6 +256,7 @@ exports.driverOrderStatus = async (req, res) => {
       return res.status(200).json({
         message: `OTP sent to ${mobileNumber}`,
         otp: generatedOtp,
+        isDelivered,
         statusUpdate,
       });
     }
@@ -267,6 +270,7 @@ exports.driverOrderStatus = async (req, res) => {
         console.log(`Order ${orderId} already processed for delivery.`);
       } else {
         console.log(`Processing delivery logic for order ${orderId}...`);
+        isDelivered = true
         let feeInvoiceId = await FeeInvoiceId(true);
         const otpRecord = await OtpModel.findOne({ orderId, otp });
         if (!otpRecord) {
@@ -535,6 +539,7 @@ exports.driverOrderStatus = async (req, res) => {
 
         return res.status(200).json({
           message: "Order Delivered Successfully",
+          isDelivered,
           statusUpdate,
         });
       }
@@ -555,6 +560,7 @@ exports.driverOrderStatus = async (req, res) => {
 
     return res.status(200).json({
       message: "Status Updated Successfully",
+      isDelivered,
       statusUpdate,
     });
   } catch (error) {
