@@ -73,6 +73,7 @@ const orderSchema = new mongoose.Schema(
     freeDeliveryThreshold: { type: Number, default: 0 },
     sellerSponsoredDeliveryPayout: { type: Number, default: 0 },
     offerSummary: { type: mongoose.Schema.Types.Mixed, default: null },
+    ready_in_min:Number,
   },
   { timestamps: true },
 );
@@ -118,6 +119,7 @@ const TempOrderSchema = new mongoose.Schema(
     foodSellerTaxPercent: { type: Number, default: 0 },
     foodSellerTaxAmount: { type: Number, default: 0 },
     instructions: String,
+    ready_in_min:Number,
     instructionStatus: {
       type: String,
       enum: ["pending", "read"],

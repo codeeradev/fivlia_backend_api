@@ -49,6 +49,7 @@ perKmCharges:Number,
 fixNightDeliveryCharges:Number,
 perKmNightCharges:Number,
 foodGlobalCommission:Number,
+ready_in_min:Number,
 });
 
 module.exports ={

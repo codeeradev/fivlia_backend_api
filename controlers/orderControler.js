@@ -306,6 +306,7 @@ exports.placeOrder = async (req, res) => {
     let freeDeliverySource = null;
     let freeDeliveryThreshold = 0;
     let sellerSponsoredDeliveryPayout = 0;
+    const ready_in_min = chargesData.ready_in_min
 
     const itemsTotal = offerContext.cartDiscount.finalSubtotal;
     const platformFeeRate = (chargesData.Platform_Fee || 0) / 100;
@@ -540,6 +541,7 @@ exports.placeOrder = async (req, res) => {
         freeDeliveryThreshold,
         sellerSponsoredDeliveryPayout,
         offerSummary,
+        ready_in_min,
       });
 
       console.log(`${nextOrderId} doc created`);
@@ -695,6 +697,7 @@ exports.placeOrder = async (req, res) => {
         freeDeliveryThreshold,
         sellerSponsoredDeliveryPayout,
         offerSummary,
+        ready_in_min,
       });
       const payResponse = await createRazorpayOrder(
         totalPrice,
@@ -901,7 +904,7 @@ exports.verifyPayment = async (req, res) => {
       transactionId: transactionId || paymentResult?.raw?.id || "",
       paymentStatus: "Successful",
       orderStatus: "Pending",
-
+      ready_in_min:tempOrder.ready_in_min,
       notifyAttempts: 0,
       lastNotifyAt: null,
     };
