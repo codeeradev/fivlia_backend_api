@@ -460,7 +460,7 @@ exports.addProduct = async (req, res) => {
       ...(finalVariants.length && { variants: finalVariants }),
       ...(ratings && { ratings }),
       ...(mrp && { mrp }),
-          foodTypeId,
+      ...(foodTypeId && { foodTypeId }),
       ...(isVeg && { isVeg }),
       ...(sell_price && { sell_price }),
       ...(sellerId && {
