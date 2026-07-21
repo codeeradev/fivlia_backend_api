@@ -50,6 +50,7 @@ fixNightDeliveryCharges:Number,
 perKmNightCharges:Number,
 foodGlobalCommission:Number,
 ready_in_min:Number,
+referralAmount:Number,
 });
 
 module.exports ={

@@ -63,6 +63,7 @@ const {
   withdrawalRequest,
   getDriverRequest,
   getDriverReferralSeller,
+  claimReferral,
   saveDriverRating,
   tipDriver,
   getDriverRating,
@@ -456,6 +457,7 @@ router.get("/getStoreCategory", getStoreCategory);
 router.get("/getStoreByCategory/:categoryId", verifyToken, getStoreByCategory);
 router.get("/getDriverRequest", getDriverRequest);
 router.post("/get-driver-referral-seller", getDriverReferralSeller);
+router.post("/claim-referral", verifyToken, claimReferral);
 router.post("/rate-driver", saveDriverRating);
 //website
 

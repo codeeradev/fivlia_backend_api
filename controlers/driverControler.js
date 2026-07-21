@@ -200,7 +200,7 @@ exports.driverOrderStatus = async (req, res) => {
   try {
     const { orderStatus, orderId, otp } = req.body;
 
-    let isDelivered = false
+    let isDelivered = false;
 
     // ===> On The Way block
     if (orderStatus === "On Way") {
@@ -270,7 +270,7 @@ exports.driverOrderStatus = async (req, res) => {
         console.log(`Order ${orderId} already processed for delivery.`);
       } else {
         console.log(`Processing delivery logic for order ${orderId}...`);
-        isDelivered = true
+        isDelivered = true;
         let feeInvoiceId = await FeeInvoiceId(true);
         const otpRecord = await OtpModel.findOne({ orderId, otp });
         if (!otpRecord) {
@@ -580,7 +580,6 @@ exports.acceptedOrder = async (req, res) => {
     });
     const enrichedOrders = await Promise.all(
       AcceptedOrders.map(async (order) => {
-
         const address1 = await Address.findById(order.addressId);
         const storeAddress = await Store.findById(order.storeId);
 
@@ -1054,8 +1053,15 @@ exports.getDriverReferralSeller = async (req, res) => {
     if (!driverData) {
       return res.status(404).json({ message: "Driver not found" });
     }
+
+    // Fetch referral amount from settings
+    const settings = await SettingAdmin.findOne();
+    const referralAmount = settings?.referralAmount || 0;
+
     const stores = await Store.find({ referralCode: driverData.driverId })
-      .select("storeName email PhoneNumber city approveStatus status")
+      .select(
+        "storeName email PhoneNumber city approveStatus status referralClaimed referralClaimedAt referralAmount",
+      )
       .lean();
     if (!stores.length) {
       return res
@@ -1066,12 +1072,16 @@ exports.getDriverReferralSeller = async (req, res) => {
     const storesWithCommission = stores.map((store) => ({
       ...store,
       city: store.city?.name || null,
-      commission: 0,
+      commission: referralAmount,
+      isClaimed: store.referralClaimed || false,
+      claimedAt: store.referralClaimedAt || null,
+      claimedAmount: store.referralAmount || 0,
     }));
 
     res.status(200).json({
       message: `Found ${storesWithCommission.length} store(s) with this referral code.`,
       stores: storesWithCommission,
+      referralAmount,
     });
   } catch (error) {
     console.error("Error fetching stores:", error);
@@ -1306,6 +1316,109 @@ exports.getDriverRating = async (req, res) => {
     console.error("Error getting driver rating:", error);
     return res.status(500).json({
       message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+exports.claimReferral = async (req, res) => {
+  try {
+    const { storeId } = req.body;
+
+    const driverId = req.user
+    // Validate inputs
+    if (!storeId) {
+      return res.status(400).json({
+        message: "Store ID are required",
+      });
+    }
+
+    // Find driver
+    let driverData = null;
+    if (mongoose.Types.ObjectId.isValid(driverId)) {
+      driverData = await driver.findById(driverId);
+    } else {
+      driverData = await driver.findOne({ _id: driverId });
+    }
+
+    if (!driverData) {
+      return res.status(404).json({ message: "Driver not found" });
+    }
+
+    // Find store
+    const store = await Store.findById(storeId);
+    if (!store) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+
+    // Check if store was referred by this driver
+    if (store.referralCode !== driverData.driverId) {
+      return res.status(400).json({
+        message: "This store was not referred by you",
+      });
+    }
+
+    // Check if already claimed
+    if (store.referralClaimed) {
+      return res.status(400).json({
+        message: "Referral bonus already claimed for this store",
+        claimedAt: store.referralClaimedAt,
+        claimedAmount: store.referralAmount,
+      });
+    }
+
+    // Check if store is approved
+    if (store.approveStatus !== "approved") {
+      return res.status(400).json({
+        message: "Store must be approved before claiming referral bonus",
+      });
+    }
+
+    // Get referral amount from settings
+    const settings = await SettingAdmin.findOne();
+    const referralAmount = settings?.referralAmount || 0;
+
+    if (referralAmount <= 0) {
+      return res.status(400).json({
+        message: "Referral amount is not configured please contact admin for more information",
+      });
+    }
+
+    // Update driver wallet
+    const updatedDriver = await driver.findByIdAndUpdate(
+      driverData._id,
+      { $inc: { wallet: referralAmount } },
+      { new: true },
+    );
+
+    // Create transaction record
+    await Transaction.create({
+      driverId: driverData._id,
+      type: "credit",
+      amount: referralAmount,
+      description: `Referral bonus for store: ${store.storeName}`,
+    });
+
+    // Mark referral as claimed in store
+    store.referralClaimed = true;
+    store.referralClaimedAt = new Date();
+    store.referralAmount = referralAmount;
+    await store.save();
+
+    return res.status(200).json({
+      message: "Referral bonus claimed successfully",
+      amount: referralAmount,
+      driverWallet: updatedDriver.wallet,
+      store: {
+        id: store._id,
+        name: store.storeName,
+        claimedAt: store.referralClaimedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error claiming referral:", error);
+    return res.status(500).json({
+      message: "Server error while claiming referral",
       error: error.message,
     });
   }
