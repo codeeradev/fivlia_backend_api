@@ -1245,7 +1245,11 @@ exports.orderStatus = async (req, res) => {
     const { status, driverId, type } = req.body;
     const normalizedStatus = normalizeOrderStatus(status);
 
-    const updateData = { orderStatus: status };
+    let updateData = { orderStatus: status };
+
+    if (normalizedStatus === "ready" || normalizedStatus === "ready to pickup") {
+      updateData = { orderStatus: "Ready To Pickup" }
+    }
 
     let isDelivered = false
     if (normalizedStatus === "accepted") {
@@ -1339,7 +1343,7 @@ exports.orderStatus = async (req, res) => {
     const orderOnTheWay = await Order.exists({
       _id: id,
       orderStatus: {
-        $in: ["On The Way", "Going to Pickup", "On Way", "Ready"],
+        $in: ["On The Way", "Going to Pickup", "On Way", "Ready", "Ready To Pickup"],
       },
     });
 
