@@ -1347,7 +1347,7 @@ exports.orderStatus = async (req, res) => {
       return res.status(200).json({ message: "Order Already Accepted" });
     }
 
-    if (normalizedStatus === "ready") {
+    if (normalizedStatus === "ready" || normalizedStatus === "ready to pickup") {
       const readyTime = new Date();
 
       updateData.orderReadyTime = readyTime;
