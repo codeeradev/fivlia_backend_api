@@ -164,3 +164,18 @@ exports.getTax = async (req, res) => {
       .json({ message: "Error getting settings", error: error.message });
   }
 };
+
+exports.homeScreenContent = async (req, res) => {
+  try {
+    const homeScreenSettings = await SettingAdmin.findOne().select("homeScreen");
+    return res
+      .status(200)
+      .json({
+        message: "Home screen settings fetched successfully.",
+        homeScreen: homeScreenSettings?.homeScreen || {},
+      });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ message: "Server Error" });
+  }
+};

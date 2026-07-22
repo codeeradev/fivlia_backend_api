@@ -51,6 +51,12 @@ perKmNightCharges:Number,
 foodGlobalCommission:Number,
 ready_in_min:Number,
 referralAmount:Number,
+homeScreen: {
+  food: String,
+  grocery: String,
+  mall: String,
+  allCategoryImage: String
+},
 });
 
 module.exports ={

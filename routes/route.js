@@ -150,6 +150,7 @@ const {
   adminSetting,
   getSmsType,
   getTax,
+  homeScreenContent
 } = require("../controlers/settingControler");
 const {
   users,
@@ -476,6 +477,7 @@ router.post("/save-contact-us", contactUs);
 router.get("/top-seller", typeCategoryResolver, getTopSeller);
 
 router.get("/getTax", getTax);
+router.get("/get-theme", homeScreenContent);
 router.get("/completedOrders/:mobileNumber", completedOrders);
 router.get("/getDriverDetail/:id", getDriverDetail);
 router.get("/cancelOrders/:driverId", cancelOrders);
