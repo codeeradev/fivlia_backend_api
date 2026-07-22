@@ -106,6 +106,16 @@ exports.adminSetting = async (req, res) => {
       updateFields = JSON.parse(req.body.payload);
     }
 
+    const currentSettings = await SettingAdmin.findOne().lean();
+
+    if (req.files?.file?.[0]) {
+      updateFields.homeScreen = {
+        ...(currentSettings?.homeScreen || {}),
+        ...(updateFields.homeScreen || {}),
+        allCategoryImage: `/${req.files.file[0].key}`,
+      };
+    }
+
     if (updateFields.Map_Api && updateFields.Map_Api[0]) {
       const mapApi = updateFields.Map_Api[0];
 
@@ -167,13 +177,12 @@ exports.getTax = async (req, res) => {
 
 exports.homeScreenContent = async (req, res) => {
   try {
-    const homeScreenSettings = await SettingAdmin.findOne().select("homeScreen");
-    return res
-      .status(200)
-      .json({
-        message: "Home screen settings fetched successfully.",
-        homeScreen: homeScreenSettings?.homeScreen || {},
-      });
+    const homeScreenSettings =
+      await SettingAdmin.findOne().select("homeScreen");
+    return res.status(200).json({
+      message: "Home screen settings fetched successfully.",
+      homeScreen: homeScreenSettings?.homeScreen || {},
+    });
   } catch (error) {
     console.log(error);
     return res.status(500).json({ message: "Server Error" });
