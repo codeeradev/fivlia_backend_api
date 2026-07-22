@@ -306,7 +306,7 @@ exports.placeOrder = async (req, res) => {
     let freeDeliverySource = null;
     let freeDeliveryThreshold = 0;
     let sellerSponsoredDeliveryPayout = 0;
-    const ready_in_min = chargesData.ready_in_min
+    const ready_in_min = chargesData.ready_in_min;
 
     const itemsTotal = offerContext.cartDiscount.finalSubtotal;
     const platformFeeRate = (chargesData.Platform_Fee || 0) / 100;
@@ -904,7 +904,7 @@ exports.verifyPayment = async (req, res) => {
       transactionId: transactionId || paymentResult?.raw?.id || "",
       paymentStatus: "Successful",
       orderStatus: "Pending",
-      ready_in_min:tempOrder.ready_in_min,
+      ready_in_min: tempOrder.ready_in_min,
       notifyAttempts: 0,
       lastNotifyAt: null,
     };
@@ -1247,11 +1247,14 @@ exports.orderStatus = async (req, res) => {
 
     let updateData = { orderStatus: status };
 
-    if (normalizedStatus === "ready" || normalizedStatus === "ready to pickup") {
-      updateData = { orderStatus: "Ready To Pickup" }
+    if (
+      normalizedStatus === "ready" ||
+      normalizedStatus === "ready to pickup"
+    ) {
+      updateData = { orderStatus: "Ready To Pickup" };
     }
 
-    let isDelivered = false
+    let isDelivered = false;
     if (normalizedStatus === "accepted") {
       updateData.orderAcceptedBy = type === "admin" ? "admin" : "seller";
       updateData.orderAceptedTime = new Date();
@@ -1267,7 +1270,7 @@ exports.orderStatus = async (req, res) => {
 
     if (normalizedStatus === "delivered") {
       updateData.orderDeliveredTime = new Date();
-      isDelivered = true
+      isDelivered = true;
     }
 
     const orderDoc = await Order.findById(id).lean();
@@ -1343,7 +1346,13 @@ exports.orderStatus = async (req, res) => {
     const orderOnTheWay = await Order.exists({
       _id: id,
       orderStatus: {
-        $in: ["On The Way", "Going to Pickup", "On Way", "Ready", "Ready To Pickup"],
+        $in: [
+          "On The Way",
+          "Going to Pickup",
+          "On Way",
+          "Ready",
+          "Ready To Pickup",
+        ],
       },
     });
 
@@ -1351,7 +1360,10 @@ exports.orderStatus = async (req, res) => {
       return res.status(200).json({ message: "Order Already Accepted" });
     }
 
-    if (normalizedStatus === "ready" || normalizedStatus === "ready to pickup") {
+    if (
+      normalizedStatus === "ready" ||
+      normalizedStatus === "ready to pickup"
+    ) {
       const readyTime = new Date();
 
       updateData.orderReadyTime = readyTime;
@@ -1369,6 +1381,23 @@ exports.orderStatus = async (req, res) => {
     const updatedOrder = await Order.findByIdAndUpdate(id, updateData, {
       new: true,
     });
+
+    // ================= SELLER SOCKET EVENT =================
+    try {
+      const sellerSocket = sellerSocketMap.get(updatedOrder.storeId.toString());
+
+      if (sellerSocket) {
+        sellerSocket.emit("storeOrder", {
+          orderId: updatedOrder.orderId,
+          status: updatedOrder.orderStatus,
+        });
+
+        console.log(`✅ storeOrder event emitted for ${updatedOrder.orderId}`);
+      }
+    } catch (err) {
+      console.error("Seller socket emit failed:", err.message);
+    }
+    // =======================================================
 
     if (driverId !== undefined) {
       try {
@@ -1709,7 +1738,11 @@ exports.orderStatus = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Order Status Updated", isDelivered, update: updatedOrder });
+      .json({
+        message: "Order Status Updated",
+        isDelivered,
+        update: updatedOrder,
+      });
   } catch (error) {
     console.error("Order status error:", error.message);
     return res
