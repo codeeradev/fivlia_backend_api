@@ -1356,7 +1356,7 @@ exports.orderStatus = async (req, res) => {
       },
     });
 
-    if (orderOnTheWay && status === "accepted") {
+    if (orderOnTheWay && normalizedStatus === "accepted") {
       return res.status(200).json({ message: "Order Already Accepted" });
     }
 
