@@ -437,7 +437,7 @@ exports.getSellerProducts = async (req, res) => {
         sellerProducts
           .filter(
             (p) =>
-              p.typeId?.toString() === FOOD_TYPE_ID || p.foodTypeId != null,
+              p.typeId?.toString() === FOOD_TYPE_ID && p.foodTypeId != null,
           )
 
           .map((p) => p.foodTypeId.toString())
