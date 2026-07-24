@@ -370,7 +370,7 @@ exports.getSellerProducts = async (req, res) => {
       });
     }
 
-    console.log("isFoodSeller", isFoodSeller)
+    console.log("isFoodSeller", isFoodSeller);
     const stockData = await Stock.findOne({ storeId: sellerId }).lean();
     const stockEntries = stockData?.stock || [];
 
@@ -396,10 +396,10 @@ exports.getSellerProducts = async (req, res) => {
     }
 
     if (isFoodSeller) {
-      console.log("food run")
+      console.log("food run");
       productQuery.isVeg = { $in: [1, 2] };
     } else {
-      console.log("non food run")
+      console.log("non food run");
       productQuery.isVeg = 0;
     }
 
@@ -435,8 +435,13 @@ exports.getSellerProducts = async (req, res) => {
     const foodTypeIds = [
       ...new Set(
         sellerProducts
-          .filter((p) => p.typeId?.toString() === FOOD_TYPE_ID || p.foodTypeId)
-          .map((p) => p.foodTypeId.toString()),
+          .filter(
+            (p) =>
+              p.typeId?.toString() === FOOD_TYPE_ID || p.foodTypeId != null,
+          )
+
+          .map((p) => p.foodTypeId.toString())
+          .filter(Boolean),
       ),
     ];
 
