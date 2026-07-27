@@ -575,7 +575,7 @@ exports.acceptedOrder = async (req, res) => {
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
       orderStatus: {
-        $in: ["On The Way", "Going to Pickup", "On Way", "Ready"],
+        $in: ["On The Way", "Going to Pickup", "On Way", "Ready", "Ready To Pickup"],
       },
     });
     const enrichedOrders = await Promise.all(
