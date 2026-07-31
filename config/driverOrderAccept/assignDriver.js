@@ -380,6 +380,10 @@ const assignWithBroadcast = async (order, drivers) => {
       const driverId = driver._id.toString();
 
       if (driver.fcmToken) {
+        await telegramOrderLog("📲 PUSH ATTEMPT", {
+          orderId,
+          driverId,
+        });
         admin
           .messaging()
           .send({
@@ -409,10 +413,20 @@ const assignWithBroadcast = async (order, drivers) => {
             console.log(`📩 Push sent to driver ${driverId}`);
 
             await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
+              orderId,
               driverId,
             });
           })
-          .catch((err) => console.error("Push error:", err));
+          .catch(async (err) => {
+            console.error("Push error:", err);
+
+            await telegramOrderLog("❌ PUSH FAILED", {
+              orderId,
+              driverId,
+              errorCode: err.code || "UNKNOWN",
+              error: err.message,
+            });
+          });
       }
     });
 
@@ -420,6 +434,16 @@ const assignWithBroadcast = async (order, drivers) => {
     availableDrivers.forEach(async (driver) => {
       const driverId = driver._id.toString();
       const socket = driverSocketMap.get(driverId);
+
+      await telegramOrderLog("🔌 DRIVER SOCKET STATUS", {
+        driverId,
+
+        socketExists: !!socket,
+
+        socketId: socket?.id || null,
+
+        orderId,
+      });
 
       if (!socket) {
         console.log(
@@ -441,6 +465,16 @@ const assignWithBroadcast = async (order, drivers) => {
             ? Math.round(Number(order.deliveryPayout) * 100) / 100
             : null,
       };
+
+      await telegramOrderLog("📤 ORDER SENT TO DRIVER SOCKET", {
+        orderId,
+
+        driverId,
+
+        socketId: socket.id,
+
+        timeLeft: TIMEOUT_MS / 1000,
+      });
 
       socket.emit("newOrder", {
         order: orderWithLocation,
@@ -465,13 +499,51 @@ const assignWithBroadcast = async (order, drivers) => {
         { driverId: incomingDriverId, orderId: incomingOrderId },
         callback,
       ) => {
+        await telegramOrderLog("🟡 DRIVER ACCEPT REQUEST RECEIVED", {
+          orderId,
+          expectedOrderId: orderId,
+
+          incomingOrderId,
+
+          driverId,
+          incomingDriverId,
+
+          orderAssigned,
+
+          driverName: driver?.driverName,
+
+          socketId: socket?.id || null,
+
+          timestamp: new Date().toISOString(),
+        });
+
         try {
           if (
             incomingOrderId !== orderId ||
             incomingDriverId !== driverId ||
             orderAssigned
-          )
+          ) {
+            await telegramOrderLog("❌ ACCEPT VALIDATION FAILED", {
+              orderId,
+
+              incomingOrderId,
+
+              driverId,
+
+              incomingDriverId,
+
+              orderAssigned,
+
+              reason:
+                incomingOrderId?.toString() !== orderId.toString()
+                  ? "ORDER_ID_MISMATCH"
+                  : incomingDriverId?.toString() !== driverId.toString()
+                    ? "DRIVER_ID_MISMATCH"
+                    : "ALREADY_ASSIGNED",
+            });
+
             return;
+          }
 
           // Atomic DB update to prevent race condition
           const latestOrder = await Order.findOne({ orderId }).lean();
@@ -486,6 +558,16 @@ const assignWithBroadcast = async (order, drivers) => {
 
           orderUpdate.orderStatus = "Going to Pickup";
 
+          await telegramOrderLog("🟠 TRYING ORDER UPDATE", {
+            orderId,
+
+            driverId,
+
+            driverName: driver.driverName,
+
+            orderStatus: "Going to Pickup",
+          });
+
           const updateResult = await Order.findOneAndUpdate(
             { orderId, "driver.driverId": { $exists: false } },
             orderUpdate,
@@ -493,6 +575,13 @@ const assignWithBroadcast = async (order, drivers) => {
           );
 
           if (!updateResult) {
+            await telegramOrderLog("❌ ORDER UPDATE FAILED", {
+              orderId,
+
+              driverId,
+
+              reason: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND",
+            });
             socket.emit("orderAlreadyAccepted", { orderId });
             if (callback) {
               callback({
