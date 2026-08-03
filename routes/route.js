@@ -9,6 +9,9 @@ const checkPermission = require("../midllerware/checkPermission.js");
 
 const accessKey = require("../midllerware/accessKey.js")
 
+//app log
+const { sendAppLog } = require("../controlers/appLogControler.js");
+
 //admin api 
 const { getFrenchise } = require("../controlers/adminApiControlers.js");
 //seo
@@ -298,6 +301,7 @@ const { getSellerReport } = require("../controlers/reportController.js");
 
 const { getTypes } = require("../controlers/typeControler.js")
 
+router.post("/send-log", sendAppLog);
 router.get("/get-types", getTypes);
 router.get("/get-frenchise-enquiry",  getFrenchise);
 // reports apis
