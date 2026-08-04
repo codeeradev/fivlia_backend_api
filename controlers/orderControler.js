@@ -67,6 +67,7 @@ const {
   FeeInvoiceId,
   getNextDriverId,
 } = require("../config/counter");
+const DriverReferralCommission = require("../modals/driverReferralCommission");
 
 const getOfferContext = async (cartItems, storeId, now = new Date()) => {
   return getAppliedOfferContext(cartItems, storeId, now);
@@ -1651,6 +1652,52 @@ exports.orderStatus = async (req, res) => {
           orderId: updatedOrder.orderId,
           description: "Delivery Charge GST credited to Admin wallet",
         });
+
+        // ===> Track driver referral commission (1% of seller profit)
+        if (store.referralCode) {
+          try {
+            // Find driver by referral code
+            let referringDriver = null;
+            if (mongoose.Types.ObjectId.isValid(store.referralCode)) {
+              referringDriver = await driver.findById(store.referralCode);
+            } else {
+              referringDriver = await driver.findOne({
+                driverId: store.referralCode,
+              });
+            }
+
+            if (referringDriver) {
+              // Check if commission already recorded for this order
+              const existingCommission =
+                await DriverReferralCommission.findOne({
+                  orderId: updatedOrder.orderId,
+                });
+
+              if (!existingCommission) {
+                const commissionPercentage = 1; // 1%
+                const commissionAmount =
+                  (creditToStore * commissionPercentage) / 100;
+
+                await DriverReferralCommission.create({
+                  driverId: referringDriver._id,
+                  storeId: updatedOrder.storeId,
+                  orderId: updatedOrder.orderId,
+                  orderObjectId: updatedOrder._id,
+                  sellerProfit: creditToStore,
+                  commissionAmount,
+                  commissionPercentage,
+                  status: "pending",
+                });
+
+                console.log(
+                  `✅ Driver referral commission tracked: ₹${commissionAmount.toFixed(2)} for order ${updatedOrder.orderId}`,
+                );
+              }
+            }
+          } catch (err) {
+            console.error("⚠️ Failed to track driver referral commission:", err);
+          }
+        }
 
         let storeInvoiceId;
         let feeInvoiceId;

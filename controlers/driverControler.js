@@ -35,6 +35,7 @@ const {
   CUSTOM_PUSH_SOUND,
   DEFAULT_PUSH_SOUND,
 } = require("../utils/pushSoundConfig");
+const DriverReferralCommission = require("../modals/driverReferralCommission");
 
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
@@ -453,6 +454,52 @@ exports.driverOrderStatus = async (req, res) => {
           orderId: order.orderId,
           description: "Delivery Charge GST credited to Admin wallet",
         });
+
+        // ===> Track driver referral commission (1% of seller profit)
+        if (store.referralCode) {
+          try {
+            // Find driver by referral code
+            let referringDriver = null;
+            if (mongoose.Types.ObjectId.isValid(store.referralCode)) {
+              referringDriver = await driver.findById(store.referralCode);
+            } else {
+              referringDriver = await driver.findOne({
+                driverId: store.referralCode,
+              });
+            }
+
+            if (referringDriver) {
+              // Check if commission already recorded for this order
+              const existingCommission =
+                await DriverReferralCommission.findOne({
+                  orderId: order.orderId,
+                });
+
+              if (!existingCommission) {
+                const commissionPercentage = 1; // 1%
+                const commissionAmount =
+                  (creditToStore * commissionPercentage) / 100;
+
+                await DriverReferralCommission.create({
+                  driverId: referringDriver._id,
+                  storeId: order.storeId,
+                  orderId: order.orderId,
+                  orderObjectId: order._id,
+                  sellerProfit: creditToStore,
+                  commissionAmount,
+                  commissionPercentage,
+                  status: "pending",
+                });
+
+                console.log(
+                  `✅ Driver referral commission tracked: ₹${commissionAmount.toFixed(2)} for order ${order.orderId}`,
+                );
+              }
+            }
+          } catch (err) {
+            console.error("⚠️ Failed to track driver referral commission:", err);
+          }
+        }
 
         // ===> Generate Store Invoice ID
         const storeInvoiceId = await generateStoreInvoiceId(order.storeId);
@@ -1042,46 +1089,89 @@ exports.getDriverRequest = async (req, res) => {
 exports.getDriverReferralSeller = async (req, res) => {
   try {
     const { driverId } = req.body;
-    let driverData = null;
-
-    if (mongoose.Types.ObjectId.isValid(driverId)) {
-      driverData = await driver.findById(driverId);
-    } else {
-      driverData = await driver.findOne({ driverId: driverId });
+    
+    if (!driverId) {
+      return res.status(400).json({ message: "Driver ID is required" });
     }
+
+    // Find driver by driverId string (like "FV001")
+    const driverData = await driver.findOne({ driverId: driverId });
 
     if (!driverData) {
       return res.status(404).json({ message: "Driver not found" });
     }
 
-    // Fetch referral amount from settings
-    const settings = await SettingAdmin.findOne();
-    const referralAmount = settings?.referralAmount || 0;
-
     const stores = await Store.find({ referralCode: driverData.driverId })
-      .select(
-        "storeName email PhoneNumber city approveStatus status referralClaimed referralClaimedAt referralAmount",
-      )
+      .select("storeName email PhoneNumber city approveStatus status")
       .lean();
+    
     if (!stores.length) {
-      return res
-        .status(204)
-        .json({ message: "No users found with this referral code." });
+      return res.status(200).json({ 
+        message: "No stores found with this referral code.",
+        stores: [],
+        totalClaimableCommission: 0,
+        summary: {
+          totalStores: 0,
+          totalPendingOrders: 0,
+          totalClaimedOrders: 0,
+        },
+      });
     }
-    // Add a commission field to each store
-    const storesWithCommission = stores.map((store) => ({
-      ...store,
-      city: store.city?.name || null,
-      commission: referralAmount,
-      isClaimed: store.referralClaimed || false,
-      claimedAt: store.referralClaimedAt || null,
-      claimedAmount: store.referralAmount || 0,
-    }));
+
+    // Calculate pending commissions for each store
+    const storesWithCommission = await Promise.all(
+      stores.map(async (store) => {
+        // Get pending commissions for this store
+        const pendingCommissions = await DriverReferralCommission.find({
+          driverId: driverData._id,
+          storeId: store._id,
+          status: "pending",
+        }).lean();
+
+        // Get claimed commissions for this store
+        const claimedCommissions = await DriverReferralCommission.find({
+          driverId: driverData._id,
+          storeId: store._id,
+          status: "claimed",
+        }).lean();
+
+        const totalPendingCommission = pendingCommissions.reduce(
+          (sum, comm) => sum + comm.commissionAmount,
+          0
+        );
+
+        const totalClaimedCommission = claimedCommissions.reduce(
+          (sum, comm) => sum + comm.commissionAmount,
+          0
+        );
+
+        return {
+          ...store,
+          city: store.city?.name || null,
+          pendingOrderCommission: Number(totalPendingCommission.toFixed(2)),
+          claimedOrderCommission: Number(totalClaimedCommission.toFixed(2)),
+          totalOrderCommission: Number((totalPendingCommission + totalClaimedCommission).toFixed(2)),
+          pendingOrdersCount: pendingCommissions.length,
+          claimedOrdersCount: claimedCommissions.length,
+        };
+      })
+    );
+
+    // Calculate total claimable amount across all stores
+    const totalClaimableCommission = storesWithCommission.reduce(
+      (sum, store) => sum + store.pendingOrderCommission,
+      0
+    );
 
     res.status(200).json({
       message: `Found ${storesWithCommission.length} store(s) with this referral code.`,
       stores: storesWithCommission,
-      referralAmount,
+      totalClaimableCommission: Number(totalClaimableCommission.toFixed(2)),
+      summary: {
+        totalStores: storesWithCommission.length,
+        totalPendingOrders: storesWithCommission.reduce((sum, s) => sum + s.pendingOrdersCount, 0),
+        totalClaimedOrders: storesWithCommission.reduce((sum, s) => sum + s.claimedOrdersCount, 0),
+      },
     });
   } catch (error) {
     console.error("Error fetching stores:", error);
@@ -1321,25 +1411,19 @@ exports.getDriverRating = async (req, res) => {
   }
 };
 
-exports.claimReferral = async (req, res) => {
+exports.claimOrderCommissions = async (req, res) => {
   try {
-    const { storeId } = req.body;
-
-    const driverId = req.user
+    const { storeId, driverId } = req.body;
+    
     // Validate inputs
-    if (!storeId) {
+    if (!storeId || !driverId) {
       return res.status(400).json({
-        message: "Store ID are required",
+        message: "Store ID and Driver ID are required",
       });
     }
 
-    // Find driver
-    let driverData = null;
-    if (mongoose.Types.ObjectId.isValid(driverId)) {
-      driverData = await driver.findById(driverId);
-    } else {
-      driverData = await driver.findOne({ _id: driverId });
-    }
+    // Find driver by driverId string (like "FV001")
+    const driverData = await driver.findOne({ driverId: driverId });
 
     if (!driverData) {
       return res.status(404).json({ message: "Driver not found" });
@@ -1358,67 +1442,105 @@ exports.claimReferral = async (req, res) => {
       });
     }
 
-    // Check if already claimed
-    if (store.referralClaimed) {
+    // Get all pending commissions for this driver and store
+    const pendingCommissions = await DriverReferralCommission.find({
+      driverId: driverData._id,
+      storeId: store._id,
+      status: "pending",
+    });
+
+    if (!pendingCommissions.length) {
       return res.status(400).json({
-        message: "Referral bonus already claimed for this store",
-        claimedAt: store.referralClaimedAt,
-        claimedAmount: store.referralAmount,
+        message: "No pending commissions to claim for this store",
       });
     }
 
-    // Check if store is approved
-    if (store.approveStatus !== "approved") {
-      return res.status(400).json({
-        message: "Store must be approved before claiming referral bonus",
-      });
-    }
-
-    // Get referral amount from settings
-    const settings = await SettingAdmin.findOne();
-    const referralAmount = settings?.referralAmount || 0;
-
-    if (referralAmount <= 0) {
-      return res.status(400).json({
-        message: "Referral amount is not configured please contact admin for more information",
-      });
-    }
-
-    // Update driver wallet
-    const updatedDriver = await driver.findByIdAndUpdate(
-      driverData._id,
-      { $inc: { wallet: referralAmount } },
-      { new: true },
+    // Calculate total claimable amount
+    const totalClaimAmount = pendingCommissions.reduce(
+      (sum, comm) => sum + comm.commissionAmount,
+      0
     );
 
-    // Create transaction record
+    if (totalClaimAmount <= 0) {
+      return res.status(400).json({
+        message: "No claimable amount available",
+      });
+    }
+
+    // Deduct from admin wallet
+    const adminWallet = await admin_transaction.findById(
+      "68ea20d2c05a14a96c12788d"
+    );
+    
+    if (!adminWallet || adminWallet.wallet < totalClaimAmount) {
+      return res.status(400).json({
+        message: "Insufficient admin wallet balance. Please contact support.",
+      });
+    }
+
+    const lastAdminAmount = adminWallet.wallet;
+    const updatedAdminWallet = await admin_transaction.findByIdAndUpdate(
+      "68ea20d2c05a14a96c12788d",
+      { $inc: { wallet: -totalClaimAmount } },
+      { new: true }
+    );
+
+    // Credit to driver wallet
+    const updatedDriver = await driver.findByIdAndUpdate(
+      driverData._id,
+      { $inc: { wallet: totalClaimAmount } },
+      { new: true }
+    );
+
+    // Create driver transaction record
     await Transaction.create({
       driverId: driverData._id,
       type: "credit",
-      amount: referralAmount,
-      description: `Referral bonus for store: ${store.storeName}`,
+      amount: totalClaimAmount,
+      description: `Order commission from store: ${store.storeName} (${pendingCommissions.length} orders)`,
     });
 
-    // Mark referral as claimed in store
-    store.referralClaimed = true;
-    store.referralClaimedAt = new Date();
-    store.referralAmount = referralAmount;
-    await store.save();
+    // Create admin transaction record
+    await admin_transaction.create({
+      currentAmount: updatedAdminWallet.wallet,
+      lastAmount: lastAdminAmount,
+      type: "Debit",
+      amount: totalClaimAmount,
+      description: `Driver referral commission payout to ${driverData.driverName} for store: ${store.storeName}`,
+    });
+
+    // Mark all commissions as claimed
+    await DriverReferralCommission.updateMany(
+      {
+        _id: { $in: pendingCommissions.map((c) => c._id) },
+      },
+      {
+        $set: {
+          status: "claimed",
+          claimedAt: new Date(),
+        },
+      }
+    );
 
     return res.status(200).json({
-      message: "Referral bonus claimed successfully",
-      amount: referralAmount,
+      message: "Order commissions claimed successfully",
+      totalAmount: Number(totalClaimAmount.toFixed(2)),
+      ordersCount: pendingCommissions.length,
       driverWallet: updatedDriver.wallet,
       store: {
         id: store._id,
         name: store.storeName,
-        claimedAt: store.referralClaimedAt,
       },
+      details: pendingCommissions.map((comm) => ({
+        orderId: comm.orderId,
+        sellerProfit: comm.sellerProfit,
+        commissionAmount: Number(comm.commissionAmount.toFixed(2)),
+      })),
     });
   } catch (error) {
-    console.error("Error claiming referral:", error);
+    console.error("Error claiming order commissions:", error);
     return res.status(500).json({
-      message: "Server error while claiming referral",
+      message: "Server error while claiming commissions",
       error: error.message,
     });
   }

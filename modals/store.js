@@ -32,7 +32,7 @@ const storeScheema = new mongoose.Schema(
     aadharCard: [String],
     panCard: [String],
     sellFood: { type: Boolean },
-    typeId:{type: mongoose.Schema.Types.ObjectId, ref: "type"},
+    typeId: { type: mongoose.Schema.Types.ObjectId, ref: "type" },
     businessType: { type: String },
     fsiNumber: String,
     gstNumber: String,
@@ -54,7 +54,7 @@ const storeScheema = new mongoose.Schema(
       default: "pending_verification",
     },
     verificationToken: String,
-    accessKey:String,
+    accessKey: String,
     pendingAddressUpdate: {
       city: {
         _id: { type: mongoose.Schema.ObjectId, ref: "Locations" },
@@ -91,10 +91,10 @@ const storeScheema = new mongoose.Schema(
         deviceId: { type: String }, // unique device UUID from client
         deviceType: {
           type: String,
-          enum: ["mobile", "tablet", "laptop"]
+          enum: ["mobile", "tablet", "laptop"],
         },
-        platform:String,
-        deviceName: { type: String }, 
+        platform: String,
+        deviceName: { type: String },
         fcmToken: { type: String },
         jwtToken: { type: String },
         createdAt: { type: Date, default: Date.now },
@@ -133,14 +133,11 @@ const storeScheema = new mongoose.Schema(
     ],
     foodTypes: [{ type: mongoose.Schema.Types.ObjectId, ref: "FoodType" }],
     referralCode: { type: String, default: null },
-    referralClaimed: { type: Boolean, default: false },
-    referralClaimedAt: { type: Date, default: null },
-    referralAmount: { type: Number, default: 0 },
     isVeg: { type: String, enum: ["veg", "non-veg", "mix"], default: "mix" },
     sellerFreeDeliveryEnabled: { type: Boolean, default: false },
-    sellerFreeDeliveryLimit: { type: Number, default: 0 }
+    sellerFreeDeliveryLimit: { type: Number, default: 0 },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Store", storeScheema);

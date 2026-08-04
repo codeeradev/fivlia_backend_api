@@ -71,7 +71,6 @@ const settingAdminSchema = new mongoose.Schema({
   perKmNightCharges: Number,
   foodGlobalCommission: Number,
   ready_in_min: Number,
-  referralAmount: Number,
   homeScreen: {
     food: {
       primary_color: String,

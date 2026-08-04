@@ -1,90 +1,66 @@
-{
-    "success": true,
-    "products": [
-        {
-            "sellerProductId": "6873fd85566a0ad253bfceb2",
-            "productId": "6873fd85566a0ad253bfceb2",
-            "productName": "Samosa",
-            "sku": "FIV939",
-            "productThumbnailUrl": "/image/1754564566194-image.jpg",
-            "category": "Fast Food",
-            "subCategory": "Food Items",
-            "variants": [
-                {
-                    "sell_price": 23,
-                    "image": "/var1/1758463142873-var1.jpeg",
-                    "_id": "68d004a8d6cfda98674a6656",
-                    "attributeName": "Size",
-                    "variantValue": "1 Pcs",
-                    "mrp": 25,
-                    "imageKey": "var1",
-                    "discountValue": 36,
-                    "stock": 999,
-                    "status": false
-                }
-            ],
-            "status": false,
-            "commission": 7,
-            "foodTax": 5,
-            "isFoodProduct": true
-        },
-        {
-            "sellerProductId": "689ed13f1abef222b979ad8e",
-            "productId": "689ed13f1abef222b979ad8e",
-            "productName": "Rasmalai - 1 Pc",
-            "sku": "FIV1520",
-            "productThumbnailUrl": "/image/1755238717417-image.jpeg",
-            "category": "Sweets",
-            "subCategory": "Sweets",
-            "variants": [
-                {
-                    "sell_price": 50,
-                    "image": "/var1/1766515302275-var1.jpeg",
-                    "_id": "68b3ee5356872bb9d524a7cd",
-                    "attributeName": "Pack",
-                    "variantValue": "1 Pcs",
-                    "mrp": 60,
-                    "imageKey": "var1",
-                    "discountValue": 3,
-                    "stock": 999,
-                    "status": false
-                }
-            ],
-            "status": false,
-            "commission": 7,
-            "foodTax": 5,
-            "isFoodProduct": true
-        },
-        {
-            "sellerProductId": "68bfb3c83efa022f10bc0e7d",
-            "productId": "68bfb3c83efa022f10bc0e7d",
-            "productName": "Paneer Pakoda (250 Gm)",
-            "sku": "FIV1947",
-            "productThumbnailUrl": "/image/1765821776374-image.jpeg",
-            "category": "Fast Food",
-            "subCategory": "Food Items",
-            "variants": [
-                {
-                    "sell_price": 105,
-                    "image": "/var1/1765821776453-var1.jpeg",
-                    "_id": "69404d522151fcf5904b20a7",
-                    "attributeName": "Pack",
-                    "variantValue": "1 Plate",
-                    "mrp": 120,
-                    "imageKey": "var1",
-                    "discountValue": 17,
-                    "stock": 999,
-                    "status": false
-                }
-            ],
-            "status": false,
-            "commission": 7,
-            "foodTax": 5,
-            "isFoodProduct": true
-        }
-    ],
-    "total": 3,
-    "page": 1,
-    "limit": 100,
-    "totalPages": 1
-}
+ok bro before going to any conclusion first understand everything
+
+so driver apna refrel code se seller ko register karwae ga ->referralCode ye
+so seller ke document mai ye refrel code hai driver ka
+
+exports.getDriverReferralSeller = async (req, res) => {
+  try {
+    const { driverId } = req.body;
+    let driverData = null;
+
+    if (mongoose.Types.ObjectId.isValid(driverId)) {
+      driverData = await driver.findById(driverId);
+    } else {
+      driverData = await driver.findOne({ driverId: driverId });
+    }
+
+    if (!driverData) {
+      return res.status(404).json({ message: "Driver not found" });
+    }
+
+    // Fetch referral amount from settings
+    const settings = await SettingAdmin.findOne();
+    const referralAmount = settings?.referralAmount || 0;
+
+    const stores = await Store.find({ referralCode: driverData.driverId })
+      .select(
+        "storeName email PhoneNumber city approveStatus status referralClaimed referralClaimedAt referralAmount",
+      )
+      .lean();
+    if (!stores.length) {
+      return res
+        .status(204)
+        .json({ message: "No users found with this referral code." });
+    }
+    // Add a commission field to each store
+    const storesWithCommission = stores.map((store) => ({
+      ...store,
+      city: store.city?.name || null,
+      commission: referralAmount,
+      isClaimed: store.referralClaimed || false,
+      claimedAt: store.referralClaimedAt || null,
+      claimedAmount: store.referralAmount || 0,
+    }));
+
+    res.status(200).json({
+      message: Found ${storesWithCommission.length} store(s) with this referral code.,
+      stores: storesWithCommission,
+      referralAmount,
+    });
+  } catch (error) {
+    console.error("Error fetching stores:", error);
+    res.status(500).json({
+      message: "Server error while fetching stores",
+      error: error.message,
+    });
+  }
+};
+
+<- is api se apa driver ko dikhaye ge ki uske refrel ye itne ban chuke hai jo dikhane ka hai driver ko claim krne ke jis se apa like driver ke wallet pe paise dale ge admin walle wallet se kaat ke.
+
+getDriverReferralSeller ---> is api mai bas apa like uski earning show kre ge only
+
+logic ye rahega seller ke profit ka me se apa ne 1% per order ka driver ko dena hai 
+baar-2 calculation na krna pade bcs api slow hoje gi apa ammount seller ke document mai save krte rahega apa and claim ke time apa us ammount ko seller document se kaat dege and bro ek driver multiple seller ko refrels kar skta hai to multiple dimag mai leke chalna
+
+orderStatus wali api mai dalde new key banake driver claims and only if refrel code exist or not invalid
