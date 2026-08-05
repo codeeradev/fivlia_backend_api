@@ -1114,39 +1114,91 @@ exports.getOrderDetails = async (req, res) => {
 
     const userOrders = await Order.find({ userId })
       .sort({ createdAt: -1 })
+      .populate("addressId")
+      .populate({
+        path: "storeId",
+        select: "Latitude Longitude storeName",
+      })
       .lean();
+
     const results = [];
 
-    const settings = await SettingAdmin.findOne();
+    const settings = await SettingAdmin.findOne(
+      {},
+      "freeDeliveryLimit Platform_Fee",
+    ).lean();
+
+    const driverIds = [
+      ...new Set(userOrders.map((o) => o.driver?.driverId).filter(Boolean)),
+    ];
+
+    const productIds = [
+      ...new Set(
+        userOrders.flatMap((o) => o.items.map((i) => i.productId.toString())),
+      ),
+    ];
+
+    const [drivers, products] = await Promise.all([
+      driver
+        .find({
+          _id: { $in: driverIds },
+        })
+        .lean(),
+
+      Products.find(
+        {
+          _id: { $in: productIds },
+        },
+        {
+          title: 1,
+          description: 1,
+          brand: 1,
+          images: 1,
+        },
+      ).lean(),
+    ]);
+
+    const driverMap = new Map(drivers.map((d) => [d._id.toString(), d]));
+
+    const productMap = new Map(products.map((p) => [p._id.toString(), p]));
+
+    const ratingStats = await DriverRating.aggregate([
+      {
+        $match: {
+          driverId: {
+            $in: drivers.map((d) => d._id),
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$driverId",
+          average: { $avg: "$rating" },
+          totalRatings: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const ratingMap = new Map(ratingStats.map((r) => [r._id.toString(), r]));
 
     for (const order of userOrders) {
       // 1. Fetch address
-      const address = await Address.findById(order.addressId).lean();
+      const address = order.addressId;
 
       // 2. Fetch driver details if driverId exists
       let driverInfo = {};
       if (order.driver && order.driver.driverId) {
-        driverInfo = await driver
-          .findOne({ _id: order.driver.driverId })
-          .lean();
+        driverInfo = driverMap.get(order.driver.driverId);
 
         let avgRating = null;
         let totalRatings = 0;
 
         if (driverInfo) {
-          const ratingStats = await DriverRating.aggregate([
-            { $match: { driverId: driverInfo._id } },
-            {
-              $group: {
-                _id: "$driverId",
-                average: { $avg: "$rating" },
-                totalRatings: { $sum: 1 },
-              },
-            },
-          ]);
+          const rating = ratingMap.get(driverInfo._id.toString());
+
           if (ratingStats.length) {
-            avgRating = Number(ratingStats[0].average.toFixed(1));
-            totalRatings = ratingStats[0].totalRatings;
+            avgRating = rating ? Number(rating.average.toFixed(1)) : 0;
+            totalRatings = rating?.totalRatings || 0;
           }
 
           driverInfo = {
@@ -1160,20 +1212,15 @@ exports.getOrderDetails = async (req, res) => {
         }
       }
       let storeLocation = null;
-      if (order.storeId) {
-        const storeData = await Store.findById(order.storeId, {
-          Latitude: 1,
-          Longitude: 1,
-          storeName: 1,
-        }).lean();
+      let storeName = "";
 
-        if (storeData) {
-          storeLocation = storeData.location || {
-            Latitude: storeData.Latitude || null,
-            Longitude: storeData.Longitude || null,
-          };
-          storeName = storeData.storeName;
-        }
+      if (order.storeId) {
+        storeLocation = {
+          Latitude: order.storeId.Latitude || null,
+          Longitude: order.storeId.Longitude || null,
+        };
+
+        storeName = order.storeId.storeName || "";
       }
 
       if (settings && order.totalPrice > settings.freeDeliveryLimit) {
@@ -1190,7 +1237,7 @@ exports.getOrderDetails = async (req, res) => {
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {
-          const product = await Products.findById(item.productId).lean();
+          const product = productMap.get(item.productId.toString());
           return {
             name: item.name,
             quantity: item.quantity,
@@ -1668,10 +1715,11 @@ exports.orderStatus = async (req, res) => {
 
             if (referringDriver) {
               // Check if commission already recorded for this order
-              const existingCommission =
-                await DriverReferralCommission.findOne({
+              const existingCommission = await DriverReferralCommission.findOne(
+                {
                   orderId: updatedOrder.orderId,
-                });
+                },
+              );
 
               if (!existingCommission) {
                 const commissionPercentage = 1; // 1%
@@ -1695,7 +1743,10 @@ exports.orderStatus = async (req, res) => {
               }
             }
           } catch (err) {
-            console.error("⚠️ Failed to track driver referral commission:", err);
+            console.error(
+              "⚠️ Failed to track driver referral commission:",
+              err,
+            );
           }
         }
 
@@ -1783,13 +1834,11 @@ exports.orderStatus = async (req, res) => {
       "orderControler.orderStatus",
     );
 
-    return res
-      .status(200)
-      .json({
-        message: "Order Status Updated",
-        isDelivered,
-        update: updatedOrder,
-      });
+    return res.status(200).json({
+      message: "Order Status Updated",
+      isDelivered,
+      update: updatedOrder,
+    });
   } catch (error) {
     console.error("Order status error:", error.message);
     return res

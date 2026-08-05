@@ -1,66 +1,131 @@
-ok bro before going to any conclusion first understand everything
-
-so driver apna refrel code se seller ko register karwae ga ->referralCode ye
-so seller ke document mai ye refrel code hai driver ka
-
-exports.getDriverReferralSeller = async (req, res) => {
+exports.getOrderDetails = async (req, res) => {
   try {
-    const { driverId } = req.body;
-    let driverData = null;
+    const userId = req.user;
 
-    if (mongoose.Types.ObjectId.isValid(driverId)) {
-      driverData = await driver.findById(driverId);
-    } else {
-      driverData = await driver.findOne({ driverId: driverId });
-    }
-
-    if (!driverData) {
-      return res.status(404).json({ message: "Driver not found" });
-    }
-
-    // Fetch referral amount from settings
-    const settings = await SettingAdmin.findOne();
-    const referralAmount = settings?.referralAmount || 0;
-
-    const stores = await Store.find({ referralCode: driverData.driverId })
-      .select(
-        "storeName email PhoneNumber city approveStatus status referralClaimed referralClaimedAt referralAmount",
-      )
+    const userOrders = await Order.find({ userId })
+      .sort({ createdAt: -1 })
       .lean();
-    if (!stores.length) {
-      return res
-        .status(204)
-        .json({ message: "No users found with this referral code." });
-    }
-    // Add a commission field to each store
-    const storesWithCommission = stores.map((store) => ({
-      ...store,
-      city: store.city?.name || null,
-      commission: referralAmount,
-      isClaimed: store.referralClaimed || false,
-      claimedAt: store.referralClaimedAt || null,
-      claimedAmount: store.referralAmount || 0,
-    }));
+    const results = [];
 
-    res.status(200).json({
-      message: Found ${storesWithCommission.length} store(s) with this referral code.,
-      stores: storesWithCommission,
-      referralAmount,
+    const settings = await SettingAdmin.findOne();
+
+    for (const order of userOrders) {
+      // 1. Fetch address
+      const address = await Address.findById(order.addressId).lean();
+
+      // 2. Fetch driver details if driverId exists
+      let driverInfo = {};
+      if (order.driver && order.driver.driverId) {
+        driverInfo = await driver
+          .findOne({ _id: order.driver.driverId })
+          .lean();
+
+        let avgRating = null;
+        let totalRatings = 0;
+
+        if (driverInfo) {
+          const ratingStats = await DriverRating.aggregate([
+            { $match: { driverId: driverInfo._id } },
+            {
+              $group: {
+                _id: "$driverId",
+                average: { $avg: "$rating" },
+                totalRatings: { $sum: 1 },
+              },
+            },
+          ]);
+          if (ratingStats.length) {
+            avgRating = Number(ratingStats[0].average.toFixed(1));
+            totalRatings = ratingStats[0].totalRatings;
+          }
+
+          driverInfo = {
+            driverId: driverInfo.driverId || "",
+            Id: driverInfo._id || "",
+            name: driverInfo.driverName || "",
+            mobileNo: driverInfo.address?.mobileNo || "",
+            averageRating: avgRating || 0,
+            totalRatings: totalRatings,
+          };
+        }
+      }
+      let storeLocation = null;
+      if (order.storeId) {
+        const storeData = await Store.findById(order.storeId, {
+          Latitude: 1,
+          Longitude: 1,
+          storeName: 1,
+        }).lean();
+
+        if (storeData) {
+          storeLocation = storeData.location || {
+            Latitude: storeData.Latitude || null,
+            Longitude: storeData.Longitude || null,
+          };
+          storeName = storeData.storeName;
+        }
+      }
+
+      if (settings && order.totalPrice > settings.freeDeliveryLimit) {
+        order.deliveryCharges = 0;
+      }
+
+      const subtotal = order.items.reduce((total, item) => {
+        return total + Number(item.price) * Number(item.quantity);
+      }, 0);
+
+      const platformFee = Number(
+        ((subtotal * settings.Platform_Fee) / 100).toFixed(2),
+      );
+
+      const itemsWithDetails = await Promise.all(
+        order.items.map(async (item) => {
+          const product = await Products.findById(item.productId).lean();
+          return {
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+            image: item.image,
+            gst: item.gst,
+            storeId: order.storeId,
+            productId: item.productId,
+            varientId: item.varientId,
+            productDetails: {
+              title: product?.title,
+              description: product?.description,
+              brand: product?.brand,
+              images: product?.images,
+            },
+          };
+        }),
+      );
+      // 4. Push combined data
+      results.push({
+        id: order._id,
+        orderId: order.orderId,
+        orderStatus: order.orderStatus,
+        totalPrice: order.totalPrice,
+        cashOnDelivery: order.cashOnDelivery,
+        deliveryCharges: order.deliveryCharges,
+        platformFee,
+        transactionId: order.transactionId || "",
+        items: itemsWithDetails,
+        address,
+        driver: driverInfo,
+        storeLocation,
+        storeName,
+        createdAt: order.createdAt,
+      });
+    }
+
+    return res.status(200).json({
+      message: "Orders fetched successfully",
+      orders: results,
     });
   } catch (error) {
-    console.error("Error fetching stores:", error);
-    res.status(500).json({
-      message: "Server error while fetching stores",
-      error: error.message,
-    });
+    console.error("Get orders error:", error.message);
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
   }
 };
-
-<- is api se apa driver ko dikhaye ge ki uske refrel ye itne ban chuke hai jo dikhane ka hai driver ko claim krne ke jis se apa like driver ke wallet pe paise dale ge admin walle wallet se kaat ke.
-
-getDriverReferralSeller ---> is api mai bas apa like uski earning show kre ge only
-
-logic ye rahega seller ke profit ka me se apa ne 1% per order ka driver ko dena hai 
-baar-2 calculation na krna pade bcs api slow hoje gi apa ammount seller ke document mai save krte rahega apa and claim ke time apa us ammount ko seller document se kaat dege and bro ek driver multiple seller ko refrels kar skta hai to multiple dimag mai leke chalna
-
-orderStatus wali api mai dalde new key banake driver claims and only if refrel code exist or not invalid
