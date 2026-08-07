@@ -8,7 +8,6 @@ const { updateDriverStatus } = require("../controlers/driverControler");
 const { getPendingDriverOffers } = require("../utils/pendingDriverOffers");
 const { Order } = require("../modals/order");
 
-
 const replayPendingOrdersToDriver = async (socket, driverId) => {
   if (!driverId) return 0;
   const pendingOffers = await getPendingDriverOffers(driverId);
@@ -37,18 +36,18 @@ module.exports = (io) => {
 
       if (result.success) {
         // Keep in-memory socket map aligned with persisted driver status.
-        if (status === "online") {
-          driverSocketMap.set(driverId, socket);
-          console.log("driverSocketMap entries:", [...driverSocketMap.keys()]);
-          const replayed = await replayPendingOrdersToDriver(socket, driverId);
-          if (replayed > 0) {
-            console.log(
-              `Replayed ${replayed} pending orders to driver ${driverId}`,
-            );
-          }
-        } else {
-          driverSocketMap.delete(driverId);
+        // if (status === "online") {
+        driverSocketMap.set(driverId, socket);
+        console.log("driverSocketMap entries:", [...driverSocketMap.keys()]);
+        const replayed = await replayPendingOrdersToDriver(socket, driverId);
+        if (replayed > 0) {
+          console.log(
+            `Replayed ${replayed} pending orders to driver ${driverId}`,
+          );
         }
+        // } else {
+        //   driverSocketMap.delete(driverId);
+        // }
 
         io.emit("activeStatus", {
           message: "Driver status updated",
@@ -134,6 +133,18 @@ module.exports = (io) => {
         driverId,
         replayed,
       });
+    });
+
+    socket.on("ping", (data = {}) => {
+      socket.emit("pong", {
+        success: true,
+        timestamp: data.timestamp || new Date().toISOString(),
+        serverTime: new Date().toISOString(),
+      });
+
+      console.log(
+        `💓 Heartbeat from ${socket.id} at ${data.timestamp || "N/A"}`,
+      );
     });
 
     socket.on("instructionRead", async ({ orderId }) => {
