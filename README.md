@@ -1,131 +1,27 @@
-exports.getOrderDetails = async (req, res) => {
-  try {
-    const userId = req.user;
+er  | Driver connected: Mv6TiOupmCIDOH3cAAAB
+7|server  | ========== DRIVER REGISTER ==========
+7|server  | SET DRIVER ID: 69c66c8b11e3744c3d212e7a
+7|server  | TYPE: string
+7|server  | SOCKET ID: Mv6TiOupmCIDOH3cAAAB
+7|server  | MAP SIZE: 1
+7|server  | driverSocketMap entries: [ '69c66c8b11e3744c3d212e7a' ]
+7|server  | ====================================
 
-    const userOrders = await Order.find({ userId })
-      .sort({ createdAt: -1 })
-      .lean();
-    const results = [];
+========== DRIVER LOOKUP ==========
+6|server   | LOOKUP DRIVER: 69c66c8b11e3744c3d212e7a
+6|server   | TYPE: string
+6|server   | MAP SIZE: 1
+6|server   | MAP KEYS: [ '69c66c8b11e3744c3d212e7a' ]
+6|server   | HAS DRIVER: true
+6|server   | SOCKET FOUND: true
+6|server   | SOCKET ID: Mv6TiOupmCIDOH3cAAAB
+6|server   | ===================================
+6|server   | [200] GET http://ip.bablosoft.com/?Z72764286371Q1 - 4.07 ms
+6|server   | 📩 Push sent to driver 69c66c8b11e3744c3d212e7a
+6|server   | 📱 Driver 68f1d8c5a72119a8c21c6c34 not connected to socket, push-only mode
+6|server   | ✅ Socket order OID1240 sent to driver 69c66c8b11e3744c3d212e7a
+6|server   | [200] POST /send-log - 661.51 ms
+6|server   | [200] POST /send-log - 679.87 ms
 
-    const settings = await SettingAdmin.findOne();
-
-    for (const order of userOrders) {
-      // 1. Fetch address
-      const address = await Address.findById(order.addressId).lean();
-
-      // 2. Fetch driver details if driverId exists
-      let driverInfo = {};
-      if (order.driver && order.driver.driverId) {
-        driverInfo = await driver
-          .findOne({ _id: order.driver.driverId })
-          .lean();
-
-        let avgRating = null;
-        let totalRatings = 0;
-
-        if (driverInfo) {
-          const ratingStats = await DriverRating.aggregate([
-            { $match: { driverId: driverInfo._id } },
-            {
-              $group: {
-                _id: "$driverId",
-                average: { $avg: "$rating" },
-                totalRatings: { $sum: 1 },
-              },
-            },
-          ]);
-          if (ratingStats.length) {
-            avgRating = Number(ratingStats[0].average.toFixed(1));
-            totalRatings = ratingStats[0].totalRatings;
-          }
-
-          driverInfo = {
-            driverId: driverInfo.driverId || "",
-            Id: driverInfo._id || "",
-            name: driverInfo.driverName || "",
-            mobileNo: driverInfo.address?.mobileNo || "",
-            averageRating: avgRating || 0,
-            totalRatings: totalRatings,
-          };
-        }
-      }
-      let storeLocation = null;
-      if (order.storeId) {
-        const storeData = await Store.findById(order.storeId, {
-          Latitude: 1,
-          Longitude: 1,
-          storeName: 1,
-        }).lean();
-
-        if (storeData) {
-          storeLocation = storeData.location || {
-            Latitude: storeData.Latitude || null,
-            Longitude: storeData.Longitude || null,
-          };
-          storeName = storeData.storeName;
-        }
-      }
-
-      if (settings && order.totalPrice > settings.freeDeliveryLimit) {
-        order.deliveryCharges = 0;
-      }
-
-      const subtotal = order.items.reduce((total, item) => {
-        return total + Number(item.price) * Number(item.quantity);
-      }, 0);
-
-      const platformFee = Number(
-        ((subtotal * settings.Platform_Fee) / 100).toFixed(2),
-      );
-
-      const itemsWithDetails = await Promise.all(
-        order.items.map(async (item) => {
-          const product = await Products.findById(item.productId).lean();
-          return {
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price,
-            image: item.image,
-            gst: item.gst,
-            storeId: order.storeId,
-            productId: item.productId,
-            varientId: item.varientId,
-            productDetails: {
-              title: product?.title,
-              description: product?.description,
-              brand: product?.brand,
-              images: product?.images,
-            },
-          };
-        }),
-      );
-      // 4. Push combined data
-      results.push({
-        id: order._id,
-        orderId: order.orderId,
-        orderStatus: order.orderStatus,
-        totalPrice: order.totalPrice,
-        cashOnDelivery: order.cashOnDelivery,
-        deliveryCharges: order.deliveryCharges,
-        platformFee,
-        transactionId: order.transactionId || "",
-        items: itemsWithDetails,
-        address,
-        driver: driverInfo,
-        storeLocation,
-        storeName,
-        createdAt: order.createdAt,
-      });
-    }
-
-    return res.status(200).json({
-      message: "Orders fetched successfully",
-      orders: results,
-    });
-  } catch (error) {
-    console.error("Get orders error:", error.message);
-    return res
-      .status(500)
-      .json({ message: "Server Error", error: error.message });
-  }
-};
+7|server  | 🔁 All drivers rejected or no response for order OID1240. Retrying with all drivers...
+7|server  | distance 2558

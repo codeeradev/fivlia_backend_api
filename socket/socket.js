@@ -37,19 +37,9 @@ module.exports = (io) => {
       if (result.success) {
         // Keep in-memory socket map aligned with persisted driver status.
         // if (status === "online") {
-
-        console.log("========== DRIVER REGISTER ==========");
-console.log("SET DRIVER ID:", driverId);
-console.log("TYPE:", typeof driverId);
-console.log("SOCKET ID:", socket.id);
-
+        
         driverSocketMap.set(driverId, socket);
-
-        console.log("MAP SIZE:", driverSocketMap.size);
-
         console.log("driverSocketMap entries:", [...driverSocketMap.keys()]);
-        console.log("====================================");
-
         const replayed = await replayPendingOrdersToDriver(socket, driverId);
         if (replayed > 0) {
           console.log(
@@ -182,21 +172,9 @@ console.log("SOCKET ID:", socket.id);
     });
 
     socket.on("disconnect", () => {
-      console.log("========== DRIVER DISCONNECTED ==========");
-  console.log("Reason:", reason);
-  console.log("Socket ID:", socket.id);
-  console.log("Map Before:", [...driverSocketMap.keys()]);
-
-  for (const [driverId, s] of driverSocketMap.entries()) {
-    if (s.id === socket.id) {
-      console.log("Removing Driver:", driverId);
-      driverSocketMap.delete(driverId);
-    }
-  }
-
-  console.log("Map After:", [...driverSocketMap.keys()]);
-  console.log("========================================");
-
+      for (const [driverId, s] of driverSocketMap.entries()) {
+        if (s.id === socket.id) driverSocketMap.delete(driverId);
+      }
       for (const [storeId, s] of sellerSocketMap.entries()) {
         if (s.id === socket.id) sellerSocketMap.delete(storeId);
       }

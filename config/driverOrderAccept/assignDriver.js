@@ -433,23 +433,7 @@ const assignWithBroadcast = async (order, drivers) => {
     // 🔹 Step 2: Emit socket event only for online drivers
     availableDrivers.forEach(async (driver) => {
       const driverId = driver._id.toString();
-
-      console.log("========== DRIVER LOOKUP ==========");
-      console.log("LOOKUP DRIVER:", driverId);
-      console.log("TYPE:", typeof driverId);
-      console.log("MAP SIZE:", driverSocketMap.size);
-      console.log("MAP KEYS:", [...driverSocketMap.keys()]);
-      console.log("HAS DRIVER:", driverSocketMap.has(driverId.toString()));
-
       const socket = driverSocketMap.get(driverId);
-
-      console.log("SOCKET FOUND:", !!socket);
-
-if (socket) {
-  console.log("SOCKET ID:", socket.id);
-}
-
-console.log("===================================");
 
       await telegramOrderLog("🔌 DRIVER SOCKET STATUS", {
         driverId,
