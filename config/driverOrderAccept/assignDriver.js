@@ -209,14 +209,31 @@ const registerSocketOrderListeners = (socket, orderKey, handlers) => {
 };
 
 const removeSocketOrderListeners = (socket, orderKey) => {
-  if (!socket?.__orderListenerRegistry?.has(orderKey)) return;
+  if (!socket?.__orderListenerRegistry?.has(orderKey)) {
+    return;
+  }
 
   const { onAccept, onReject, onDisconnect } =
     socket.__orderListenerRegistry.get(orderKey);
-  socket.off("acceptOrder", onAccept);
-  socket.off("rejectOrder", onReject);
-  socket.off("disconnect", onDisconnect);
+
+  if (onAccept) {
+    socket.off("acceptOrder", onAccept);
+  }
+
+  if (onReject) {
+    socket.off("rejectOrder", onReject);
+  }
+
+  if (onDisconnect) {
+    socket.off("disconnect", onDisconnect);
+  }
+
   socket.__orderListenerRegistry.delete(orderKey);
+
+  console.log("🧹 Socket order listeners removed", {
+    orderKey,
+    socketId: socket.id,
+  });
 };
 
 // Main order broadcast flow with retry, acceptance race protection, and cleanup.
@@ -435,14 +452,14 @@ const assignWithBroadcast = async (order, drivers) => {
       const driverId = driver._id.toString();
       const socket = driverSocketMap.get(driverId);
 
-      await telegramOrderLog("🔌 DRIVER SOCKET STATUS", {
+      telegramOrderLog("🔌 DRIVER SOCKET STATUS", {
         driverId,
-
         socketExists: !!socket,
-
         socketId: socket?.id || null,
-
+        socketConnected: socket?.connected === true,
         orderId,
+      }).catch((error) => {
+        console.error("Telegram socket-status log failed:", error.message);
       });
 
       if (!socket) {
@@ -452,54 +469,74 @@ const assignWithBroadcast = async (order, drivers) => {
         return;
       }
 
+      if (socket.connected !== true) {
+        console.log(`⚠️ Driver ${driverId} socket exists but is disconnected`);
+        return;
+      }
+
       const userLocation = orderUser?.location || {};
+
       const orderWithLocation = {
         ...(order.toObject ? order.toObject() : order),
+
         storeName: orderStore?.storeName || null,
         storeLat: orderStore?.Latitude || null,
         storeLng: orderStore?.Longitude || null,
+
         userLat: userLocation.latitude || null,
         userLng: userLocation.longitude || null,
+
         deliveryPayout:
           order.deliveryPayout != null
             ? Math.round(Number(order.deliveryPayout) * 100) / 100
             : null,
       };
 
-      await telegramOrderLog("📤 ORDER SENT TO DRIVER SOCKET", {
-        orderId,
+      /*
+       * IMPORTANT:
+       * Listener newOrder emit se pehle register hoga.
+       * Isse Flutter ka fast Accept tap miss nahi hoga.
+       */
 
-        driverId,
+      // ---------------- ACCEPT HANDLER ----------------
 
-        socketId: socket.id,
+      const handleAccept = async (payload = {}, callback) => {
+        const incomingDriverId = payload?.driverId?.toString().trim() || "";
 
-        timeLeft: TIMEOUT_MS / 1000,
-      });
+        const incomingOrderId = payload?.orderId?.toString().trim() || "";
 
-      socket.emit("newOrder", {
-        order: orderWithLocation,
-        driverId,
-        timeLeft: TIMEOUT_MS / 1000,
-      });
-      await upsertPendingDriverOffer(
-        driverId,
-        orderId,
-        {
-          order: orderWithLocation,
+        let callbackSent = false;
+
+        const sendCallback = (response) => {
+          if (callbackSent) {
+            return;
+          }
+
+          callbackSent = true;
+
+          if (typeof callback === "function") {
+            callback(response);
+          }
+        };
+
+        console.log("🟡 DRIVER ACCEPT REQUEST RECEIVED", {
+          orderId,
+          expectedOrderId: orderId,
+          incomingOrderId,
+
           driverId,
-          timeLeft: TIMEOUT_MS / 1000,
-        },
-        offerTtlSeconds,
-      );
+          incomingDriverId,
 
-      console.log(`✅ Socket order ${orderId} sent to driver ${driverId}`);
+          orderAssigned,
 
-      // --- Accept Handler ---
-      const handleAccept = async (
-        { driverId: incomingDriverId, orderId: incomingOrderId },
-        callback,
-      ) => {
-        await telegramOrderLog("🟡 DRIVER ACCEPT REQUEST RECEIVED", {
+          driverName: driver?.driverName,
+          socketId: socket?.id || null,
+          socketConnected: socket?.connected === true,
+
+          timestamp: new Date().toISOString(),
+        });
+
+        telegramOrderLog("🟡 DRIVER ACCEPT REQUEST RECEIVED", {
           orderId,
           expectedOrderId: orderId,
 
@@ -515,38 +552,93 @@ const assignWithBroadcast = async (order, drivers) => {
           socketId: socket?.id || null,
 
           timestamp: new Date().toISOString(),
+        }).catch((error) => {
+          console.error("Telegram accept-request log failed:", error.message);
         });
 
         try {
-          if (
-            incomingOrderId !== orderId ||
-            incomingDriverId !== driverId ||
-            orderAssigned
-          ) {
-            await telegramOrderLog("❌ ACCEPT VALIDATION FAILED", {
+          if (!incomingOrderId || !incomingDriverId) {
+            console.warn("❌ ACCEPT PAYLOAD MISSING", {
               orderId,
-
-              incomingOrderId,
-
               driverId,
-
+              incomingOrderId,
               incomingDriverId,
+            });
 
-              orderAssigned,
-
-              reason:
-                incomingOrderId?.toString() !== orderId.toString()
-                  ? "ORDER_ID_MISMATCH"
-                  : incomingDriverId?.toString() !== driverId.toString()
-                    ? "DRIVER_ID_MISMATCH"
-                    : "ALREADY_ASSIGNED",
+            sendCallback({
+              status: false,
+              success: false,
+              message: "driverId and orderId are required",
+              orderId,
             });
 
             return;
           }
 
-          // Atomic DB update to prevent race condition
-          const latestOrder = await Order.findOne({ orderId }).lean();
+          if (
+            incomingOrderId !== orderId ||
+            incomingDriverId !== driverId ||
+            orderAssigned
+          ) {
+            const reason =
+              incomingOrderId !== orderId
+                ? "ORDER_ID_MISMATCH"
+                : incomingDriverId !== driverId
+                  ? "DRIVER_ID_MISMATCH"
+                  : "ALREADY_ASSIGNED";
+
+            console.warn("❌ ACCEPT VALIDATION FAILED", {
+              orderId,
+              incomingOrderId,
+
+              driverId,
+              incomingDriverId,
+
+              orderAssigned,
+              reason,
+            });
+
+            telegramOrderLog("❌ ACCEPT VALIDATION FAILED", {
+              orderId,
+              incomingOrderId,
+
+              driverId,
+              incomingDriverId,
+
+              orderAssigned,
+              reason,
+            }).catch((error) => {
+              console.error("Telegram validation log failed:", error.message);
+            });
+
+            sendCallback({
+              status: false,
+              success: false,
+              message:
+                reason === "ALREADY_ASSIGNED"
+                  ? "Order already accepted"
+                  : "Invalid order accept request",
+              reason,
+              orderId,
+            });
+
+            return;
+          }
+
+          const latestOrder = await Order.findOne({
+            orderId,
+          }).lean();
+
+          if (!latestOrder) {
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Order not found",
+              orderId,
+            });
+
+            return;
+          }
 
           const orderUpdate = {
             driver: {
@@ -554,72 +646,183 @@ const assignWithBroadcast = async (order, drivers) => {
               name: driver.driverName,
               mobileNumber: driver.address?.mobileNo,
             },
+            orderStatus: "Going to Pickup",
           };
 
-          orderUpdate.orderStatus = "Going to Pickup";
-
-          await telegramOrderLog("🟠 TRYING ORDER UPDATE", {
+          console.log("🟠 TRYING ORDER UPDATE", {
             orderId,
-
             driverId,
-
             driverName: driver.driverName,
-
             orderStatus: "Going to Pickup",
           });
 
+          telegramOrderLog("🟠 TRYING ORDER UPDATE", {
+            orderId,
+            driverId,
+            driverName: driver.driverName,
+            orderStatus: "Going to Pickup",
+          }).catch((error) => {
+            console.error("Telegram trying-update log failed:", error.message);
+          });
+
+          /*
+           * Atomic update:
+           * Sirf wahi request successful hogi jisme driver pehle assigned nahi hai.
+           */
           const updateResult = await Order.findOneAndUpdate(
-            { orderId, "driver.driverId": { $exists: false } },
-            orderUpdate,
-            { new: true },
+            {
+              orderId,
+              $or: [
+                {
+                  driver: {
+                    $exists: false,
+                  },
+                },
+                {
+                  driver: null,
+                },
+                {
+                  "driver.driverId": {
+                    $exists: false,
+                  },
+                },
+                {
+                  "driver.driverId": null,
+                },
+                {
+                  "driver.driverId": "",
+                },
+              ],
+            },
+            {
+              $set: orderUpdate,
+            },
+            {
+              new: true,
+            },
           );
 
           if (!updateResult) {
-            await telegramOrderLog("❌ ORDER UPDATE FAILED", {
-              orderId,
-
-              driverId,
-
-              reason: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND",
-            });
-            socket.emit("orderAlreadyAccepted", { orderId });
-            if (callback) {
-              callback({
-                status: false,
-                message: "Order already accepted",
-              });
-            }
-
             console.warn(
-              `🉑 orderAlreadyAccepted for ${driverId} - ${orderId}`,
+              `🉑 Order already accepted/not available: ${driverId} - ${orderId}`,
             );
+
+            telegramOrderLog("❌ ORDER UPDATE FAILED", {
+              orderId,
+              driverId,
+              reason: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND",
+            }).catch((error) => {
+              console.error(
+                "Telegram update-failed log failed:",
+                error.message,
+              );
+            });
+
+            socket.emit("orderAlreadyAccepted", {
+              orderId,
+            });
+
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Order already accepted",
+              orderId,
+            });
+
+            removeSocketOrderListeners(socket, orderKey);
+
             return;
           }
 
-          // new socket code of user order status
-          await emitUserOrderStatusUpdate(
-            updateResult,
-            "assignDriver.driverAccepted",
-          );
-
+          /*
+           * Order MongoDB me successfully claim ho chuka hai.
+           * Ab local race flag immediately set karo.
+           */
           orderAssigned = true;
           respondedDriversThisCycle.add(driverId);
-          await updateDispatchState(
+
+          clearDispatchTimeout(orderId);
+
+          /*
+           * Flutter ko pehle success ACK bhej do.
+           * Redis, assignment, notifications ya cleanup slow hone par
+           * frontend timeout nahi karega.
+           */
+          sendCallback({
+            status: true,
+            success: true,
+            message: "Order accepted successfully",
             orderId,
-            {
-              $set: { assigned: true, status: "assigned" },
-              $addToSet: { respondedDrivers: driverId },
-            },
-            async (redis, keys) => {
-              await Promise.all([
-                redis.hSet(keys.state, {
-                  assigned: "1",
+            driverId,
+          });
+
+          console.log("✅ ACCEPT ACK SENT TO DRIVER", {
+            orderId,
+            driverId,
+            socketId: socket.id,
+          });
+
+          /*
+           * Neeche existing backend updates hain.
+           * Inme failure aaye to order accept already MongoDB me safe hai.
+           */
+
+          try {
+            await emitUserOrderStatusUpdate(
+              updateResult,
+              "assignDriver.driverAccepted",
+            );
+          } catch (statusError) {
+            console.error("⚠️ User order-status emit failed:", statusError);
+          }
+
+          try {
+            await updateDispatchState(
+              orderId,
+              {
+                $set: {
+                  assigned: true,
                   status: "assigned",
-                }),
-                redis.sAdd(keys.respondedDrivers, driverId),
-              ]);
-            },
-          );
+                },
+                $addToSet: {
+                  respondedDrivers: driverId,
+                },
+              },
+              async (redis, keys) => {
+                await Promise.all([
+                  redis.hSet(keys.state, {
+                    assigned: "1",
+                    status: "assigned",
+                  }),
+                  redis.sAdd(keys.respondedDrivers, driverId),
+                ]);
+              },
+            );
+          } catch (dispatchError) {
+            console.error("⚠️ Dispatch state update failed:", dispatchError);
+          }
+
+          try {
+            await Assign.updateOne(
+              {
+                driverId,
+                orderId,
+              },
+              {
+                $set: {
+                  orderStatus: "Accepted",
+                },
+              },
+              {
+                upsert: true,
+              },
+            );
+          } catch (assignError) {
+            console.error(
+              "⚠️ Driver assignment record update failed:",
+              assignError,
+            );
+          }
 
           console.log(`🎉 Driver ${driverId} accepted order ${orderId}`);
 
@@ -627,73 +830,98 @@ const assignWithBroadcast = async (order, drivers) => {
             orderId,
             driverId,
             driverName: driver.driverName,
-          }).catch((err) => {
-            console.error("Telegram Log:", err.message);
+          }).catch((error) => {
+            console.error("Telegram accepted log failed:", error.message);
           });
 
-          clearDispatchTimeout(orderId);
+          /*
+           * Dusre drivers se same order remove karo.
+           */
+          availableDrivers.forEach((availableDriver) => {
+            const otherDriverId = availableDriver._id.toString();
 
-          await Assign.updateOne(
-            { driverId, orderId },
-            { $set: { orderStatus: "Accepted" } },
-            { upsert: true },
-          );
+            if (otherDriverId === driverId) {
+              return;
+            }
 
-          availableDrivers.forEach((d) => {
-            const otherSocket = driverSocketMap.get(d._id.toString());
-            if (d._id.toString() !== driverId && otherSocket) {
-              otherSocket.emit("orderTaken", { orderId });
+            const otherSocket = driverSocketMap.get(otherDriverId);
+
+            if (otherSocket?.connected) {
+              otherSocket.emit("orderTaken", {
+                orderId,
+                acceptedBy: driverId,
+              });
             }
           });
-          await Promise.all(
-            availableDrivers.map((d) =>
-              removePendingDriverOffer(d._id.toString(), orderId),
-            ),
-          );
 
-          if (callback) {
-            callback({
-              status: true,
-              message: "Order accepted successfully",
-              orderId,
-            });
+          try {
+            await Promise.all(
+              availableDrivers.map((availableDriver) =>
+                removePendingDriverOffer(
+                  availableDriver._id.toString(),
+                  orderId,
+                ),
+              ),
+            );
+          } catch (pendingOfferCleanupError) {
+            console.error(
+              "⚠️ Pending offers cleanup failed:",
+              pendingOfferCleanupError,
+            );
           }
 
           cleanupAllListeners();
         } catch (err) {
-          console.error("Accept Order Error:", err);
-          // Telegram Error Log
-          try {
-            await telegramOrderLog("❌ DRIVER ACCEPT FAILED", {
-              orderId,
-              driverId,
-              driverName: driver?.driverName,
-              reason: err.message,
-            });
-          } catch (e) {
-            console.error("Telegram Log Error:", e.message);
-          }
+          console.error("❌ Accept Order Error:", err);
+
+          sendCallback({
+            status: false,
+            success: false,
+            message: "Failed to accept order",
+            error: err.message,
+            orderId,
+          });
+
+          telegramOrderLog("❌ DRIVER ACCEPT FAILED", {
+            orderId,
+            driverId,
+            driverName: driver?.driverName,
+            reason: err.message,
+          }).catch((telegramError) => {
+            console.error(
+              "Telegram accept-error log failed:",
+              telegramError.message,
+            );
+          });
         }
       };
-      // --- Reject Handler ---
-      const handleReject = async ({
-        driverId: incomingDriverId,
-        orderId: incomingOrderId,
-      }) => {
+
+      // ---------------- REJECT HANDLER ----------------
+
+      const handleReject = async (payload = {}) => {
+        const incomingDriverId = payload?.driverId?.toString().trim() || "";
+
+        const incomingOrderId = payload?.orderId?.toString().trim() || "";
+
         if (
           incomingOrderId !== orderId ||
           incomingDriverId !== driverId ||
           orderAssigned
-        )
+        ) {
           return;
+        }
 
         respondedDrivers.add(driverId);
         respondedDriversThisCycle.add(driverId);
         rejectedDrivers.add(driverId);
+
         await updateDispatchState(
           orderId,
           {
-            $set: { assigned: false, status: "pending" },
+            $set: {
+              assigned: false,
+              status: "pending",
+            },
             $addToSet: {
               rejectedDrivers: driverId,
               respondedDrivers: driverId,
@@ -712,33 +940,153 @@ const assignWithBroadcast = async (order, drivers) => {
         );
 
         await Assign.updateOne(
-          { driverId, orderId },
-          { $set: { orderStatus: "Rejected" } },
-          { upsert: true },
+          {
+            driverId,
+            orderId,
+          },
+          {
+            $set: {
+              orderStatus: "Rejected",
+            },
+          },
+          {
+            upsert: true,
+          },
         );
 
         console.log(`❌ Driver ${driverId} rejected order ${orderId}`);
 
-        await telegramOrderLog("❌ DRIVER REJECTED", {
+        telegramOrderLog("❌ DRIVER REJECTED", {
           orderId,
           driverId,
           driverName: driver.driverName,
+        }).catch((error) => {
+          console.error("Telegram reject log failed:", error.message);
         });
+
         await removePendingDriverOffer(driverId, orderId);
 
-        // After explicit rejection from this driver, remove listeners for this order.
         removeSocketOrderListeners(socket, orderKey);
       };
 
-      const onAccept = (data, callback) => handleAccept(data, callback);
-      const onReject = (data) => handleReject(data);
-      const onDisconnect = () => removeSocketOrderListeners(socket, orderKey);
+      // ---------------- RAW SOCKET WRAPPERS ----------------
 
+      const onAccept = (data, callback) => {
+        console.log("📥 RAW acceptOrder EVENT RECEIVED", {
+          orderId,
+          driverId,
+          socketId: socket.id,
+          socketConnected: socket.connected,
+          data,
+          callbackExists: typeof callback === "function",
+        });
+
+        handleAccept(data, callback).catch((error) => {
+          console.error("❌ Unhandled accept handler error:", error);
+
+          if (typeof callback === "function") {
+            callback({
+              status: false,
+              success: false,
+              message: "Failed to accept order",
+              error: error.message,
+              orderId,
+            });
+          }
+        });
+      };
+
+      const onReject = (data) => {
+        console.log("📥 RAW rejectOrder EVENT RECEIVED", {
+          orderId,
+          driverId,
+          socketId: socket.id,
+          data,
+        });
+
+        handleReject(data).catch((error) => {
+          console.error("❌ Reject handler error:", error);
+        });
+      };
+
+      const onDisconnect = () => {
+        console.log("🔌 Driver socket disconnected", {
+          orderId,
+          driverId,
+          socketId: socket.id,
+        });
+
+        removeSocketOrderListeners(socket, orderKey);
+      };
+
+      /*
+       * Listener FIRST.
+       */
       registerSocketOrderListeners(socket, orderKey, {
         onAccept,
         onReject,
         onDisconnect,
       });
+
+      console.log("✅ Order listeners ready before newOrder emit", {
+        orderId,
+        driverId,
+        socketId: socket.id,
+        connected: socket.connected,
+        acceptListenerCount: socket.listenerCount("acceptOrder"),
+      });
+
+      /*
+       * Order emit SECOND.
+       */
+      socket.emit("newOrder", {
+        order: orderWithLocation,
+        driverId,
+        timeLeft: TIMEOUT_MS / 1000,
+      });
+
+      console.log(`✅ Socket order ${orderId} sent to driver ${driverId}`);
+
+      telegramOrderLog("📤 ORDER SENT TO DRIVER SOCKET", {
+        orderId,
+        driverId,
+        socketId: socket.id,
+        timeLeft: TIMEOUT_MS / 1000,
+      }).catch((error) => {
+        console.error("Telegram order-sent log failed:", error.message);
+      });
+
+      /*
+       * Pending-offer flow same rakha hai.
+       * Iska await listener registration ko delay nahi karega,
+       * kyunki listener aur socket emit already ho chuke hain.
+       */
+      try {
+        await upsertPendingDriverOffer(
+          driverId,
+          orderId,
+          {
+            order: orderWithLocation,
+            driverId,
+            timeLeft: TIMEOUT_MS / 1000,
+          },
+          offerTtlSeconds,
+        );
+      } catch (pendingOfferError) {
+        console.error(
+          `⚠️ Failed to save pending offer for ${driverId} - ${orderId}:`,
+          pendingOfferError,
+        );
+
+        telegramOrderLog("⚠️ PENDING DRIVER OFFER SAVE FAILED", {
+          orderId,
+          driverId,
+          socketId: socket.id,
+          reason: pendingOfferError.message,
+        }).catch((logError) => {
+          console.error("Telegram pending-offer log failed:", logError.message);
+        });
+      }
     });
   };
 
