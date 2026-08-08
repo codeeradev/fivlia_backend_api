@@ -268,6 +268,7 @@ exports.driverOrderStatus = async (req, res) => {
         deliverStatus: true,
       });
       if (alreadyDelivered) {
+        isDelivered = true;
         console.log(`Order ${orderId} already processed for delivery.`);
       } else {
         console.log(`Processing delivery logic for order ${orderId}...`);
