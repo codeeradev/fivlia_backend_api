@@ -160,41 +160,115 @@ exports.checkDriverDeviceLogin = async (req, res) => {
 };
 
 exports.acceptOrder = async (req, res) => {
+  let session;
   try {
     const { orderId, status, driverId } = req.body;
 
     const driverData = await driver.findOne({ _id: driverId });
+    if (!driverData) {
+      return res.status(404).json({ message: "Driver not found" });
+    }
+
     let updatedOrder = null;
+    session = await mongoose.startSession();
+
+    await session.withTransaction(async () => {
+      if (status === true) {
+        const activeAssignment = await Assign.findOne({
+          driverId: driverData._id,
+          $or: [
+            { orderStatus: { $exists: true, $nin: ["Rejected"] } },
+            { currentStatus: { $exists: true, $nin: ["Rejected"] } },
+          ],
+        })
+          .session(session)
+          .lean();
+
+        if (
+          activeAssignment &&
+          String(activeAssignment.orderId) !== String(orderId)
+        ) {
+          const error = new Error(
+            "Driver already has an active order in Assign",
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+
+        const orderUpdate = {
+          driver: {
+            driverId: driverData.driverId,
+            name: driverData.driverName,
+            mobileNumber: driverData.address.mobileNo,
+          },
+        };
+
+        updatedOrder = await Order.findOneAndUpdate({ orderId }, orderUpdate, {
+          new: true,
+          session,
+        });
+
+        if (!updatedOrder) {
+          const error = new Error("Order not found");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        await Assign.deleteMany({ orderId }, { session });
+
+        await Assign.create(
+          [
+            {
+              driverId: driverData._id,
+              orderId,
+              orderStatus: "Accepted",
+              currentStatus: "accepted",
+            },
+          ],
+          { session },
+        );
+      }
+
+      if (status === false) {
+        await Assign.create(
+          [
+            {
+              driverId: driverData._id,
+              orderId,
+              orderStatus: "Rejected",
+              currentStatus: "Rejected",
+            },
+          ],
+          { session },
+        );
+      }
+    });
+
     if (status === true) {
-      const existingOrder = await Order.findOne({ orderId }).lean();
-      const orderUpdate = {
-        driver: {
-          driverId: driverData.driverId,
-          name: driverData.driverName,
-          mobileNumber: driverData.address.mobileNo,
-        },
-      };
-
-      updatedOrder = await Order.findOneAndUpdate({ orderId }, orderUpdate, {
-        new: true,
-      });
-
-      // new socket code of user order status
       await emitUserOrderStatusUpdate(
         updatedOrder,
         "driverControler.acceptOrder",
       );
+      return res.status(200).json({ message: "Order Accepted" });
     }
-    if (status === false) {
-      await Assign.create({ driverId, orderId });
-      return res.status(200).json({ message: "Order Canceled" });
-    }
-    return res.status(200).json({ message: "Order Accepted" });
+
+    return res.status(200).json({ message: "Order Canceled" });
   } catch (error) {
     console.error(error);
+    if (error.statusCode === 409) {
+      return res.status(409).json({ message: error.message });
+    }
+    if (error.statusCode === 404) {
+      return res.status(404).json({ message: error.message });
+    }
     return res.status(500).json({ message: "An error occured" });
+  } finally {
+    if (session) {
+      await session.endSession();
+    }
   }
 };
+
 const activeIntervals = new Map();
 
 exports.driverOrderStatus = async (req, res) => {
@@ -471,10 +545,11 @@ exports.driverOrderStatus = async (req, res) => {
 
             if (referringDriver) {
               // Check if commission already recorded for this order
-              const existingCommission =
-                await DriverReferralCommission.findOne({
+              const existingCommission = await DriverReferralCommission.findOne(
+                {
                   orderId: order.orderId,
-                });
+                },
+              );
 
               if (!existingCommission) {
                 const commissionPercentage = 1; // 1%
@@ -498,7 +573,10 @@ exports.driverOrderStatus = async (req, res) => {
               }
             }
           } catch (err) {
-            console.error("⚠️ Failed to track driver referral commission:", err);
+            console.error(
+              "⚠️ Failed to track driver referral commission:",
+              err,
+            );
           }
         }
 
@@ -623,7 +701,13 @@ exports.acceptedOrder = async (req, res) => {
     const AcceptedOrders = await Order.find({
       "driver.mobileNumber": mobileNumber,
       orderStatus: {
-        $in: ["On The Way", "Going to Pickup", "On Way", "Ready", "Ready To Pickup"],
+        $in: [
+          "On The Way",
+          "Going to Pickup",
+          "On Way",
+          "Ready",
+          "Ready To Pickup",
+        ],
       },
     });
     const enrichedOrders = await Promise.all(
@@ -1090,7 +1174,7 @@ exports.getDriverRequest = async (req, res) => {
 exports.getDriverReferralSeller = async (req, res) => {
   try {
     const { driverId } = req.body;
-    
+
     if (!driverId) {
       return res.status(400).json({ message: "Driver ID is required" });
     }
@@ -1105,9 +1189,9 @@ exports.getDriverReferralSeller = async (req, res) => {
     const stores = await Store.find({ referralCode: driverData.driverId })
       .select("storeName email PhoneNumber city approveStatus status")
       .lean();
-    
+
     if (!stores.length) {
-      return res.status(200).json({ 
+      return res.status(200).json({
         message: "No stores found with this referral code.",
         stores: [],
         totalClaimableCommission: 0,
@@ -1138,12 +1222,12 @@ exports.getDriverReferralSeller = async (req, res) => {
 
         const totalPendingCommission = pendingCommissions.reduce(
           (sum, comm) => sum + comm.commissionAmount,
-          0
+          0,
         );
 
         const totalClaimedCommission = claimedCommissions.reduce(
           (sum, comm) => sum + comm.commissionAmount,
-          0
+          0,
         );
 
         return {
@@ -1151,17 +1235,19 @@ exports.getDriverReferralSeller = async (req, res) => {
           city: store.city?.name || null,
           pendingOrderCommission: Number(totalPendingCommission.toFixed(2)),
           claimedOrderCommission: Number(totalClaimedCommission.toFixed(2)),
-          totalOrderCommission: Number((totalPendingCommission + totalClaimedCommission).toFixed(2)),
+          totalOrderCommission: Number(
+            (totalPendingCommission + totalClaimedCommission).toFixed(2),
+          ),
           pendingOrdersCount: pendingCommissions.length,
           claimedOrdersCount: claimedCommissions.length,
         };
-      })
+      }),
     );
 
     // Calculate total claimable amount across all stores
     const totalClaimableCommission = storesWithCommission.reduce(
       (sum, store) => sum + store.pendingOrderCommission,
-      0
+      0,
     );
 
     res.status(200).json({
@@ -1170,8 +1256,14 @@ exports.getDriverReferralSeller = async (req, res) => {
       totalClaimableCommission: Number(totalClaimableCommission.toFixed(2)),
       summary: {
         totalStores: storesWithCommission.length,
-        totalPendingOrders: storesWithCommission.reduce((sum, s) => sum + s.pendingOrdersCount, 0),
-        totalClaimedOrders: storesWithCommission.reduce((sum, s) => sum + s.claimedOrdersCount, 0),
+        totalPendingOrders: storesWithCommission.reduce(
+          (sum, s) => sum + s.pendingOrdersCount,
+          0,
+        ),
+        totalClaimedOrders: storesWithCommission.reduce(
+          (sum, s) => sum + s.claimedOrdersCount,
+          0,
+        ),
       },
     });
   } catch (error) {
@@ -1415,7 +1507,7 @@ exports.getDriverRating = async (req, res) => {
 exports.claimOrderCommissions = async (req, res) => {
   try {
     const { storeId, driverId } = req.body;
-    
+
     // Validate inputs
     if (!storeId || !driverId) {
       return res.status(400).json({
@@ -1459,7 +1551,7 @@ exports.claimOrderCommissions = async (req, res) => {
     // Calculate total claimable amount
     const totalClaimAmount = pendingCommissions.reduce(
       (sum, comm) => sum + comm.commissionAmount,
-      0
+      0,
     );
 
     if (totalClaimAmount <= 0) {
@@ -1470,9 +1562,9 @@ exports.claimOrderCommissions = async (req, res) => {
 
     // Deduct from admin wallet
     const adminWallet = await admin_transaction.findById(
-      "68ea20d2c05a14a96c12788d"
+      "68ea20d2c05a14a96c12788d",
     );
-    
+
     if (!adminWallet || adminWallet.wallet < totalClaimAmount) {
       return res.status(400).json({
         message: "Insufficient admin wallet balance. Please contact support.",
@@ -1483,14 +1575,14 @@ exports.claimOrderCommissions = async (req, res) => {
     const updatedAdminWallet = await admin_transaction.findByIdAndUpdate(
       "68ea20d2c05a14a96c12788d",
       { $inc: { wallet: -totalClaimAmount } },
-      { new: true }
+      { new: true },
     );
 
     // Credit to driver wallet
     const updatedDriver = await driver.findByIdAndUpdate(
       driverData._id,
       { $inc: { wallet: totalClaimAmount } },
-      { new: true }
+      { new: true },
     );
 
     // Create driver transaction record
@@ -1520,7 +1612,7 @@ exports.claimOrderCommissions = async (req, res) => {
           status: "claimed",
           claimedAt: new Date(),
         },
-      }
+      },
     );
 
     return res.status(200).json({
