@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const { Order, TempOrder } = require("../modals/order");
 const { ZoneData } = require("../modals/cityZone");
 const admin = require("../firebase/firebase");
@@ -1288,6 +1289,13 @@ exports.getOrderDetails = async (req, res) => {
 };
 
 exports.orderStatus = async (req, res) => {
+  let session;
+  let updatedOrder = null;
+  let deleteAssignmentsCount = 0;
+  let assignmentNotification = null;
+  let deliverySettlementApplied = false;
+  let driverDoc = null;
+
   try {
     const { id } = req.params;
     const { status, driverId, type } = req.body;
@@ -1324,7 +1332,7 @@ exports.orderStatus = async (req, res) => {
     const orderDoc = await Order.findById(id).lean();
 
     if (driverId) {
-      const driverDoc = await driver.findOne({ _id: driverId });
+      driverDoc = await driver.findOne({ _id: driverId });
       if (!driverDoc)
         return res.status(404).json({ message: "Driver not found" });
 
@@ -1338,56 +1346,16 @@ exports.orderStatus = async (req, res) => {
         updateData.orderStatus = "Going to Pickup";
         updateData.orderPickedTime = new Date();
       }
-      // ✅ Fetch the order before update to get user & store info for notification
+
       if (orderDoc) {
         const user = await User.findById(orderDoc.userId).lean();
         const storeData = await Store.findById(orderDoc.storeId).lean();
-
-        // 🧠 Notify user that a driver has been assigned
-        if (user?.fcmToken && user.fcmToken !== "null") {
-          try {
-            await sendNotification(
-              user.fcmToken,
-              "🚗 Driver Assigned!",
-              `Your order #${orderDoc.orderId} has been assigned to driver ${driverDoc.driverName}.`,
-              "/dashboard1",
-              {
-                orderId: orderDoc.orderId,
-                driverName: driverDoc.driverName,
-                driverMobile: driverDoc.address?.mobileNo || "",
-                storeName: storeData?.storeName || "Fivlia",
-              },
-              DEFAULT_PUSH_SOUND,
-            );
-          } catch (err) {
-            console.warn(
-              "⚠️ User notification failed order status change:",
-              err.response?.data?.error?.message || err.message,
-            );
-          }
-        }
-
-        // 🧠 Optionally notify the store as well
-        if (storeData?.fcmTokenMobile) {
-          try {
-            await sendNotification(
-              storeData.fcmTokenMobile,
-              "Driver Assigned 🚗",
-              `Driver ${driverDoc.driverName} has been assigned for order #${orderDoc.orderId}.`,
-              "/dashboard1",
-              {
-                orderId: orderDoc.orderId,
-                driverName: driverDoc.driverName,
-              },
-              CUSTOM_PUSH_SOUND,
-            );
-          } catch (err) {
-            console.warn(
-              "⚠️ User notification failed order status change:",
-              err.response?.data?.error?.message || err.message,
-            );
-          }
-        }
+        assignmentNotification = {
+          user,
+          storeData,
+          driverDoc,
+          orderId: orderDoc.orderId,
+        };
       }
     }
 
@@ -1415,22 +1383,412 @@ exports.orderStatus = async (req, res) => {
       const readyTime = new Date();
 
       updateData.orderReadyTime = readyTime;
-      if (orderDoc.orderAcceptedBy === "seller") {
+      if (orderDoc?.orderAcceptedBy === "seller") {
         const acceptedTime = new Date(orderDoc.orderAceptedTime);
-
         const diffMs = readyTime - acceptedTime;
-
-        // minutes
         updateData.avgPreparationTime = Math.round(diffMs / 60000);
       }
     }
 
-    // 1. Update order status
-    const updatedOrder = await Order.findByIdAndUpdate(id, updateData, {
-      new: true,
+    session = await mongoose.startSession();
+
+    await session.withTransaction(async () => {
+      updatedOrder = await Order.findByIdAndUpdate(id, updateData, {
+        new: true,
+        session,
+      });
+
+      if (!updatedOrder) {
+        return;
+      }
+
+      if (driverId !== undefined && type === "admin") {
+        await Assign.deleteMany(
+          {
+            orderId: updatedOrder.orderId,
+          },
+          { session },
+        );
+
+        await Assign.create(
+          [
+            {
+              driverId: driverDoc._id,
+              orderId: updatedOrder.orderId,
+              orderStatus: updatedOrder.orderStatus,
+              currentStatus: "assigned",
+            },
+          ],
+          { session },
+        );
+      }
+
+      if (status === "Cancelled") {
+        const deleteAssignments = await Assign.deleteMany(
+          {
+            orderId: updatedOrder.orderId,
+          },
+          { session },
+        );
+
+        deleteAssignmentsCount = deleteAssignments.deletedCount || 0;
+      }
+
+      if (status === "Delivered" && updatedOrder.driver?.driverId) {
+        if (!updatedOrder.deliverStatus) {
+          const storeBefore = await Store.findById(updatedOrder.storeId)
+            .session(session)
+            .lean();
+
+          if (!storeBefore) {
+            throw new Error("Store not found");
+          }
+
+          const store = storeBefore;
+          const setting = await SettingAdmin.findOne().session(session).lean();
+
+          const totalCommission = updatedOrder.items.reduce((sum, item) => {
+            const itemTotal = item.price * item.quantity;
+            const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
+            return sum + commissionAmount;
+          }, 0);
+
+          const itemTotal = updatedOrder.items.reduce((sum, item) => {
+            return sum + item.price * item.quantity;
+          }, 0);
+
+          const foodSellerTaxPercent = Number(
+            setting?.foodSellerTaxPercent || 5,
+          );
+
+          const foodItemsTotal = updatedOrder.items.reduce((sum, item) => {
+            const typeName = String(item.typeName || "")
+              .trim()
+              .toLowerCase();
+
+            if (typeName === "food") {
+              return sum + item.price * item.quantity;
+            }
+
+            return sum;
+          }, 0);
+
+          const foodSellerTaxAmount = !store.Authorized_Store
+            ? (foodItemsTotal * foodSellerTaxPercent) / 100
+            : 0;
+
+          const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
+          const sellerSponsoredPayout =
+            updatedOrder.sellerSponsoredDeliveryPayout || 0;
+
+          let creditToStore = itemTotal;
+          if (!store.Authorized_Store) {
+            creditToStore = itemTotal - totalAdminDeduction;
+          }
+
+          if (sellerSponsoredPayout > 0) {
+            creditToStore = creditToStore - sellerSponsoredPayout;
+          }
+
+          const storeData = await Store.findByIdAndUpdate(
+            updatedOrder.storeId,
+            { $inc: { wallet: creditToStore } },
+            { new: true, session },
+          );
+
+          if (!storeData) {
+            throw new Error("Store wallet update failed");
+          }
+
+          let transactionDescription = "";
+          if (store.Authorized_Store) {
+            transactionDescription =
+              sellerSponsoredPayout > 0
+                ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
+                : "Full amount credited (Authorized Store)";
+          } else {
+            const deductions = [];
+            if (totalCommission > 0) {
+              deductions.push(`₹${totalCommission.toFixed(2)} commission`);
+            }
+            if (foodSellerTaxAmount > 0) {
+              deductions.push(
+                `₹${foodSellerTaxAmount.toFixed(2)} food seller tax`,
+              );
+            }
+            if (sellerSponsoredPayout > 0) {
+              deductions.push(
+                `₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`,
+              );
+            }
+
+            transactionDescription =
+              deductions.length > 0
+                ? `Credited after deductions (${deductions.join(", ")} deducted)`
+                : "Amount credited";
+          }
+
+          await store_transaction.create(
+            [
+              {
+                currentAmount: storeData.wallet,
+                lastAmount: storeBefore.wallet,
+                type: "Credit",
+                amount: creditToStore,
+                orderId: updatedOrder.orderId,
+                storeId: updatedOrder.storeId,
+                description: transactionDescription,
+              },
+            ],
+            { session },
+          );
+
+          if (!store.Authorized_Store && totalAdminDeduction > 0) {
+            const lastAmount = await admin_transaction
+              .findById("68ea20d2c05a14a96c12788d")
+              .session(session)
+              .lean();
+            const updatedWallet = await admin_transaction.findByIdAndUpdate(
+              "68ea20d2c05a14a96c12788d",
+              { $inc: { wallet: totalAdminDeduction } },
+              { new: true, session },
+            );
+
+            if (!updatedWallet) {
+              throw new Error("Admin wallet update failed");
+            }
+
+            await admin_transaction.create(
+              [
+                {
+                  currentAmount: updatedWallet.wallet,
+                  lastAmount: lastAmount.wallet,
+                  type: "Credit",
+                  amount: totalAdminDeduction,
+                  orderId: updatedOrder.orderId,
+                  description:
+                    foodSellerTaxAmount > 0
+                      ? "Commission and food seller tax credited to Admin wallet"
+                      : "Commission credited to Admin wallet",
+                },
+              ],
+              { session },
+            );
+          }
+
+          const payout = updatedOrder.deliveryPayout || 0;
+          const deliveryChargeRaw = updatedOrder.deliveryCharges || 0;
+          const taxedAmount = Math.max(0, deliveryChargeRaw - payout);
+
+          if (!payout) {
+            console.warn("problem is drvier payout order status change");
+          }
+
+          await Assign.deleteMany(
+            {
+              orderId: updatedOrder.orderId,
+            },
+            { session },
+          );
+
+          const updatedDriver = await driver.findOneAndUpdate(
+            { "address.mobileNo": updatedOrder.driver.mobileNumber },
+            { $inc: { wallet: payout } },
+            { new: true, session },
+          );
+
+          if (!updatedDriver) {
+            throw new Error(
+              "Driver not found while updating driver wallet order status change",
+            );
+          }
+
+          await Transaction.create(
+            [
+              {
+                driverId: updatedDriver._id,
+                type: "credit",
+                amount: payout,
+                orderId: updatedOrder._id,
+                description: `Payout for Order #${updatedOrder.orderId}`,
+              },
+            ],
+            { session },
+          );
+
+          const lastAmount = await admin_transaction
+            .findById("68ea20d2c05a14a96c12788d")
+            .session(session)
+            .lean();
+
+          const updatedWallet = await admin_transaction.findByIdAndUpdate(
+            "68ea20d2c05a14a96c12788d",
+            { $inc: { wallet: taxedAmount } },
+            { new: true, session },
+          );
+
+          if (!updatedWallet) {
+            throw new Error("Admin tax wallet update failed");
+          }
+
+          await admin_transaction.create(
+            [
+              {
+                currentAmount: updatedWallet.wallet,
+                lastAmount: lastAmount.wallet,
+                type: "Credit",
+                amount: taxedAmount,
+                orderId: updatedOrder.orderId,
+                description: "Delivery Charge GST credited to Admin wallet",
+              },
+            ],
+            { session },
+          );
+
+          if (store.referralCode) {
+            try {
+              let referringDriver = null;
+              if (mongoose.Types.ObjectId.isValid(store.referralCode)) {
+                referringDriver = await driver
+                  .findById(store.referralCode)
+                  .session(session);
+              } else {
+                referringDriver = await driver
+                  .findOne({ driverId: store.referralCode })
+                  .session(session);
+              }
+
+              if (referringDriver) {
+                const existingCommission =
+                  await DriverReferralCommission.findOne({
+                    orderId: updatedOrder.orderId,
+                  }).session(session);
+
+                if (!existingCommission) {
+                  const commissionPercentage = 1;
+                  const commissionAmount =
+                    (creditToStore * commissionPercentage) / 100;
+
+                  await DriverReferralCommission.create(
+                    [
+                      {
+                        driverId: referringDriver._id,
+                        storeId: updatedOrder.storeId,
+                        orderId: updatedOrder.orderId,
+                        orderObjectId: updatedOrder._id,
+                        sellerProfit: creditToStore,
+                        commissionAmount,
+                        commissionPercentage,
+                        status: "pending",
+                      },
+                    ],
+                    { session },
+                  );
+
+                  console.log(
+                    `✅ Driver referral commission tracked: ₹${commissionAmount.toFixed(2)} for order ${updatedOrder.orderId}`,
+                  );
+                }
+              }
+            } catch (err) {
+              console.error(
+                "⚠️ Failed to track driver referral commission:",
+                err,
+              );
+              throw err;
+            }
+          }
+
+          let storeInvoiceId;
+          let feeInvoiceId;
+          if (store.Authorized_Store) {
+            storeInvoiceId = await generateStoreInvoiceId(
+              updatedOrder.storeId,
+              session,
+            );
+            feeInvoiceId = await FeeInvoiceId(true, session);
+          } else {
+            storeInvoiceId = await generateStoreInvoiceId(
+              updatedOrder.storeId,
+              session,
+            );
+            feeInvoiceId = await FeeInvoiceId(true, session);
+          }
+
+          await Order.findByIdAndUpdate(
+            updatedOrder._id,
+            {
+              storeInvoiceId,
+              feeInvoiceId,
+              deliverBy: "admin",
+              deliverStatus: true,
+              foodSellerTaxPercent,
+              foodSellerTaxAmount,
+            },
+            { session },
+          );
+
+          deliverySettlementApplied = true;
+        } else {
+          console.log(
+            `Order ${updatedOrder.orderId} already processed for delivery.`,
+          );
+        }
+      }
     });
 
-    // ================= SELLER SOCKET EVENT =================
+    if (!updatedOrder) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (assignmentNotification) {
+      const { user, storeData, driverDoc, orderId } = assignmentNotification;
+
+      if (user?.fcmToken && user.fcmToken !== "null") {
+        try {
+          await sendNotification(
+            user.fcmToken,
+            "🚗 Driver Assigned!",
+            `Your order #${orderId} has been assigned to driver ${driverDoc.driverName}.`,
+            "/dashboard1",
+            {
+              orderId,
+              driverName: driverDoc.driverName,
+              driverMobile: driverDoc.address?.mobileNo || "",
+              storeName: storeData?.storeName || "Fivlia",
+            },
+            DEFAULT_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
+      }
+
+      if (storeData?.fcmTokenMobile) {
+        try {
+          await sendNotification(
+            storeData.fcmTokenMobile,
+            "Driver Assigned 🚗",
+            `Driver ${driverDoc.driverName} has been assigned for order #${orderId}.`,
+            "/dashboard1",
+            {
+              orderId,
+              driverName: driverDoc.driverName,
+            },
+            CUSTOM_PUSH_SOUND,
+          );
+        } catch (err) {
+          console.warn(
+            "⚠️ User notification failed order status change:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
+      }
+    }
+
     try {
       const sellerSocket = sellerSocketMap.get(updatedOrder.storeId.toString());
 
@@ -1445,7 +1803,6 @@ exports.orderStatus = async (req, res) => {
     } catch (err) {
       console.error("Seller socket emit failed:", err.message);
     }
-    // =======================================================
 
     if (driverId !== undefined) {
       try {
@@ -1477,10 +1834,6 @@ exports.orderStatus = async (req, res) => {
 
     if (status === "Cancelled") {
       clearDispatchTimeout(updatedOrder.orderId);
-      const deleteAssignments = await Assign.deleteMany({
-        orderId: updatedOrder.orderId,
-        orderStatus: "Accepted",
-      });
 
       try {
         await updateDispatchState(
@@ -1503,12 +1856,9 @@ exports.orderStatus = async (req, res) => {
       }
 
       console.log(
-        `Deleted ${deleteAssignments.deletedCount} Accepted assignments for cancelled order ${updatedOrder.orderId}`,
+        `Deleted ${deleteAssignmentsCount} Accepted assignments for cancelled order ${updatedOrder.orderId}`,
       );
     }
-
-    if (!updatedOrder)
-      return res.status(404).json({ message: "Order not found" });
 
     if (normalizedStatus === "accepted") {
       autoAssignDriver(updatedOrder._id).catch((err) => {
@@ -1517,261 +1867,8 @@ exports.orderStatus = async (req, res) => {
     }
 
     if (status === "Delivered" && updatedOrder.driver?.driverId) {
-      if (updatedOrder.deliverStatus) {
-        console.log(
-          `Order ${updatedOrder.orderId} already processed for delivery.`,
-        );
-      } else {
-        console.log(
-          `Processing delivery logic for order ${updatedOrder.orderId}...`,
-        );
-        await Assign.findOneAndDelete({
-          driverId: updatedOrder.driver.driverId,
-          orderId: updatedOrder.orderId,
-          orderStatus: "Accepted",
-        });
-
-        // 🧮 Commission + Wallet Update Logic (SAME AS driverOrderStatus)
-        const storeBefore = await Store.findById(updatedOrder.storeId).lean();
-        const store = storeBefore;
-
-        const setting = await SettingAdmin.findOne().lean();
-        // 🧮 Calculate Commission from Items
-        const totalCommission = updatedOrder.items.reduce((sum, item) => {
-          const itemTotal = item.price * item.quantity;
-          const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
-          return sum + commissionAmount;
-        }, 0);
-
-        const itemTotal = updatedOrder.items.reduce((sum, item) => {
-          return sum + item.price * item.quantity;
-        }, 0);
-
-        // 1. Apply the extra 5% tax only for food sellers and keep the existing commission logic as-is.
-        const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
-
-        const foodItemsTotal = updatedOrder.items.reduce((sum, item) => {
-          const typeName = String(item.typeName || "")
-            .trim()
-            .toLowerCase();
-
-          if (typeName === "food") {
-            return sum + item.price * item.quantity;
-          }
-
-          return sum;
-        }, 0);
-
-        const foodSellerTaxAmount = !store.Authorized_Store
-          ? (foodItemsTotal * foodSellerTaxPercent) / 100
-          : 0;
-
-        const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
-
-        // ===> Handle seller-sponsored free delivery payout
-        const sellerSponsoredPayout =
-          updatedOrder.sellerSponsoredDeliveryPayout || 0;
-
-        // 🏦 Credit Store Wallet
-        let creditToStore = itemTotal;
-        if (!store.Authorized_Store) {
-          creditToStore = itemTotal - totalAdminDeduction;
-        }
-
-        // Deduct seller-sponsored delivery payout if applicable
-        if (sellerSponsoredPayout > 0) {
-          creditToStore = creditToStore - sellerSponsoredPayout;
-        }
-
-        const storeData = await Store.findByIdAndUpdate(
-          updatedOrder.storeId,
-          { $inc: { wallet: creditToStore } },
-          { new: true },
-        );
-
-        // ===> Build transaction description
-        let transactionDescription = "";
-        if (store.Authorized_Store) {
-          transactionDescription =
-            sellerSponsoredPayout > 0
-              ? `Full amount credited minus seller-sponsored delivery (₹${sellerSponsoredPayout.toFixed(2)} deducted for free delivery offer)`
-              : "Full amount credited (Authorized Store)";
-        } else {
-          const deductions = [];
-          if (totalCommission > 0) {
-            deductions.push(`₹${totalCommission.toFixed(2)} commission`);
-          }
-          if (foodSellerTaxAmount > 0) {
-            deductions.push(
-              `₹${foodSellerTaxAmount.toFixed(2)} food seller tax`,
-            );
-          }
-          if (sellerSponsoredPayout > 0) {
-            deductions.push(
-              `₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`,
-            );
-          }
-
-          transactionDescription =
-            deductions.length > 0
-              ? `Credited after deductions (${deductions.join(", ")} deducted)`
-              : "Amount credited";
-        }
-
-        // ➕ Create Store Transaction
-        await store_transaction.create({
-          currentAmount: storeData.wallet,
-          lastAmount: storeBefore.wallet,
-          type: "Credit",
-          amount: creditToStore,
-          orderId: updatedOrder.orderId,
-          storeId: updatedOrder.storeId,
-          description: transactionDescription,
-        });
-
-        // 2. Credit admin with the old commission plus the new food-seller tax in one delivered settlement.
-        if (!store.Authorized_Store && totalAdminDeduction > 0) {
-          const lastAmount = await admin_transaction
-            .findById("68ea20d2c05a14a96c12788d")
-            .lean();
-          const updatedWallet = await admin_transaction.findByIdAndUpdate(
-            "68ea20d2c05a14a96c12788d",
-            { $inc: { wallet: totalAdminDeduction } },
-            { new: true },
-          );
-
-          await admin_transaction.create({
-            currentAmount: updatedWallet.wallet,
-            lastAmount: lastAmount.wallet,
-            type: "Credit",
-            amount: totalAdminDeduction,
-            orderId: updatedOrder.orderId,
-            description:
-              foodSellerTaxAmount > 0
-                ? "Commission and food seller tax credited to Admin wallet"
-                : "Commission credited to Admin wallet",
-          });
-        }
-
-        const payout = updatedOrder.deliveryPayout || 0;
-        const deliveryChargeRaw = updatedOrder.deliveryCharges || 0;
-        const taxedAmount = Math.max(0, deliveryChargeRaw - payout);
-
-        if (!payout) {
-          console.warn("problem is drvier payout order status change");
-        }
-
-        // If you have order.driver.driverId, use that for more reliability
-        const updatedDriver = await driver.findOneAndUpdate(
-          { "address.mobileNo": updatedOrder.driver.mobileNumber },
-          { $inc: { wallet: payout } },
-          { new: true },
-        );
-        if (!updatedDriver) {
-          console.warn(
-            "Driver not found while updating driver wallet order status change",
-          );
-        }
-
-        await Transaction.create({
-          driverId: updatedDriver._id,
-          type: "credit",
-          amount: payout,
-          orderId: updatedOrder._id,
-          description: `Payout for Order #${updatedOrder.orderId}`,
-        });
-
-        const lastAmount = await admin_transaction
-          .findById("68ea20d2c05a14a96c12788d")
-          .lean();
-
-        const updatedWallet = await admin_transaction.findByIdAndUpdate(
-          "68ea20d2c05a14a96c12788d",
-          { $inc: { wallet: taxedAmount } },
-          { new: true },
-        );
-
-        await admin_transaction.create({
-          currentAmount: updatedWallet.wallet,
-          lastAmount: lastAmount.wallet,
-          type: "Credit",
-          amount: taxedAmount,
-          orderId: updatedOrder.orderId,
-          description: "Delivery Charge GST credited to Admin wallet",
-        });
-
-        // ===> Track driver referral commission (1% of seller profit)
-        if (store.referralCode) {
-          try {
-            // Find driver by referral code
-            let referringDriver = null;
-            if (mongoose.Types.ObjectId.isValid(store.referralCode)) {
-              referringDriver = await driver.findById(store.referralCode);
-            } else {
-              referringDriver = await driver.findOne({
-                driverId: store.referralCode,
-              });
-            }
-
-            if (referringDriver) {
-              // Check if commission already recorded for this order
-              const existingCommission = await DriverReferralCommission.findOne(
-                {
-                  orderId: updatedOrder.orderId,
-                },
-              );
-
-              if (!existingCommission) {
-                const commissionPercentage = 1; // 1%
-                const commissionAmount =
-                  (creditToStore * commissionPercentage) / 100;
-
-                await DriverReferralCommission.create({
-                  driverId: referringDriver._id,
-                  storeId: updatedOrder.storeId,
-                  orderId: updatedOrder.orderId,
-                  orderObjectId: updatedOrder._id,
-                  sellerProfit: creditToStore,
-                  commissionAmount,
-                  commissionPercentage,
-                  status: "pending",
-                });
-
-                console.log(
-                  `✅ Driver referral commission tracked: ₹${commissionAmount.toFixed(2)} for order ${updatedOrder.orderId}`,
-                );
-              }
-            }
-          } catch (err) {
-            console.error(
-              "⚠️ Failed to track driver referral commission:",
-              err,
-            );
-          }
-        }
-
-        let storeInvoiceId;
-        let feeInvoiceId;
-        // 🧾 Generate Store Invoice ID
-        if (store.Authorized_Store) {
-          // Authorized store: use global counter for both invoices
-          storeInvoiceId = await FeeInvoiceId(true); // increments counter
-          feeInvoiceId = await FeeInvoiceId(true); // increments counter again
-        } else {
-          // Unauthorized store: local logic
-          storeInvoiceId = await generateStoreInvoiceId(updatedOrder.storeId);
-          feeInvoiceId = await FeeInvoiceId(true); // can still increment global counter
-        }
-
-        await Order.findByIdAndUpdate(updatedOrder._id, {
-          storeInvoiceId,
-          feeInvoiceId,
-          deliverBy: "admin",
-          deliverStatus: true,
-          // 3. Save the food-seller tax snapshot so invoice data stays locked after delivery.
-          foodSellerTaxPercent,
-          foodSellerTaxAmount,
-        });
+      if (deliverySettlementApplied) {
+        const store = await Store.findById(updatedOrder.storeId).lean();
 
         if (store?.fcmTokenMobile) {
           try {
@@ -1796,13 +1893,17 @@ exports.orderStatus = async (req, res) => {
         } catch (err) {
           console.error("Error generating thermal invoice:", err);
         }
+      } else {
+        console.log(
+          `Order ${updatedOrder.orderId} already processed for delivery.`,
+        );
       }
     }
+
     const user = await User.findById(updatedOrder.userId).lean();
     const statusInfo = await Status.findOne({ statusTitle: status });
 
     const store = await Store.findById(updatedOrder.storeId).lean();
-    // 3. Send notification if FCM token valid and status exists
     if (user?.fcmToken && user.fcmToken !== "null" && statusInfo?.statusTitle) {
       try {
         await sendNotification(
@@ -1827,7 +1928,6 @@ exports.orderStatus = async (req, res) => {
       }
     }
 
-    // new socket code of user order status
     const socketOrderPayload = await Order.findById(updatedOrder._id).lean();
     await emitUserOrderStatusUpdate(
       socketOrderPayload || updatedOrder,
@@ -1844,6 +1944,10 @@ exports.orderStatus = async (req, res) => {
     return res
       .status(500)
       .json({ message: "Server Error", error: error.message });
+  } finally {
+    if (session) {
+      await session.endSession();
+    }
   }
 };
 

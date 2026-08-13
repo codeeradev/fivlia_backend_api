@@ -78,20 +78,20 @@ exports.generateThermalInvoice = async (orderId) => {
   }
 };
 
-exports.generateStoreInvoiceId = async (storeId) => {
-  const store = await Store.findById(storeId);
+exports.generateStoreInvoiceId = async (storeId, session = null) => {
+  const store = await Store.findById(storeId).session(session);
   if (!store) throw new Error("Store not found");
 
   let prefix = "";
   if (store.Authorized_Store) {
-    // field from store document
-    return await FeeInvoiceId(true);
+  // field from store document
+    return await FeeInvoiceId(true, session);
   } else {
     prefix = store.invoicePrefix;
   }
 
   // Find the last order for this store
-  const lastOrder = await Order.find({ storeId })
+  const lastOrder = await Order.find({ storeId }).session(session)
     .sort({ createdAt: -1 })
     .limit(1);
 
