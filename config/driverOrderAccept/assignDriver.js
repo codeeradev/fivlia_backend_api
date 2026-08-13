@@ -194,6 +194,55 @@ const updateDispatchState = async (orderId, update, redisUpdater = null) => {
 const toStringSet = (values = []) =>
   new Set(values.map((value) => value.toString()));
 
+const FINAL_ORDER_STATUSES = ["Delivered", "Cancelled", "Rejected"];
+
+const getBusyDriverIds = async (excludeOrderId = null) => {
+  const query = {
+    "driver.driverId": { $exists: true, $nin: [null, ""] },
+    orderStatus: { $nin: FINAL_ORDER_STATUSES },
+  };
+
+  if (excludeOrderId) {
+    query.orderId = { $ne: excludeOrderId.toString() };
+  }
+
+  const activeOrders = await Order.find(query)
+    .select("driver.driverId")
+    .lean();
+
+  return new Set(
+    activeOrders
+      .map((order) => order?.driver?.driverId)
+      .filter(Boolean)
+      .map((id) => id.toString()),
+  );
+};
+
+const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) => {
+  const identifiers = Array.isArray(driverIdentifiers)
+    ? driverIdentifiers
+    : [driverIdentifiers];
+  const normalizedIdentifiers = identifiers
+    .filter(Boolean)
+    .map((value) => value.toString());
+
+  if (!normalizedIdentifiers.length) {
+    return false;
+  }
+
+  const query = {
+    "driver.driverId": { $in: normalizedIdentifiers },
+    orderStatus: { $nin: FINAL_ORDER_STATUSES },
+  };
+
+  if (excludeOrderId) {
+    query.orderId = { $ne: excludeOrderId.toString() };
+  }
+
+  const busyOrder = await Order.findOne(query).select("_id").lean();
+  return !!busyOrder;
+};
+
 // Adds and removes order-specific socket listeners safely.
 const registerSocketOrderListeners = (socket, orderKey, handlers) => {
   if (!socket.__orderListenerRegistry) {
@@ -369,9 +418,20 @@ const assignWithBroadcast = async (order, drivers) => {
   const orderUser = await User.findOne({ _id: order.userId }).lean();
 
   const rejectedDrivers = toStringSet(dispatchState?.rejectedDrivers);
+  const busyDriverIds = await getBusyDriverIds(orderId);
 
   const availableDrivers = drivers.filter(
-    (driver) => !rejectedDrivers.has(driver._id.toString()),
+    (driver) => {
+      const driverIdentifiers = [
+        driver._id?.toString(),
+        driver.driverId?.toString(),
+      ].filter(Boolean);
+
+      return (
+        !rejectedDrivers.has(driver._id.toString()) &&
+        !driverIdentifiers.some((identifier) => busyDriverIds.has(identifier))
+      );
+    },
   );
 
   if (availableDrivers.length === 0) {
@@ -637,6 +697,34 @@ const assignWithBroadcast = async (order, drivers) => {
               orderId,
             });
 
+            return;
+          }
+
+          const driverBusy = await isDriverBusyForOrder(
+            [driverId, driver.driverId],
+            orderId,
+          );
+          if (driverBusy) {
+            console.warn(`⚠️ Driver ${driverId} already has an active order.`);
+
+            telegramOrderLog("❌ DRIVER BUSY ON ACTIVE ORDER", {
+              orderId,
+              driverId,
+              driverName: driver.driverName,
+            }).catch((error) => {
+              console.error("Telegram busy-driver log failed:", error.message);
+            });
+
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Driver already has an active order",
+              reason: "DRIVER_BUSY",
+              orderId,
+            });
+
+            removeSocketOrderListeners(socket, orderKey);
+            await removePendingDriverOffer(driverId, orderId);
             return;
           }
 
@@ -1200,3 +1288,5 @@ const assignWithBroadcast = async (order, drivers) => {
 module.exports = assignWithBroadcast;
 module.exports.updateDispatchState = updateDispatchState;
 module.exports.clearDispatchTimeout = clearDispatchTimeout;
+module.exports.getBusyDriverIds = getBusyDriverIds;
+module.exports.isDriverBusyForOrder = isDriverBusyForOrder;

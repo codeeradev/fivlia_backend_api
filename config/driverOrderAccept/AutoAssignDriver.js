@@ -4,7 +4,9 @@ const {
   getZoneWindowConfig,
   getActiveZoneRange,
 } = require("../google");
-const assignWithSocketLoop = require("./assignDriver");
+const assignDriverModule = require("./assignDriver");
+const assignWithSocketLoop = assignDriverModule;
+const { getBusyDriverIds } = assignDriverModule;
 const Address = require("../../modals/Address");
 const Assign = require("../../modals/driverModals/assignments");
 const { Order } = require("../../modals/order");
@@ -32,10 +34,7 @@ const autoAssignDriver = async (orderId) => {
     const userLat = user.latitude;
     const userLng = user.longitude;
     const drivers = await driver.find({ activeStatus: "online", status: true });
-    const busyAssignments = await Assign.find({
-      orderStatus: "Accepted",
-    }).select("driverId");
-    const busyDriverIds = busyAssignments.map((a) => String(a.driverId));
+    const busyDriverIds = await getBusyDriverIds(order.orderId);
 
     const rejectedAssignmentsForOrder = await Assign.find({
       orderStatus: "Rejected",
@@ -75,7 +74,11 @@ const autoAssignDriver = async (orderId) => {
     const rawDriversWithDistance = [];
 
     for (let d of drivers) {
-      if (busyDriverIds.includes(String(d._id))) continue;
+      const driverIdentifiers = [d._id?.toString(), d.driverId?.toString()].filter(
+        Boolean,
+      );
+
+      if (driverIdentifiers.some((id) => busyDriverIds.has(id))) continue;
       if (rejectedDriverIdsForOrder.includes(String(d._id))) continue;
       const driverDocRef = db.collection("updates").doc(String(d._id));
       const driverSnapshot = await driverDocRef.get();

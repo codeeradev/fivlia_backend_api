@@ -29,6 +29,9 @@ const {
   generateStoreInvoiceId,
 } = require("../config/invoice");
 const Transaction = require("../modals/driverModals/transaction");
+const {
+  isDriverBusyForOrder,
+} = require("../config/driverOrderAccept/assignDriver");
 
 const {
   buildPlatformPushConfig,
@@ -174,22 +177,14 @@ exports.acceptOrder = async (req, res) => {
 
     await session.withTransaction(async () => {
       if (status === true) {
-        const activeAssignment = await Assign.findOne({
-          driverId: driverData._id,
-          $or: [
-            { orderStatus: { $exists: true, $nin: ["Rejected"] } },
-            { currentStatus: { $exists: true, $nin: ["Rejected"] } },
-          ],
-        })
-          .session(session)
-          .lean();
+        const driverBusy = await isDriverBusyForOrder(
+          [driverData._id, driverData.driverId],
+          orderId,
+        );
 
-        if (
-          activeAssignment &&
-          String(activeAssignment.orderId) !== String(orderId)
-        ) {
+        if (driverBusy) {
           const error = new Error(
-            "Driver already has an active order in Assign",
+            "Driver already has an active order",
           );
           error.statusCode = 409;
           throw error;
