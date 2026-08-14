@@ -70,13 +70,16 @@ const autoAssignDriver = async (orderId) => {
 
     const zoneRange = getActiveZoneRange(matchedZone, zoneWindowConfig);
 
+    const eligibleDistance = zoneRange || 5000;
+
     const availableDrivers = [];
     const rawDriversWithDistance = [];
 
     for (let d of drivers) {
-      const driverIdentifiers = [d._id?.toString(), d.driverId?.toString()].filter(
-        Boolean,
-      );
+      const driverIdentifiers = [
+        d._id?.toString(),
+        d.driverId?.toString(),
+      ].filter(Boolean);
 
       if (driverIdentifiers.some((id) => busyDriverIds.has(id))) continue;
       if (rejectedDriverIdsForOrder.includes(String(d._id))) continue;
@@ -98,9 +101,13 @@ const autoAssignDriver = async (orderId) => {
       );
       console.log("distance", distance);
 
-      rawDriversWithDistance.push(`${d.driverName} (${d._id}) | ${distance}m`);
+      rawDriversWithDistance.push(
+        `Driver ID: ${d.driverId} | Name: ${d.driverName} | Distance: ${Math.round(
+          distance,
+        )}m | Eligible Distance: ${eligibleDistance}m`,
+      );
 
-      if (distance <= (zoneRange || 5000)) {
+      if (distance <= eligibleDistance) {
         console.log(
           "Raw Drivers",
           drivers.map((dr) => String(dr.driverName)),
@@ -124,10 +131,10 @@ const autoAssignDriver = async (orderId) => {
 
     availableDrivers.sort((a, b) => a.distance - b.distance);
 
-    // await telegramOrderLog("🚚 RAW DRIVERS", {
-    //   orderId: order.orderId,
-    //   drivers: rawDriversWithDistance,
-    // });
+    await telegramOrderLog("🚚 RAW DRIVERS", {
+      orderId: order.orderId,
+      drivers: rawDriversWithDistance,
+    });
 
     await telegramOrderLog("📍 AVAILABLE DRIVERS", {
       orderId: order.orderId,
