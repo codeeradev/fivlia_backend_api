@@ -601,7 +601,7 @@ exports.driverOrderStatus = async (req, res) => {
 
         // ✅ Clean up OTP and Assignments
         await OtpModel.deleteOne({ _id: otpRecord._id });
-        await Assign.deleteOne({ orderId: orderId, orderStatus: "Accepted" });
+        await Assign.deleteMany({ orderId: orderId });
 
         // ✅ Generate Thermal Invoice
         try {

@@ -28,6 +28,29 @@ const {
 // Tracks the active retry timer for each orderId.
 const orderTimeouts = new Map();
 
+const safeText = (value, fallback = "N/A") => {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text ? text : fallback;
+};
+
+const safeNumberText = (value, fallback = "N/A", fractionDigits = 0) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return num.toFixed(fractionDigits);
+};
+
+const safeTelegramLog = async (title, data) => {
+  try {
+    await telegramOrderLog(title, data);
+  } catch (err) {
+    console.error("Telegram dispatch log failed:", err.message);
+  }
+};
+
+const buildDriverSummaryLine = (index, driver, extra = "") =>
+  `${index + 1}. ${safeText(driver.driverName)} (${safeText(driver._id)})${extra ? ` | ${extra}` : ""}`;
+
 const clearDispatchTimeout = (orderId) => {
   orderId = orderId.toString();
 
@@ -197,25 +220,36 @@ const toStringSet = (values = []) =>
 const FINAL_ORDER_STATUSES = ["Delivered", "Cancelled", "Rejected"];
 
 const getBusyDriverIds = async (excludeOrderId = null) => {
-  const query = {
+  const orderQuery = {
     "driver.driverId": { $exists: true, $nin: [null, ""] },
     orderStatus: { $nin: FINAL_ORDER_STATUSES },
   };
+  const assignQuery = {
+    driverId: { $exists: true, $ne: null },
+    orderStatus: { $ne: "Rejected" },
+  };
 
   if (excludeOrderId) {
-    query.orderId = { $ne: excludeOrderId.toString() };
+    const orderId = excludeOrderId.toString();
+    orderQuery.orderId = { $ne: orderId };
+    assignQuery.orderId = { $ne: orderId };
   }
 
-  const activeOrders = await Order.find(query)
-    .select("driver.driverId")
-    .lean();
+  const [activeOrders, activeAssignments] = await Promise.all([
+    Order.find(orderQuery).select("driver.driverId").lean(),
+    Assign.find(assignQuery).select("driverId").lean(),
+  ]);
 
-  return new Set(
-    activeOrders
+  return new Set([
+    ...activeOrders
       .map((order) => order?.driver?.driverId)
       .filter(Boolean)
       .map((id) => id.toString()),
-  );
+    ...activeAssignments
+      .map((assignment) => assignment?.driverId)
+      .filter(Boolean)
+      .map((id) => id.toString()),
+  ]);
 };
 
 const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) => {
@@ -230,17 +264,27 @@ const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) =>
     return false;
   }
 
-  const query = {
+  const orderQuery = {
     "driver.driverId": { $in: normalizedIdentifiers },
     orderStatus: { $nin: FINAL_ORDER_STATUSES },
   };
+  const assignQuery = {
+    driverId: { $in: normalizedIdentifiers },
+    orderStatus: { $ne: "Rejected" },
+  };
 
   if (excludeOrderId) {
-    query.orderId = { $ne: excludeOrderId.toString() };
+    const orderId = excludeOrderId.toString();
+    orderQuery.orderId = { $ne: orderId };
+    assignQuery.orderId = { $ne: orderId };
   }
 
-  const busyOrder = await Order.findOne(query).select("_id").lean();
-  return !!busyOrder;
+  const [busyOrder, busyAssignment] = await Promise.all([
+    Order.findOne(orderQuery).select("_id").lean(),
+    Assign.findOne(assignQuery).select("_id").lean(),
+  ]);
+
+  return !!busyOrder || !!busyAssignment;
 };
 
 // Adds and removes order-specific socket listeners safely.
@@ -439,6 +483,31 @@ const assignWithBroadcast = async (order, drivers) => {
     // return;
   }
 
+  await safeTelegramLog("DISPATCH START", [
+    { label: "orderId", value: orderId },
+    { label: "totalDriversInput", value: drivers.length },
+    { label: "eligibleDrivers", value: availableDrivers.length },
+    { label: "rejectedDrivers", value: rejectedDrivers.size },
+    { label: "respondedDrivers", value: respondedDrivers.size },
+  ]);
+
+  const userLocation = orderUser?.location || {};
+  const orderWithLocation = {
+    ...(order.toObject ? order.toObject() : order),
+
+    storeName: orderStore?.storeName || null,
+    storeLat: orderStore?.Latitude || null,
+    storeLng: orderStore?.Longitude || null,
+
+    userLat: userLocation.latitude || null,
+    userLng: userLocation.longitude || null,
+
+    deliveryPayout:
+      order.deliveryPayout != null
+        ? Math.round(Number(order.deliveryPayout) * 100) / 100
+        : null,
+  };
+
   const cleanupAllListeners = () => {
     availableDrivers.forEach(async (driver) => {
       const driverId = driver._id.toString();
@@ -447,21 +516,28 @@ const assignWithBroadcast = async (order, drivers) => {
     });
   };
 
-  const broadcastOrder = () => {
+  const broadcastOrder = async () => {
     console.log(
       `📢 Broadcasting order ${orderId} to ${availableDrivers.length} drivers...`,
     );
 
+    let pushEligibleCount = 0;
+    let pushSentCount = 0;
+    let socketConnectedCount = 0;
+    let socketSkippedCount = 0;
+
     // 🔹 Step 1: Send FCM to ALL available drivers (socket or not)
-    availableDrivers.forEach(async (driver) => {
+    for (const driver of availableDrivers) {
+      if (orderAssigned) {
+        break;
+      }
+
       const driverId = driver._id.toString();
 
       if (driver.fcmToken) {
-        await telegramOrderLog("📲 PUSH ATTEMPT", {
-          orderId,
-          driverId,
-        });
-        admin
+        pushEligibleCount += 1;
+        console.log("PUSH ATTEMPT", { orderId, driverId });
+        await admin
           .messaging()
           .send({
             token: driver.fcmToken,
@@ -488,69 +564,56 @@ const assignWithBroadcast = async (order, drivers) => {
           })
           .then(async () => {
             console.log(`📩 Push sent to driver ${driverId}`);
-
-            await telegramOrderLog("📲 PUSH SENT TO DRIVER", {
-              orderId,
-              driverId,
-            });
+            pushSentCount += 1;
           })
           .catch(async (err) => {
             console.error("Push error:", err);
-
-            await telegramOrderLog("❌ PUSH FAILED", {
-              orderId,
-              driverId,
-              errorCode: err.code || "UNKNOWN",
-              error: err.message,
-            });
           });
       }
-    });
+
+      try {
+        await upsertPendingDriverOffer(
+          driverId,
+          orderId,
+          {
+            order: orderWithLocation,
+            driverId,
+            timeLeft: TIMEOUT_MS / 1000,
+          },
+          offerTtlSeconds,
+        );
+      } catch (pendingOfferError) {
+        console.error(
+          `⚠️ Failed to save pending offer for ${driverId} - ${orderId}:`,
+          pendingOfferError,
+        );
+      }
+    }
 
     // 🔹 Step 2: Emit socket event only for online drivers
-    availableDrivers.forEach(async (driver) => {
+    for (const driver of availableDrivers) {
+      if (orderAssigned) {
+        break;
+      }
+
       const driverId = driver._id.toString();
       const socket = driverSocketMap.get(driverId);
-
-      telegramOrderLog("🔌 DRIVER SOCKET STATUS", {
-        driverId,
-        socketExists: !!socket,
-        socketId: socket?.id || null,
-        socketConnected: socket?.connected === true,
-        orderId,
-      }).catch((error) => {
-        console.error("Telegram socket-status log failed:", error.message);
-      });
 
       if (!socket) {
         console.log(
           `📱 Driver ${driverId} not connected to socket, push-only mode`,
         );
-        return;
+        socketSkippedCount += 1;
+        continue;
       }
 
       if (socket.connected !== true) {
         console.log(`⚠️ Driver ${driverId} socket exists but is disconnected`);
-        return;
+        socketSkippedCount += 1;
+        continue;
       }
 
-      const userLocation = orderUser?.location || {};
-
-      const orderWithLocation = {
-        ...(order.toObject ? order.toObject() : order),
-
-        storeName: orderStore?.storeName || null,
-        storeLat: orderStore?.Latitude || null,
-        storeLng: orderStore?.Longitude || null,
-
-        userLat: userLocation.latitude || null,
-        userLng: userLocation.longitude || null,
-
-        deliveryPayout:
-          order.deliveryPayout != null
-            ? Math.round(Number(order.deliveryPayout) * 100) / 100
-            : null,
-      };
+      socketConnectedCount += 1;
 
       /*
        * IMPORTANT:
@@ -596,26 +659,6 @@ const assignWithBroadcast = async (order, drivers) => {
           timestamp: new Date().toISOString(),
         });
 
-        telegramOrderLog("🟡 DRIVER ACCEPT REQUEST RECEIVED", {
-          orderId,
-          expectedOrderId: orderId,
-
-          incomingOrderId,
-
-          driverId,
-          incomingDriverId,
-
-          orderAssigned,
-
-          driverName: driver?.driverName,
-
-          socketId: socket?.id || null,
-
-          timestamp: new Date().toISOString(),
-        }).catch((error) => {
-          console.error("Telegram accept-request log failed:", error.message);
-        });
-
         try {
           if (!incomingOrderId || !incomingDriverId) {
             console.warn("❌ ACCEPT PAYLOAD MISSING", {
@@ -658,18 +701,14 @@ const assignWithBroadcast = async (order, drivers) => {
               reason,
             });
 
-            telegramOrderLog("❌ ACCEPT VALIDATION FAILED", {
-              orderId,
-              incomingOrderId,
-
-              driverId,
-              incomingDriverId,
-
-              orderAssigned,
-              reason,
-            }).catch((error) => {
-              console.error("Telegram validation log failed:", error.message);
-            });
+            await safeTelegramLog("ACCEPT REJECTED", [
+              { label: "orderId", value: orderId },
+              { label: "driverId", value: driverId },
+              { label: "driverName", value: driver?.driverName },
+              { label: "reason", value: reason },
+              { label: "incomingOrderId", value: incomingOrderId },
+              { label: "incomingDriverId", value: incomingDriverId },
+            ]);
 
             sendCallback({
               status: false,
@@ -707,13 +746,12 @@ const assignWithBroadcast = async (order, drivers) => {
           if (driverBusy) {
             console.warn(`⚠️ Driver ${driverId} already has an active order.`);
 
-            telegramOrderLog("❌ DRIVER BUSY ON ACTIVE ORDER", {
-              orderId,
-              driverId,
-              driverName: driver.driverName,
-            }).catch((error) => {
-              console.error("Telegram busy-driver log failed:", error.message);
-            });
+            await safeTelegramLog("DRIVER BUSY", [
+              { label: "orderId", value: orderId },
+              { label: "driverId", value: driverId },
+              { label: "driverName", value: driver.driverName },
+              { label: "reason", value: "active order already exists" },
+            ]);
 
             sendCallback({
               status: false,
@@ -737,20 +775,11 @@ const assignWithBroadcast = async (order, drivers) => {
             orderStatus: "Going to Pickup",
           };
 
-          console.log("🟠 TRYING ORDER UPDATE", {
+          console.log("TRYING ORDER UPDATE", {
             orderId,
             driverId,
             driverName: driver.driverName,
             orderStatus: "Going to Pickup",
-          });
-
-          telegramOrderLog("🟠 TRYING ORDER UPDATE", {
-            orderId,
-            driverId,
-            driverName: driver.driverName,
-            orderStatus: "Going to Pickup",
-          }).catch((error) => {
-            console.error("Telegram trying-update log failed:", error.message);
           });
 
           /*
@@ -795,16 +824,12 @@ const assignWithBroadcast = async (order, drivers) => {
               `🉑 Order already accepted/not available: ${driverId} - ${orderId}`,
             );
 
-            telegramOrderLog("❌ ORDER UPDATE FAILED", {
-              orderId,
-              driverId,
-              reason: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND",
-            }).catch((error) => {
-              console.error(
-                "Telegram update-failed log failed:",
-                error.message,
-              );
-            });
+            await safeTelegramLog("ORDER UPDATE FAILED", [
+              { label: "orderId", value: orderId },
+              { label: "driverId", value: driverId },
+              { label: "driverName", value: driver?.driverName },
+              { label: "reason", value: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND" },
+            ]);
 
             socket.emit("orderAlreadyAccepted", {
               orderId,
@@ -914,13 +939,12 @@ const assignWithBroadcast = async (order, drivers) => {
 
           console.log(`🎉 Driver ${driverId} accepted order ${orderId}`);
 
-          telegramOrderLog("✅ DRIVER ACCEPTED", {
-            orderId,
-            driverId,
-            driverName: driver.driverName,
-          }).catch((error) => {
-            console.error("Telegram accepted log failed:", error.message);
-          });
+          await safeTelegramLog("DRIVER ACCEPTED", [
+            { label: "orderId", value: orderId },
+            { label: "driverId", value: driverId },
+            { label: "driverName", value: driver.driverName },
+            { label: "status", value: "assigned" },
+          ]);
 
           /*
            * Dusre drivers se same order remove karo.
@@ -970,17 +994,12 @@ const assignWithBroadcast = async (order, drivers) => {
             orderId,
           });
 
-          telegramOrderLog("❌ DRIVER ACCEPT FAILED", {
-            orderId,
-            driverId,
-            driverName: driver?.driverName,
-            reason: err.message,
-          }).catch((telegramError) => {
-            console.error(
-              "Telegram accept-error log failed:",
-              telegramError.message,
-            );
-          });
+          await safeTelegramLog("DRIVER ACCEPT FAILED", [
+            { label: "orderId", value: orderId },
+            { label: "driverId", value: driverId },
+            { label: "driverName", value: driver?.driverName },
+            { label: "reason", value: err.message },
+          ]);
         }
       };
 
@@ -1044,13 +1063,12 @@ const assignWithBroadcast = async (order, drivers) => {
 
         console.log(`❌ Driver ${driverId} rejected order ${orderId}`);
 
-        telegramOrderLog("❌ DRIVER REJECTED", {
-          orderId,
-          driverId,
-          driverName: driver.driverName,
-        }).catch((error) => {
-          console.error("Telegram reject log failed:", error.message);
-        });
+        await safeTelegramLog("DRIVER REJECTED", [
+          { label: "orderId", value: orderId },
+          { label: "driverId", value: driverId },
+          { label: "driverName", value: driver.driverName },
+          { label: "status", value: "rejected" },
+        ]);
 
         await removePendingDriverOffer(driverId, orderId);
 
@@ -1135,50 +1153,28 @@ const assignWithBroadcast = async (order, drivers) => {
 
       console.log(`✅ Socket order ${orderId} sent to driver ${driverId}`);
 
-      telegramOrderLog("📤 ORDER SENT TO DRIVER SOCKET", {
+      console.log("ORDER SENT TO DRIVER SOCKET", {
         orderId,
         driverId,
         socketId: socket.id,
         timeLeft: TIMEOUT_MS / 1000,
-      }).catch((error) => {
-        console.error("Telegram order-sent log failed:", error.message);
       });
 
-      /*
-       * Pending-offer flow same rakha hai.
-       * Iska await listener registration ko delay nahi karega,
-       * kyunki listener aur socket emit already ho chuke hain.
-       */
-      try {
-        await upsertPendingDriverOffer(
-          driverId,
-          orderId,
-          {
-            order: orderWithLocation,
-            driverId,
-            timeLeft: TIMEOUT_MS / 1000,
-          },
-          offerTtlSeconds,
-        );
-      } catch (pendingOfferError) {
-        console.error(
-          `⚠️ Failed to save pending offer for ${driverId} - ${orderId}:`,
-          pendingOfferError,
-        );
+    }
 
-        telegramOrderLog("⚠️ PENDING DRIVER OFFER SAVE FAILED", {
-          orderId,
-          driverId,
-          socketId: socket.id,
-          reason: pendingOfferError.message,
-        }).catch((logError) => {
-          console.error("Telegram pending-offer log failed:", logError.message);
-        });
-      }
-    });
+    await safeTelegramLog("DISPATCH DELIVERY SUMMARY", [
+      { label: "orderId", value: orderId },
+      { label: "eligibleDrivers", value: availableDrivers.length },
+      { label: "pushEligibleCount", value: pushEligibleCount },
+      { label: "pushSentCount", value: pushSentCount },
+      { label: "socketConnectedCount", value: socketConnectedCount },
+      { label: "socketSkippedCount", value: socketSkippedCount },
+    ]);
   };
 
-  broadcastOrder();
+  broadcastOrder().catch((err) => {
+    console.error("Broadcast order flow failed:", err.message);
+  });
 
   // Ensure only one active retry timer exists for this order.
   clearDispatchTimeout(orderId);

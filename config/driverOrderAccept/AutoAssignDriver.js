@@ -11,10 +11,34 @@ const Address = require("../../modals/Address");
 const Assign = require("../../modals/driverModals/assignments");
 const { Order } = require("../../modals/order");
 const driver = require("../../modals/driver");
+const Store = require("../../modals/store");
 const { ZoneData } = require("../../modals/cityZone");
 const admin = require("../../firebase/firebase");
 const telegramOrderLog = require("../../utils/telegram_logs");
 const db = admin.firestore();
+
+const safeText = (value, fallback = "N/A") => {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text ? text : fallback;
+};
+
+const safeNumberText = (value, fallback = "N/A", fractionDigits = 0) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return num.toFixed(fractionDigits);
+};
+
+const safeTelegramLog = async (title, data) => {
+  try {
+    await telegramOrderLog(title, data);
+  } catch (err) {
+    console.error("Telegram dispatch log failed:", err.message);
+  }
+};
+
+const buildDriverLine = (index, item) =>
+  `${index + 1}. ${safeText(item.driverName)} (${safeText(item.driverId)}) | distance=${safeNumberText(item.distanceM)}m | ${item.withinRadius ? "within_radius" : "out_of_radius"}${item.busy ? " | busy" : ""}${item.rejected ? " | rejected" : ""}`;
 
 const autoAssignDriver = async (orderId) => {
   try {
@@ -30,7 +54,12 @@ const autoAssignDriver = async (orderId) => {
     }
 
     const user = await Address.findById(order.addressId);
+    if (!user) {
+      console.warn(`Address not found for order ${order.orderId}`);
+      return;
+    }
 
+    const storeDoc = await Store.findById(order.storeId).lean();
     const userLat = user.latitude;
     const userLng = user.longitude;
     const drivers = await driver.find({ activeStatus: "online", status: true });
@@ -44,6 +73,7 @@ const autoAssignDriver = async (orderId) => {
     const rejectedDriverIdsForOrder = rejectedAssignmentsForOrder.map((a) =>
       String(a.driverId),
     );
+    const rejectedDriverSet = new Set(rejectedDriverIdsForOrder);
 
     const zoneDocs = await ZoneData.find({});
     const zoneWindowConfig = await getZoneWindowConfig();
@@ -64,97 +94,157 @@ const autoAssignDriver = async (orderId) => {
     }
 
     if (!matchedZone) {
-      console.log("User not in any delivery zone");
+      console.log("User not in any delivery zone", {
+        orderId: order.orderId,
+        storeId: order.storeId?.toString?.() || String(order.storeId || ""),
+      });
       return;
     }
 
     const zoneRange = getActiveZoneRange(matchedZone, zoneWindowConfig);
+    const zoneName = safeText(
+      matchedZone.zoneName || matchedZone.name || matchedZone.title || matchedZone.label,
+    );
+    const zoneRadiusM = Number(zoneRange || 5000);
 
-    const availableDrivers = [];
-    const rawDriversWithDistance = [];
+    await safeTelegramLog("NEW ORDER RECEIVED", [
+      { label: "orderId", value: order.orderId },
+      { label: "zoneName", value: zoneName },
+      { label: "zoneRadiusM", value: zoneRadiusM },
+      { label: "sellerName", value: storeDoc?.storeName },
+      { label: "storeId", value: order.storeId },
+      { label: "orderAcceptedBy", value: order.orderAcceptedBy },
+    ]);
 
-    for (let d of drivers) {
-      const driverIdentifiers = [d._id?.toString(), d.driverId?.toString()].filter(
-        Boolean,
-      );
+    console.log("NEW ORDER RECEIVED", {
+      orderId: order.orderId,
+      zoneName,
+      zoneRadiusM,
+      sellerName: storeDoc?.storeName || "N/A",
+      storeId: order.storeId?.toString?.() || String(order.storeId || ""),
+      orderAcceptedBy: order.orderAcceptedBy || "N/A",
+    });
 
-      if (driverIdentifiers.some((id) => busyDriverIds.has(id))) continue;
-      if (rejectedDriverIdsForOrder.includes(String(d._id))) continue;
-      const driverDocRef = db.collection("updates").doc(String(d._id));
-      const driverSnapshot = await driverDocRef.get();
-      if (!driverSnapshot.exists) {
-        continue;
+    const driverTrace = [];
+    const eligibleDrivers = [];
+
+    for (const d of drivers) {
+      const driverId = d._id?.toString?.() || String(d._id || "");
+      const driverIdentifiers = [driverId, d.driverId?.toString?.()].filter(Boolean);
+      const isBusy = driverIdentifiers.some((id) => busyDriverIds.has(id));
+      const isRejected = rejectedDriverSet.has(driverId);
+
+      let distance = null;
+      let withinRadius = false;
+
+      try {
+        const driverDocRef = db.collection("updates").doc(driverId);
+        const driverSnapshot = await driverDocRef.get();
+        if (driverSnapshot.exists) {
+          const driverData = driverSnapshot.data() || {};
+          distance = findAvailableDriversNearUser(
+            userLat,
+            userLng,
+            driverData.latitude,
+            driverData.longitude,
+          );
+          withinRadius = Number(distance) <= zoneRadiusM;
+        }
+      } catch (err) {
+        console.error("Driver location lookup failed:", {
+          orderId: order.orderId,
+          driverId,
+          error: err.message,
+        });
       }
-      const driverData = driverSnapshot.data();
-      // console.log('driverData',driverData)
-      const driverLat = driverData.latitude;
-      const driverLng = driverData.longitude;
 
-      const distance = findAvailableDriversNearUser(
-        userLat,
-        userLng,
-        driverLat,
-        driverLng,
-      );
-      console.log("distance", distance);
+      driverTrace.push({
+        driverId,
+        driverName: safeText(d.driverName),
+        distanceM: distance,
+        withinRadius,
+        busy: isBusy,
+        rejected: isRejected,
+      });
 
-      rawDriversWithDistance.push(`${d.driverName} (${d._id}) | ${distance}m`);
-
-      if (distance <= (zoneRange || 5000)) {
-        console.log(
-          "Raw Drivers",
-          drivers.map((dr) => String(dr.driverName)),
-        );
-
-        console.log("Busy Drivers", busyDriverIds);
-
-        // await telegramOrderLog("🚚 BUSY DRIVERS", {
-        //   orderId: order.orderId,
-        //   busyDrivers: busyDriverIds,
-        // });
-        console.log("Rejected Drivers for Order", rejectedDriverIdsForOrder);
-        // await telegramOrderLog("❌ REJECTED DRIVERS", {
-        //   orderId: order.orderId,
-        //   rejectedDrivers: rejectedDriverIdsForOrder,
-        // });
-        availableDrivers.push({ driverz: d, distance });
-        console.log("Available driver:", availableDrivers);
+      if (!isBusy && !isRejected && withinRadius) {
+        eligibleDrivers.push({ driverz: d, distance: distance ?? zoneRadiusM });
       }
     }
 
-    availableDrivers.sort((a, b) => a.distance - b.distance);
+    eligibleDrivers.sort((a, b) => a.distance - b.distance);
 
-    // await telegramOrderLog("🚚 RAW DRIVERS", {
-    //   orderId: order.orderId,
-    //   drivers: rawDriversWithDistance,
-    // });
+    await safeTelegramLog("ALL DRIVERS TRACED", [
+      { label: "orderId", value: order.orderId },
+      { label: "zoneName", value: zoneName },
+      { label: "zoneRadiusM", value: zoneRadiusM },
+      { label: "totalOnlineDrivers", value: drivers.length },
+      { label: "busyDrivers", value: busyDriverIds.size },
+      { label: "rejectedDrivers", value: rejectedDriverIdsForOrder.length },
+      ...driverTrace.map((item, index) => ({
+        label: `${index + 1}`,
+        value: buildDriverLine(index, item),
+      })),
+    ]);
 
-    await telegramOrderLog("📍 AVAILABLE DRIVERS", {
+    await safeTelegramLog("ELIGIBLE DRIVERS", [
+      { label: "orderId", value: order.orderId },
+      { label: "zoneName", value: zoneName },
+      { label: "eligibleCount", value: eligibleDrivers.length },
+      ...eligibleDrivers.map((item, index) => ({
+        label: `${index + 1}`,
+        value: `${safeText(item.driverz.driverName)} (${safeText(item.driverz._id)}) | distance=${safeNumberText(item.distance)}m`,
+      })),
+    ]);
+
+    console.log("ELIGIBLE DRIVERS", {
       orderId: order.orderId,
-      drivers: availableDrivers.map(
-        (d) => `${d.driverz.driverName} (${d.driverz._id}) | ${d.distance}m`,
-      ),
+      zoneName,
+      eligibleCount: eligibleDrivers.length,
+      drivers: eligibleDrivers.map((item) => ({
+        driverId: item.driverz._id?.toString?.() || String(item.driverz._id || ""),
+        driverName: safeText(item.driverz.driverName),
+        distanceM: item.distance,
+      })),
     });
-    console.log("Available driver After Sorting:", availableDrivers);
 
     const SPECIAL_STORE_ID = "68c24838f9cf1104714f2f23";
-
     const SPECIAL_DRIVER_IDS = [
       "69c66c8b11e3744c3d212e7a",
       "68f1d8c5a72119a8c21c6c34",
     ];
 
-    let finalDrivers = availableDrivers.map((d) => d.driverz);
+    let finalDrivers = eligibleDrivers.map((d) => d.driverz);
 
     if (String(order.storeId) === SPECIAL_STORE_ID) {
-      finalDrivers = finalDrivers.filter((driver) =>
-        SPECIAL_DRIVER_IDS.includes(driver._id.toString()),
+      finalDrivers = finalDrivers.filter((drv) =>
+        SPECIAL_DRIVER_IDS.includes(drv._id.toString()),
       );
     }
 
+    await safeTelegramLog("FINAL DISPATCH DRIVER SET", [
+      { label: "orderId", value: order.orderId },
+      { label: "zoneName", value: zoneName },
+      { label: "finalDriverCount", value: finalDrivers.length },
+      ...finalDrivers.map((item, index) => ({
+        label: `${index + 1}`,
+        value: `${safeText(item.driverName)} (${safeText(item._id)})`,
+      })),
+    ]);
+
+    console.log("FINAL DISPATCH DRIVER SET", {
+      orderId: order.orderId,
+      zoneName,
+      finalDriverCount: finalDrivers.length,
+      drivers: finalDrivers.map((item) => ({
+        driverId: item._id?.toString?.() || String(item._id || ""),
+        driverName: safeText(item.driverName),
+      })),
+    });
+
     assignWithSocketLoop(order, finalDrivers);
   } catch (err) {
-    console.error(err);
+    console.error("Auto assignment error:", err);
   }
 };
 
