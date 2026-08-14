@@ -40,6 +40,11 @@ const safeNumberText = (value, fallback = "N/A", fractionDigits = 0) => {
   return num.toFixed(fractionDigits);
 };
 
+const telegramDriverId = (driverDoc, fallbackId = "N/A") => {
+  if (!driverDoc) return fallbackId;
+  return safeText(driverDoc.driverId, safeText(fallbackId));
+};
+
 const safeTelegramLog = async (title, data) => {
   try {
     await telegramOrderLog(title, data);
@@ -597,6 +602,7 @@ const assignWithBroadcast = async (order, drivers) => {
       }
 
       const driverId = driver._id.toString();
+      const logDriverId = telegramDriverId(driver, driverId);
       const socket = driverSocketMap.get(driverId);
 
       if (!socket) {
@@ -703,7 +709,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
             await safeTelegramLog("ACCEPT REJECTED", [
               { label: "orderId", value: orderId },
-              { label: "driverId", value: driverId },
+              { label: "driverId", value: logDriverId },
               { label: "driverName", value: driver?.driverName },
               { label: "reason", value: reason },
               { label: "incomingOrderId", value: incomingOrderId },
@@ -748,7 +754,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
             await safeTelegramLog("DRIVER BUSY", [
               { label: "orderId", value: orderId },
-              { label: "driverId", value: driverId },
+              { label: "driverId", value: logDriverId },
               { label: "driverName", value: driver.driverName },
               { label: "reason", value: "active order already exists" },
             ]);
@@ -826,7 +832,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
             await safeTelegramLog("ORDER UPDATE FAILED", [
               { label: "orderId", value: orderId },
-              { label: "driverId", value: driverId },
+              { label: "driverId", value: logDriverId },
               { label: "driverName", value: driver?.driverName },
               { label: "reason", value: "ORDER_ALREADY_ACCEPTED_OR_NOT_FOUND" },
             ]);
@@ -941,7 +947,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
           await safeTelegramLog("DRIVER ACCEPTED", [
             { label: "orderId", value: orderId },
-            { label: "driverId", value: driverId },
+            { label: "driverId", value: logDriverId },
             { label: "driverName", value: driver.driverName },
             { label: "status", value: "assigned" },
           ]);
@@ -996,7 +1002,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
           await safeTelegramLog("DRIVER ACCEPT FAILED", [
             { label: "orderId", value: orderId },
-            { label: "driverId", value: driverId },
+            { label: "driverId", value: logDriverId },
             { label: "driverName", value: driver?.driverName },
             { label: "reason", value: err.message },
           ]);
@@ -1065,7 +1071,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
         await safeTelegramLog("DRIVER REJECTED", [
           { label: "orderId", value: orderId },
-          { label: "driverId", value: driverId },
+          { label: "driverId", value: logDriverId },
           { label: "driverName", value: driver.driverName },
           { label: "status", value: "rejected" },
         ]);

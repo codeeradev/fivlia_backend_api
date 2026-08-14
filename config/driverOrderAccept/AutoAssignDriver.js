@@ -29,6 +29,9 @@ const safeNumberText = (value, fallback = "N/A", fractionDigits = 0) => {
   return num.toFixed(fractionDigits);
 };
 
+const telegramDriverId = (driverDoc) =>
+  safeText(driverDoc?.driverId, safeText(driverDoc?._id));
+
 const safeTelegramLog = async (title, data) => {
   try {
     await telegramOrderLog(title, data);
@@ -130,6 +133,7 @@ const autoAssignDriver = async (orderId) => {
 
     for (const d of drivers) {
       const driverId = d._id?.toString?.() || String(d._id || "");
+      const logDriverId = telegramDriverId(d);
       const driverIdentifiers = [driverId, d.driverId?.toString?.()].filter(Boolean);
       const isBusy = driverIdentifiers.some((id) => busyDriverIds.has(id));
       const isRejected = rejectedDriverSet.has(driverId);
@@ -160,6 +164,7 @@ const autoAssignDriver = async (orderId) => {
 
       driverTrace.push({
         driverId,
+        logDriverId,
         driverName: safeText(d.driverName),
         distanceM: distance,
         withinRadius,
@@ -183,7 +188,7 @@ const autoAssignDriver = async (orderId) => {
       { label: "rejectedDrivers", value: rejectedDriverIdsForOrder.length },
       ...driverTrace.map((item, index) => ({
         label: `${index + 1}`,
-        value: buildDriverLine(index, item),
+        value: `${index + 1}. ${safeText(item.driverName)} (${safeText(item.logDriverId)}) | distance=${safeNumberText(item.distanceM)}m | ${item.withinRadius ? "within_radius" : "out_of_radius"}${item.busy ? " | busy" : ""}${item.rejected ? " | rejected" : ""}`,
       })),
     ]);
 
@@ -193,7 +198,7 @@ const autoAssignDriver = async (orderId) => {
       { label: "eligibleCount", value: eligibleDrivers.length },
       ...eligibleDrivers.map((item, index) => ({
         label: `${index + 1}`,
-        value: `${safeText(item.driverz.driverName)} (${safeText(item.driverz._id)}) | distance=${safeNumberText(item.distance)}m`,
+        value: `${safeText(item.driverz.driverName)} (${safeText(item.driverz.driverId, safeText(item.driverz._id))}) | distance=${safeNumberText(item.distance)}m`,
       })),
     ]);
 
@@ -228,7 +233,7 @@ const autoAssignDriver = async (orderId) => {
       { label: "finalDriverCount", value: finalDrivers.length },
       ...finalDrivers.map((item, index) => ({
         label: `${index + 1}`,
-        value: `${safeText(item.driverName)} (${safeText(item._id)})`,
+        value: `${safeText(item.driverName)} (${safeText(item.driverId, safeText(item._id))})`,
       })),
     ]);
 
