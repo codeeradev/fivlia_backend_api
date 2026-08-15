@@ -530,6 +530,23 @@ const assignWithBroadcast = async (order, drivers) => {
     let pushSentCount = 0;
     let socketConnectedCount = 0;
     let socketSkippedCount = 0;
+    const deliverySummary = new Map();
+
+    const getSummaryEntry = (driverDoc) => {
+      const driverKey = driverDoc._id.toString();
+      if (!deliverySummary.has(driverKey)) {
+        deliverySummary.set(driverKey, {
+          driverId: telegramDriverId(driverDoc, driverKey),
+          driverName: safeText(driverDoc.driverName),
+          pushStatus: "not_processed",
+          pushReason: "N/A",
+          socketStatus: "not_processed",
+          socketReason: "N/A",
+        });
+      }
+
+      return deliverySummary.get(driverKey);
+    };
 
     // 🔹 Step 1: Send FCM to ALL available drivers (socket or not)
     for (const driver of availableDrivers) {
@@ -538,13 +555,13 @@ const assignWithBroadcast = async (order, drivers) => {
       }
 
       const driverId = driver._id.toString();
+      const summary = getSummaryEntry(driver);
 
       if (driver.fcmToken) {
         pushEligibleCount += 1;
         console.log("PUSH ATTEMPT", { orderId, driverId });
-        await admin
-          .messaging()
-          .send({
+        try {
+          await admin.messaging().send({
             token: driver.fcmToken,
             notification: {
               title: "New Order Request 🚗",
@@ -566,14 +583,19 @@ const assignWithBroadcast = async (order, drivers) => {
                 default_sound: false,
               },
             },
-          })
-          .then(async () => {
-            console.log(`📩 Push sent to driver ${driverId}`);
-            pushSentCount += 1;
-          })
-          .catch(async (err) => {
-            console.error("Push error:", err);
           });
+          console.log(`📩 Push sent to driver ${driverId}`);
+          pushSentCount += 1;
+          summary.pushStatus = "sent";
+          summary.pushReason = "sent_successfully";
+        } catch (err) {
+          console.error("Push error:", err);
+          summary.pushStatus = "failed";
+          summary.pushReason = err?.message || "push_failed";
+        }
+      } else {
+        summary.pushStatus = "skipped";
+        summary.pushReason = "missing_fcm_token";
       }
 
       try {
@@ -604,22 +626,29 @@ const assignWithBroadcast = async (order, drivers) => {
       const driverId = driver._id.toString();
       const logDriverId = telegramDriverId(driver, driverId);
       const socket = driverSocketMap.get(driverId);
+      const summary = getSummaryEntry(driver);
 
       if (!socket) {
         console.log(
           `📱 Driver ${driverId} not connected to socket, push-only mode`,
         );
         socketSkippedCount += 1;
+        summary.socketStatus = "skipped";
+        summary.socketReason = "socket_not_found";
         continue;
       }
 
       if (socket.connected !== true) {
         console.log(`⚠️ Driver ${driverId} socket exists but is disconnected`);
         socketSkippedCount += 1;
+        summary.socketStatus = "skipped";
+        summary.socketReason = "socket_disconnected";
         continue;
       }
 
       socketConnectedCount += 1;
+      summary.socketStatus = "connected";
+      summary.socketReason = "socket_ready";
 
       /*
        * IMPORTANT:
@@ -1175,6 +1204,10 @@ const assignWithBroadcast = async (order, drivers) => {
       { label: "pushSentCount", value: pushSentCount },
       { label: "socketConnectedCount", value: socketConnectedCount },
       { label: "socketSkippedCount", value: socketSkippedCount },
+      ...Array.from(deliverySummary.values()).map((item, index) => ({
+        label: `${index + 1}`,
+        value: `${index + 1}. ${safeText(item.driverName)} (${safeText(item.driverId)}) | push=${safeText(item.pushStatus)} | pushReason=${safeText(item.pushReason)} | socket=${safeText(item.socketStatus)} | socketReason=${safeText(item.socketReason)}`,
+      })),
     ]);
   };
 
