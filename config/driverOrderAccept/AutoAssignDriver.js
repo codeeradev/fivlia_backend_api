@@ -211,6 +211,8 @@ const runAutoAssignDriver = async (orderId) => {
     const SPECIAL_DRIVER_IDS = [
       "69c66c8b11e3744c3d212e7a",
       "68f1d8c5a72119a8c21c6c34",
+      "6a82da02cd399d2dc859a0c3",
+      "69c66c4111e3744c3d212e03"
     ];
 
     let finalDrivers = eligibleDrivers.map((d) => d.driverz);
