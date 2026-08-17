@@ -1,5 +1,7 @@
 const DEFAULT_PUSH_SOUND = "default";
 const CUSTOM_PUSH_SOUND = "custom_sound";
+const DRIVER_NOTIFICATION_CHANNEL =
+  process.env.DRIVER_NOTIFICATION_CHANNEL || "delivery_alerts_v4";
 
 const normalizePushSound = (soundType = DEFAULT_PUSH_SOUND) =>
   soundType === DEFAULT_PUSH_SOUND ? DEFAULT_PUSH_SOUND : CUSTOM_PUSH_SOUND;
@@ -16,7 +18,7 @@ const buildPlatformPushConfig = (
       priority: "high",
       notification: {
         sound: normalizedSound,
-        channel_id: "channel_id",
+        channelId: DRIVER_NOTIFICATION_CHANNEL,
       },
     },
     apns: {
@@ -42,4 +44,5 @@ module.exports = {
   CUSTOM_PUSH_SOUND,
   normalizePushSound,
   buildPlatformPushConfig,
+  DRIVER_NOTIFICATION_CHANNEL,
 };

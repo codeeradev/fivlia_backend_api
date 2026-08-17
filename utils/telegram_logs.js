@@ -1,7 +1,11 @@
 const axios = require("axios");
 
-const BOT_TOKEN = "8685766369:AAH-K2i16HL3XeXz7fZHwCGX0ofFjqkmvf8";
-const CHAT_ID = "-1003983250616";
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+const MIN_SEND_INTERVAL_MS = Number(
+  process.env.TELEGRAM_LOG_MIN_INTERVAL_MS || 1000,
+);
+let nextAllowedSendAt = 0;
 
 const isBlank = (value) =>
   value === null ||
@@ -26,7 +30,26 @@ const formatValue = (value) => {
   return String(value);
 };
 
-async function telegramOrderLog(title, data = {}) {
+const handleTelegramError = (err) => {
+  const retryAfterSeconds = Number(
+    err?.response?.data?.parameters?.retry_after || 0,
+  );
+  if (retryAfterSeconds > 0) {
+    nextAllowedSendAt = Date.now() + retryAfterSeconds * 1000;
+  }
+  console.error(
+    "Telegram Log Error:",
+    err?.response?.data?.description || err.message,
+  );
+};
+
+function telegramOrderLog(title, data = {}) {
+  if (!BOT_TOKEN || !CHAT_ID) return;
+
+  const now = Date.now();
+  if (now < nextAllowedSendAt) return;
+  nextAllowedSendAt = now + MIN_SEND_INTERVAL_MS;
+
   try {
     let text = `${title}\n`;
 
@@ -48,12 +71,18 @@ async function telegramOrderLog(title, data = {}) {
       });
     }
 
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: CHAT_ID,
-      text,
-    });
+    void axios
+      .post(
+        `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+        {
+          chat_id: CHAT_ID,
+          text,
+        },
+        { timeout: 5000 },
+      )
+      .catch(handleTelegramError);
   } catch (err) {
-    console.error("Telegram Log Error:", err.message);
+    handleTelegramError(err);
   }
 }
 

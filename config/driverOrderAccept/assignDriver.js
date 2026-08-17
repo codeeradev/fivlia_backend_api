@@ -14,16 +14,21 @@ const { notifyEntity } = require("../../utils/notifyStore");
 const {
   buildPlatformPushConfig,
   DEFAULT_PUSH_SOUND,
+  DRIVER_NOTIFICATION_CHANNEL,
 } = require("../../utils/pushSoundConfig");
 const { getRedisClient } = require("../../utils/redisClient");
 const {
   upsertPendingDriverOffer,
   removePendingDriverOffer,
 } = require("../../utils/pendingDriverOffers");
+const {
+  sendDriverOfferClosedPush,
+} = require("../../utils/driverOfferNotifications");
 // new socket code of user order status
 const {
   emitUserOrderStatusUpdate,
 } = require("../../utils/emitUserOrderStatusUpdate");
+const { getDriverSocketRouter } = require("../../socket/driverSocketRouter");
 
 // Tracks the active retry timer for each orderId.
 const orderTimeouts = new Map();
@@ -222,7 +227,19 @@ const updateDispatchState = async (orderId, update, redisUpdater = null) => {
 const toStringSet = (values = []) =>
   new Set(values.map((value) => value.toString()));
 
-const FINAL_ORDER_STATUSES = ["Delivered", "Cancelled", "Rejected"];
+const FINAL_ORDER_STATUSES = [
+  "Delivered",
+  "Completed",
+  "Cancelled",
+  "Rejected",
+];
+
+const isOrderDispatchable = (order) =>
+  Boolean(
+    order &&
+      !order.driver?.driverId &&
+      !FINAL_ORDER_STATUSES.includes(order.orderStatus),
+  );
 
 const getBusyDriverIds = async (excludeOrderId = null) => {
   const orderQuery = {
@@ -264,6 +281,9 @@ const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) =>
   const normalizedIdentifiers = identifiers
     .filter(Boolean)
     .map((value) => value.toString());
+  const assignmentDriverIds = normalizedIdentifiers.filter((value) =>
+    /^[a-f\d]{24}$/i.test(value),
+  );
 
   if (!normalizedIdentifiers.length) {
     return false;
@@ -274,7 +294,11 @@ const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) =>
     orderStatus: { $nin: FINAL_ORDER_STATUSES },
   };
   const assignQuery = {
-    driverId: { $in: normalizedIdentifiers },
+    // assignments.driverId is an ObjectId, while orders.driver.driverId is a
+    // string and may contain the public driver code (for example "FV004").
+    // Passing that public code to Mongoose's ObjectId field aborts the entire
+    // pending-offer recovery with a CastError.
+    driverId: { $in: assignmentDriverIds },
     orderStatus: { $ne: "Rejected" },
   };
 
@@ -294,19 +318,16 @@ const isDriverBusyForOrder = async (driverIdentifiers, excludeOrderId = null) =>
 
 // Adds and removes order-specific socket listeners safely.
 const registerSocketOrderListeners = (socket, orderKey, handlers) => {
-  if (!socket.__orderListenerRegistry) {
-    socket.__orderListenerRegistry = new Map();
-  }
-
-  const { onAccept, onReject, onDisconnect } = handlers;
-  socket.on("acceptOrder", onAccept);
-  socket.on("rejectOrder", onReject);
-  socket.on("disconnect", onDisconnect);
-
-  socket.__orderListenerRegistry.set(orderKey, handlers);
+  getDriverSocketRouter(socket).register(String(orderKey).replace(/^order:/, ""), {
+    accept: handlers.onAccept,
+    reject: handlers.onReject,
+  });
 };
 
 const removeSocketOrderListeners = (socket, orderKey) => {
+  getDriverSocketRouter(socket)?.unregister(String(orderKey).replace(/^order:/, ""));
+  return;
+
   if (!socket?.__orderListenerRegistry?.has(orderKey)) {
     return;
   }
@@ -338,6 +359,13 @@ const removeSocketOrderListeners = (socket, orderKey) => {
 const assignWithBroadcast = async (order, drivers) => {
   const orderId = order.orderId.toString();
   const orderKey = `order:${orderId}`;
+  const latestOrderAtStart = await Order.findOne({ orderId })
+    .select("orderStatus driver.driverId")
+    .lean();
+  if (!isOrderDispatchable(latestOrderAtStart)) {
+    console.warn(`Order ${orderId} is no longer dispatchable. Aborting.`);
+    return;
+  }
   const dispatchState = await getDispatchState(orderId);
 
   if (dispatchState?.assigned) {
@@ -428,6 +456,16 @@ const assignWithBroadcast = async (order, drivers) => {
       drivers.map((driver) =>
         removePendingDriverOffer(driver._id?.toString(), orderId),
       ),
+    );
+    await Promise.all(
+      drivers.map(async (driver) => {
+        const driverId = driver._id?.toString();
+        driverSocketMap.get(driverId)?.emit("orderTaken", {
+          orderId,
+          reason: "CANCELLED",
+        });
+        await sendDriverOfferClosedPush(driver, orderId, "order_cancelled");
+      }),
     );
 
     await updateDispatchState(
@@ -522,6 +560,16 @@ const assignWithBroadcast = async (order, drivers) => {
   };
 
   const broadcastOrder = async () => {
+    const latestOrder = await Order.findOne({ orderId })
+      .select("orderStatus driver.driverId")
+      .lean();
+    if (!isOrderDispatchable(latestOrder)) {
+      console.warn(
+        `Order ${orderId} changed before broadcast. Skipping stale offer.`,
+      );
+      return false;
+    }
+
     console.log(
       `📢 Broadcasting order ${orderId} to ${availableDrivers.length} drivers...`,
     );
@@ -557,6 +605,26 @@ const assignWithBroadcast = async (order, drivers) => {
       const driverId = driver._id.toString();
       const summary = getSummaryEntry(driver);
 
+      // Persist FIRST. A foreground FCM can immediately request recovery;
+      // that request must never beat the pending-offer write.
+      try {
+        await upsertPendingDriverOffer(
+          driverId,
+          orderId,
+          {
+            order: orderWithLocation,
+            driverId,
+            timeLeft: TIMEOUT_MS / 1000,
+          },
+          offerTtlSeconds,
+        );
+      } catch (pendingOfferError) {
+        console.error(
+          `⚠️ Failed to save pending offer for ${driverId} - ${orderId}:`,
+          pendingOfferError,
+        );
+      }
+
       if (driver.fcmToken) {
         pushEligibleCount += 1;
         console.log("PUSH ATTEMPT", { orderId, driverId });
@@ -578,9 +646,8 @@ const assignWithBroadcast = async (order, drivers) => {
             android: {
               priority: "high",
               notification: {
-                channel_id: "delivery_alerts_v3",
+                channelId: DRIVER_NOTIFICATION_CHANNEL,
                 sound: "custom_sound",
-                default_sound: false,
               },
             },
           });
@@ -597,24 +664,21 @@ const assignWithBroadcast = async (order, drivers) => {
         summary.pushStatus = "skipped";
         summary.pushReason = "missing_fcm_token";
       }
+    }
 
-      try {
-        await upsertPendingDriverOffer(
-          driverId,
-          orderId,
-          {
-            order: orderWithLocation,
-            driverId,
-            timeLeft: TIMEOUT_MS / 1000,
-          },
-          offerTtlSeconds,
-        );
-      } catch (pendingOfferError) {
-        console.error(
-          `⚠️ Failed to save pending offer for ${driverId} - ${orderId}:`,
-          pendingOfferError,
-        );
-      }
+    const latestOrderBeforeSocket = await Order.findOne({ orderId })
+      .select("orderStatus driver.driverId")
+      .lean();
+    if (!isOrderDispatchable(latestOrderBeforeSocket)) {
+      await Promise.all(
+        availableDrivers.map((driver) =>
+          removePendingDriverOffer(driver._id.toString(), orderId),
+        ),
+      );
+      console.warn(
+        `Order ${orderId} changed during push delivery. Socket emit skipped.`,
+      );
+      return false;
     }
 
     // 🔹 Step 2: Emit socket event only for online drivers
@@ -707,6 +771,7 @@ const assignWithBroadcast = async (order, drivers) => {
               status: false,
               success: false,
               message: "driverId and orderId are required",
+              reason: "INVALID_REQUEST",
               orderId,
             });
 
@@ -715,15 +780,12 @@ const assignWithBroadcast = async (order, drivers) => {
 
           if (
             incomingOrderId !== orderId ||
-            incomingDriverId !== driverId ||
-            orderAssigned
+            incomingDriverId !== driverId
           ) {
             const reason =
               incomingOrderId !== orderId
                 ? "ORDER_ID_MISMATCH"
-                : incomingDriverId !== driverId
-                  ? "DRIVER_ID_MISMATCH"
-                  : "ALREADY_ASSIGNED";
+                : "DRIVER_ID_MISMATCH";
 
             console.warn("❌ ACCEPT VALIDATION FAILED", {
               orderId,
@@ -748,10 +810,7 @@ const assignWithBroadcast = async (order, drivers) => {
             sendCallback({
               status: false,
               success: false,
-              message:
-                reason === "ALREADY_ASSIGNED"
-                  ? "Order already accepted"
-                  : "Invalid order accept request",
+              message: "Invalid order accept request",
               reason,
               orderId,
             });
@@ -768,9 +827,34 @@ const assignWithBroadcast = async (order, drivers) => {
               status: false,
               success: false,
               message: "Order not found",
+              reason: "ORDER_NOT_FOUND",
               orderId,
             });
 
+            return;
+          }
+
+          const existingDriverId = latestOrder.driver?.driverId?.toString?.() || "";
+          if (existingDriverId && existingDriverId === driverId && latestOrder.orderStatus === "Going to Pickup") {
+            sendCallback({
+              status: true,
+              success: true,
+              message: "Order already accepted by this driver",
+              reason: "ALREADY_ACCEPTED_BY_DRIVER",
+              orderId,
+              driverId,
+            });
+            return;
+          }
+          if (existingDriverId) {
+            socket.emit("orderAlreadyAccepted", { orderId });
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Order already accepted",
+              reason: "ALREADY_ACCEPTED",
+              orderId,
+            });
             return;
           }
 
@@ -824,6 +908,7 @@ const assignWithBroadcast = async (order, drivers) => {
           const updateResult = await Order.findOneAndUpdate(
             {
               orderId,
+              orderStatus: { $nin: FINAL_ORDER_STATUSES },
               $or: [
                 {
                   driver: {
@@ -855,6 +940,14 @@ const assignWithBroadcast = async (order, drivers) => {
           );
 
           if (!updateResult) {
+            const claimedOrder = await Order.findOne({ orderId })
+              .select("driver.driverId orderStatus")
+              .lean();
+            const claimedDriverId =
+              claimedOrder?.driver?.driverId?.toString?.() || "";
+            const failureReason = claimedDriverId
+              ? "ALREADY_ACCEPTED"
+              : "ORDER_NOT_AVAILABLE";
             console.warn(
               `🉑 Order already accepted/not available: ${driverId} - ${orderId}`,
             );
@@ -873,7 +966,10 @@ const assignWithBroadcast = async (order, drivers) => {
             sendCallback({
               status: false,
               success: false,
-              message: "Order already accepted",
+              message: claimedDriverId
+                ? "Order already accepted"
+                : "Order is no longer available",
+              reason: failureReason,
               orderId,
             });
 
@@ -908,6 +1004,18 @@ const assignWithBroadcast = async (order, drivers) => {
             orderId,
             driverId,
             socketId: socket.id,
+          });
+
+          // MongoDB is authoritative. As soon as the atomic claim succeeds,
+          // remove the offer from every other connected driver; secondary
+          // Redis/logging/assignment writes must not delay stale-card cleanup.
+          availableDrivers.forEach((availableDriver) => {
+            const otherDriverId = availableDriver._id.toString();
+            if (otherDriverId === driverId) return;
+            driverSocketMap.get(otherDriverId)?.emit("orderTaken", {
+              orderId,
+              acceptedBy: driverId,
+            });
           });
 
           /*
@@ -984,22 +1092,20 @@ const assignWithBroadcast = async (order, drivers) => {
           /*
            * Dusre drivers se same order remove karo.
            */
-          availableDrivers.forEach((availableDriver) => {
-            const otherDriverId = availableDriver._id.toString();
-
-            if (otherDriverId === driverId) {
-              return;
-            }
-
-            const otherSocket = driverSocketMap.get(otherDriverId);
-
-            if (otherSocket?.connected) {
-              otherSocket.emit("orderTaken", {
-                orderId,
-                acceptedBy: driverId,
-              });
-            }
-          });
+          await Promise.all(
+            availableDrivers
+              .filter(
+                (availableDriver) =>
+                  availableDriver._id.toString() !== driverId,
+              )
+              .map((availableDriver) =>
+                sendDriverOfferClosedPush(
+                  availableDriver,
+                  orderId,
+                  "order_taken",
+                ),
+              ),
+          );
 
           try {
             await Promise.all(
@@ -1025,6 +1131,7 @@ const assignWithBroadcast = async (order, drivers) => {
             status: false,
             success: false,
             message: "Failed to accept order",
+            reason: "INTERNAL_ERROR",
             error: err.message,
             orderId,
           });
@@ -1040,7 +1147,7 @@ const assignWithBroadcast = async (order, drivers) => {
 
       // ---------------- REJECT HANDLER ----------------
 
-      const handleReject = async (payload = {}) => {
+      const handleReject = async (payload = {}, sendCallback = null) => {
         const incomingDriverId = payload?.driverId?.toString().trim() || "";
 
         const incomingOrderId = payload?.orderId?.toString().trim() || "";
@@ -1050,6 +1157,30 @@ const assignWithBroadcast = async (order, drivers) => {
           incomingDriverId !== driverId ||
           orderAssigned
         ) {
+          if (typeof sendCallback === "function") {
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Order is no longer available",
+              reason: orderAssigned ? "ALREADY_ACCEPTED" : "INVALID_REQUEST",
+              orderId,
+            });
+          }
+          return;
+        }
+
+        const currentOrder = await Order.findOne({ orderId }).select("driver.driverId orderStatus").lean();
+        if (!currentOrder || currentOrder.driver?.driverId || ["Cancelled", "Delivered", "Rejected"].includes(currentOrder.orderStatus)) {
+          await removePendingDriverOffer(driverId, orderId);
+          if (typeof sendCallback === "function") {
+            sendCallback({
+              status: false,
+              success: false,
+              message: "Order is no longer available",
+              reason: currentOrder?.driver?.driverId ? "ALREADY_ACCEPTED" : "ORDER_NOT_AVAILABLE",
+              orderId,
+            });
+          }
           return;
         }
 
@@ -1080,6 +1211,17 @@ const assignWithBroadcast = async (order, drivers) => {
             ]);
           },
         );
+
+        if (typeof sendCallback === "function") {
+          sendCallback({
+            status: true,
+            success: true,
+            message: "Order rejected successfully",
+            reason: "REJECTED",
+            orderId,
+            driverId,
+          });
+        }
 
         await Assign.updateOne(
           {
@@ -1137,7 +1279,13 @@ const assignWithBroadcast = async (order, drivers) => {
         });
       };
 
-      const onReject = (data) => {
+      const onReject = (data, callback) => {
+        let callbackSent = false;
+        const sendOnce = (response) => {
+          if (callbackSent || typeof callback !== "function") return;
+          callbackSent = true;
+          callback(response);
+        };
         console.log("📥 RAW rejectOrder EVENT RECEIVED", {
           orderId,
           driverId,
@@ -1145,8 +1293,15 @@ const assignWithBroadcast = async (order, drivers) => {
           data,
         });
 
-        handleReject(data).catch((error) => {
+        handleReject(data, sendOnce).catch((error) => {
           console.error("❌ Reject handler error:", error);
+          sendOnce({
+            status: false,
+            success: false,
+            message: "Failed to reject order",
+            reason: "INTERNAL_ERROR",
+            orderId,
+          });
         });
       };
 
@@ -1209,11 +1364,20 @@ const assignWithBroadcast = async (order, drivers) => {
         value: `${index + 1}. ${safeText(item.driverName)} (${safeText(item.driverId)}) | push=${safeText(item.pushStatus)} | pushReason=${safeText(item.pushReason)} | socket=${safeText(item.socketStatus)} | socketReason=${safeText(item.socketReason)}`,
       })),
     ]);
+    return true;
   };
 
-  broadcastOrder().catch((err) => {
+  let broadcastStarted = false;
+  try {
+    broadcastStarted = await broadcastOrder();
+  } catch (err) {
     console.error("Broadcast order flow failed:", err.message);
-  });
+  }
+
+  if (!broadcastStarted) {
+    cleanupAllListeners();
+    return;
+  }
 
   // Ensure only one active retry timer exists for this order.
   clearDispatchTimeout(orderId);
@@ -1222,7 +1386,7 @@ const assignWithBroadcast = async (order, drivers) => {
     orderTimeouts.delete(orderId);
     const existingOrder = await Order.findOne({ orderId }).lean();
 
-    if (existingOrder.orderStatus === "Cancelled") {
+    if (!existingOrder || existingOrder.orderStatus === "Cancelled") {
       console.log(`Order ${orderId} already cancelled.`);
 
       cleanupAllListeners();

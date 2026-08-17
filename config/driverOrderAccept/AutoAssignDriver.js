@@ -8,7 +8,6 @@ const assignDriverModule = require("./assignDriver");
 const assignWithSocketLoop = assignDriverModule;
 const { getBusyDriverIds } = assignDriverModule;
 const Address = require("../../modals/Address");
-const Assign = require("../../modals/driverModals/assignments");
 const { Order } = require("../../modals/order");
 const driver = require("../../modals/driver");
 const Store = require("../../modals/store");
@@ -43,7 +42,9 @@ const safeTelegramLog = async (title, data) => {
 const buildDriverLine = (index, item) =>
   `${index + 1}. ${safeText(item.driverName)} (${safeText(item.driverId)}) | distance=${safeNumberText(item.distanceM)}m | ${item.withinRadius ? "within_radius" : "out_of_radius"}${item.busy ? " | busy" : ""}${item.rejected ? " | rejected" : ""}`;
 
-const autoAssignDriver = async (orderId) => {
+const activeAssignments = new Map();
+
+const runAutoAssignDriver = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
     if (!order) {
@@ -67,16 +68,6 @@ const autoAssignDriver = async (orderId) => {
     const userLng = user.longitude;
     const drivers = await driver.find({ activeStatus: "online", status: true });
     const busyDriverIds = await getBusyDriverIds(order.orderId);
-
-    const rejectedAssignmentsForOrder = await Assign.find({
-      orderStatus: "Rejected",
-      orderId: order.orderId,
-    }).select("driverId");
-
-    const rejectedDriverIdsForOrder = rejectedAssignmentsForOrder.map((a) =>
-      String(a.driverId),
-    );
-    const rejectedDriverSet = new Set(rejectedDriverIdsForOrder);
 
     const zoneDocs = await ZoneData.find({});
     const zoneWindowConfig = await getZoneWindowConfig();
@@ -136,7 +127,10 @@ const autoAssignDriver = async (orderId) => {
       const logDriverId = telegramDriverId(d);
       const driverIdentifiers = [driverId, d.driverId?.toString?.()].filter(Boolean);
       const isBusy = driverIdentifiers.some((id) => busyDriverIds.has(id));
-      const isRejected = rejectedDriverSet.has(driverId);
+      // Per-cycle rejection is owned by Dispatch and applied in
+      // assignWithBroadcast. Assignment history must not permanently exclude
+      // a driver after the retry policy deliberately resets rejected drivers.
+      const isRejected = false;
 
       let distance = null;
       let withinRadius = false;
@@ -185,7 +179,7 @@ const autoAssignDriver = async (orderId) => {
       { label: "zoneRadiusM", value: zoneRadiusM },
       { label: "totalOnlineDrivers", value: drivers.length },
       { label: "busyDrivers", value: busyDriverIds.size },
-      { label: "rejectedDrivers", value: rejectedDriverIdsForOrder.length },
+      { label: "rejectedDrivers", value: "managed_by_dispatch_state" },
       ...driverTrace.map((item, index) => ({
         label: `${index + 1}`,
         value: `${index + 1}. ${safeText(item.driverName)} (${safeText(item.logDriverId)}) | distance=${safeNumberText(item.distanceM)}m | ${item.withinRadius ? "within_radius" : "out_of_radius"}${item.busy ? " | busy" : ""}${item.rejected ? " | rejected" : ""}`,
@@ -247,10 +241,22 @@ const autoAssignDriver = async (orderId) => {
       })),
     });
 
-    assignWithSocketLoop(order, finalDrivers);
+    await assignWithSocketLoop(order, finalDrivers);
   } catch (err) {
     console.error("Auto assignment error:", err);
   }
+};
+
+const autoAssignDriver = (orderId) => {
+  const key = String(orderId || "");
+  if (!key) return Promise.resolve();
+  if (activeAssignments.has(key)) return activeAssignments.get(key);
+
+  const task = runAutoAssignDriver(orderId).finally(() => {
+    activeAssignments.delete(key);
+  });
+  activeAssignments.set(key, task);
+  return task;
 };
 
 module.exports = autoAssignDriver;

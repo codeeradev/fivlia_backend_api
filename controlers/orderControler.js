@@ -40,7 +40,15 @@ const {
   getZoneWindowConfig,
   getCurrentZoneWindowMode,
 } = require("../config/google");
-const { sellerSocketMap, adminSocketMap } = require("../utils/driverSocketMap");
+const {
+  sellerSocketMap,
+  adminSocketMap,
+  driverSocketMap,
+} = require("../utils/driverSocketMap");
+const { removePendingDriverOffer } = require("../utils/pendingDriverOffers");
+const {
+  sendDriverOfferClosedPush,
+} = require("../utils/driverOfferNotifications");
 const { sendAdminNotification } = require("../utils/sendAdminNotification");
 // new socket code of user order status
 const {
@@ -1834,6 +1842,28 @@ exports.orderStatus = async (req, res) => {
 
     if (status === "Cancelled") {
       clearDispatchTimeout(updatedOrder.orderId);
+
+      const offerDrivers = await driver
+        .find({ activeStatus: "online", status: true })
+        .select("_id fcmToken")
+        .lean();
+      await Promise.all(
+        offerDrivers.map(async (driverDoc) => {
+          const offerDriverId = driverDoc._id.toString();
+          driverSocketMap.get(offerDriverId)?.emit("orderTaken", {
+            orderId: updatedOrder.orderId,
+            reason: "CANCELLED",
+          });
+          await Promise.all([
+            removePendingDriverOffer(offerDriverId, updatedOrder.orderId),
+            sendDriverOfferClosedPush(
+              driverDoc,
+              updatedOrder.orderId,
+              "order_cancelled",
+            ),
+          ]);
+        }),
+      );
 
       try {
         await updateDispatchState(

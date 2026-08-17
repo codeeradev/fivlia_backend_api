@@ -13,5 +13,6 @@ const assignSchema = new mongoose.Schema({
 
 // TTL index for automatic deletion
 assignSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
+assignSchema.index({ orderId: 1, driverId: 1 });
 
 module.exports = mongoose.model('assignments', assignSchema);

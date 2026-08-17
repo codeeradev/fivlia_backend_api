@@ -78,6 +78,10 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+// Dispatch and status queries use these fields on every offer/accept cycle.
+orderSchema.index({ orderId: 1 });
+orderSchema.index({ orderStatus: 1, "driver.driverId": 1 });
+
 // models/TempOrder.js
 
 const TempOrderSchema = new mongoose.Schema(

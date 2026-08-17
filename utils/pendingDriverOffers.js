@@ -51,11 +51,12 @@ async function upsertPendingDriverOffer(driverId, orderId, payload, ttlSeconds =
   const safeOrderId = String(orderId || "");
   if (!safeDriverId || !safeOrderId || !payload) return;
 
+  // Always mirror Redis state in process memory. If Redis drops after a
+  // successful write, recovery must not suddenly return an empty offer list.
+  setInMemoryOffer(safeDriverId, safeOrderId, payload, ttlSeconds);
+
   const redis = await getRedisClient();
-  if (!redis) {
-    setInMemoryOffer(safeDriverId, safeOrderId, payload, ttlSeconds);
-    return;
-  }
+  if (!redis) return;
 
   try {
     const key = getDriverOfferKey(safeDriverId);
@@ -63,7 +64,6 @@ async function upsertPendingDriverOffer(driverId, orderId, payload, ttlSeconds =
     await redis.expire(key, ttlSeconds);
   } catch (err) {
     console.warn("Failed to cache pending driver offer:", err.message);
-    setInMemoryOffer(safeDriverId, safeOrderId, payload, ttlSeconds);
   }
 }
 
@@ -72,18 +72,16 @@ async function removePendingDriverOffer(driverId, orderId) {
   const safeOrderId = String(orderId || "");
   if (!safeDriverId || !safeOrderId) return;
 
+  removeInMemoryOffer(safeDriverId, safeOrderId);
+
   const redis = await getRedisClient();
-  if (!redis) {
-    removeInMemoryOffer(safeDriverId, safeOrderId);
-    return;
-  }
+  if (!redis) return;
 
   try {
     const key = getDriverOfferKey(safeDriverId);
     await redis.hDel(key, safeOrderId);
   } catch (err) {
     console.warn("Failed to remove pending driver offer:", err.message);
-    removeInMemoryOffer(safeDriverId, safeOrderId);
   }
 }
 
@@ -91,15 +89,15 @@ async function getPendingDriverOffers(driverId) {
   const safeDriverId = String(driverId || "");
   if (!safeDriverId) return [];
 
+  const memoryOffers = getInMemoryOffers(safeDriverId);
+
   const redis = await getRedisClient();
-  if (!redis) {
-    return getInMemoryOffers(safeDriverId);
-  }
+  if (!redis) return memoryOffers;
 
   try {
     const key = getDriverOfferKey(safeDriverId);
     const raw = await redis.hGetAll(key);
-    return Object.values(raw || {})
+    const redisOffers = Object.values(raw || {})
       .map((value) => {
         try {
           return JSON.parse(value);
@@ -108,9 +106,18 @@ async function getPendingDriverOffers(driverId) {
         }
       })
       .filter(Boolean);
+
+    // Redis is authoritative across processes, while memory protects this
+    // process during an outage. Merge by order id so reconnects stay stable.
+    const merged = new Map();
+    for (const offer of [...memoryOffers, ...redisOffers]) {
+      const orderId = String(offer?.orderId || offer?.order?.orderId || "");
+      if (orderId) merged.set(orderId, offer);
+    }
+    return Array.from(merged.values());
   } catch (err) {
     console.warn("Failed to read pending driver offers:", err.message);
-    return getInMemoryOffers(safeDriverId);
+    return memoryOffers;
   }
 }
 

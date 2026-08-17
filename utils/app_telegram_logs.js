@@ -1,7 +1,12 @@
 const axios = require("axios");
 
-const BOT_TOKEN = "8685766369:AAH-K2i16HL3XeXz7fZHwCGX0ofFjqkmvf8";
-const CHAT_ID = "-5414335388";
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const CHAT_ID =
+  process.env.TELEGRAM_APP_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
+const SEND_INTERVAL_MS = Number(
+  process.env.TELEGRAM_APP_LOG_INTERVAL_MS || 3000,
+);
+const MAX_QUEUE_SIZE = Number(process.env.TELEGRAM_APP_LOG_MAX_QUEUE || 100);
 
 // Queue
 const queue = [];
@@ -35,22 +40,33 @@ async function processQueue() {
         {
           chat_id: CHAT_ID,
           text,
-        }
+        },
+        { timeout: 5000 },
       );
     } catch (err) {
-      console.error("Telegram Log Error:", err?.response?.data || err.message);
+      const retryAfterSeconds = Number(
+        err?.response?.data?.parameters?.retry_after || 0,
+      );
+      if (retryAfterSeconds > 0) {
+        await sleep(retryAfterSeconds * 1000);
+      }
+      console.error(
+        "Telegram Log Error:",
+        err?.response?.data?.description || err.message,
+      );
     }
 
-    // Telegram rate limit: 1 message / second
-    await sleep(1000);
+    await sleep(SEND_INTERVAL_MS);
   }
 
   processing = false;
 }
 
-async function appTelegramOrderLog(title, data = {}) {
+function appTelegramOrderLog(title, data = {}) {
+  if (!BOT_TOKEN || !CHAT_ID) return;
+  if (queue.length >= MAX_QUEUE_SIZE) queue.shift();
   queue.push({ title, data });
-  processQueue();
+  void processQueue();
 }
 
 module.exports = appTelegramOrderLog;

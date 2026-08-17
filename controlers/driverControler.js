@@ -190,6 +190,23 @@ exports.acceptOrder = async (req, res) => {
           throw error;
         }
 
+        const existingOrder = await Order.findOne({ orderId }).session(session).lean();
+        if (!existingOrder) {
+          const error = new Error("Order not found");
+          error.statusCode = 404;
+          throw error;
+        }
+        const existingDriverId = existingOrder.driver?.driverId?.toString?.() || "";
+        if (existingDriverId === driverData.driverId?.toString() && existingOrder.orderStatus === "Going to Pickup") {
+          updatedOrder = existingOrder;
+          return;
+        }
+        if (existingDriverId) {
+          const error = new Error("Order already accepted");
+          error.statusCode = 409;
+          throw error;
+        }
+
         const orderUpdate = {
           driver: {
             driverId: driverData.driverId,
@@ -198,7 +215,17 @@ exports.acceptOrder = async (req, res) => {
           },
         };
 
-        updatedOrder = await Order.findOneAndUpdate({ orderId }, orderUpdate, {
+        updatedOrder = await Order.findOneAndUpdate({
+          orderId,
+          orderStatus: { $nin: ["Cancelled", "Delivered", "Rejected"] },
+          $or: [
+            { driver: { $exists: false } },
+            { driver: null },
+            { "driver.driverId": { $exists: false } },
+            { "driver.driverId": null },
+            { "driver.driverId": "" },
+          ],
+        }, orderUpdate, {
           new: true,
           session,
         });
