@@ -87,7 +87,7 @@ exports.addCart = async (req, res) => {
   try {
     const userId = req.user;
     const { quantity, productId, storeId, varientId, clearCart } = req.body;
-
+console.log(req.body, "addCart request body");
     if (!storeId) {
       return res.status(400).json({ message: "storeId not found." });
     }
