@@ -87,7 +87,7 @@ exports.addCart = async (req, res) => {
   try {
     const userId = req.user;
     const { quantity, productId, storeId, varientId, clearCart } = req.body;
-console.log(req.body, "addCart request body");
+
     if (!storeId) {
       return res.status(400).json({ message: "storeId not found." });
     }
@@ -554,6 +554,20 @@ exports.quantity = async (req, res) => {
   try {
     const { id } = req.params;
     const { quantity } = req.body;
+console.log("quantity", quantity);
+    const adminSetting = await SettingAdmin.findOne({})
+      .select("maxQuantity")
+      .lean();
+
+    const maxQuantity = Number(adminSetting?.maxQuantity || 0);
+
+    if (maxQuantity > 0 && Number(quantity) > maxQuantity) {
+      return res.status(400).json({
+        message: `Maximum ${maxQuantity} quantity allowed per product.`,
+        errorType: "max_quantity_exceeded",
+        maxQuantity,
+      });
+    }
 
     const updated_cart = await Cart.findByIdAndUpdate(
       id,
