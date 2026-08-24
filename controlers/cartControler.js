@@ -554,7 +554,6 @@ exports.quantity = async (req, res) => {
   try {
     const { id } = req.params;
     const { quantity } = req.body;
-console.log("quantity", quantity);
     const adminSetting = await SettingAdmin.findOne({})
       .select("maxQuantity")
       .lean();
