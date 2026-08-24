@@ -98,6 +98,35 @@ exports.addCart = async (req, res) => {
         .json({ message: "Missing product or variant info." });
     }
 
+    const hasQuantity =
+      quantity !== undefined && quantity !== null && quantity !== "";
+
+    let requestedQuantity = null;
+
+    if (hasQuantity) {
+      requestedQuantity = Number(quantity);
+
+      if (!Number.isInteger(requestedQuantity) || requestedQuantity <= 0) {
+        return res.status(400).json({
+          message: "Invalid quantity.",
+        });
+      }
+
+      const adminSetting = await SettingAdmin.findOne({})
+        .select("maxQuantity")
+        .lean();
+
+      const maxQuantity = Number(adminSetting?.maxQuantity || 0);
+
+      if (maxQuantity > 0 && requestedQuantity > maxQuantity) {
+        return res.status(400).json({
+          message: `Maximum ${maxQuantity} quantity allowed per product.`,
+          errorType: "max_quantity_exceeded",
+          maxQuantity,
+        });
+      }
+    }
+
     // Clear cart if requested
     if (clearCart === "true") {
       await Cart.deleteMany({ userId });

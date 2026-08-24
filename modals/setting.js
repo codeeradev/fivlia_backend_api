@@ -55,6 +55,7 @@ const settingAdminSchema = new mongoose.Schema({
 
   minPrice: Number,
   maxPrice: Number,
+  maxQuantity: Number,
   minWithdrawal: Number,
   freeDeliveryLimit: Number,
   minimumOrderCancelTime: Number,
