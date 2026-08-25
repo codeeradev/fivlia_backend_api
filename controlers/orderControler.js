@@ -1410,6 +1410,59 @@ exports.orderStatus = async (req, res) => {
         return;
       }
 
+      // ============================================================
+      // READY TO PICKUP -> NOTIFY ASSIGNED DRIVER
+      // ============================================================
+      if (
+        normalizedStatus === "ready" ||
+        normalizedStatus === "ready to pickup"
+      ) {
+        try {
+          const assignedDriverId = updatedOrder?.driver?.driverId;
+
+          // Duplicate notification avoid
+          const previousStatus = String(orderDoc?.orderStatus || "")
+            .trim()
+            .toLowerCase();
+
+          const wasAlreadyReady =
+            previousStatus === "ready" || previousStatus === "ready to pickup";
+
+          if (assignedDriverId && !wasAlreadyReady) {
+            const assignedDriver = await driver
+              .findById(assignedDriverId)
+              .lean();
+
+            if (
+              assignedDriver?.fcmToken &&
+              assignedDriver.fcmToken !== "null"
+            ) {
+              await sendNotification(
+                assignedDriver.fcmToken,
+                "📦 Order Ready To Pickup",
+                `Order #${updatedOrder.orderId} is ready for pickup. Please collect it from the store.`,
+                "/dashboard1",
+                {
+                  orderId: updatedOrder.orderId,
+                  status: "Ready To Pickup",
+                  storeId: updatedOrder.storeId?.toString() || "",
+                },
+                DEFAULT_PUSH_SOUND,
+              );
+
+              console.log(
+                `✅ Ready To Pickup notification sent to driver for order ${updatedOrder.orderId}`,
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            "⚠️ Driver Ready To Pickup notification failed:",
+            err.response?.data?.error?.message || err.message,
+          );
+        }
+      }
+
       if (driverId !== undefined && type === "admin") {
         await Assign.deleteMany(
           {
