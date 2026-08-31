@@ -116,6 +116,13 @@ const {
   saveBrandApprovelDocument,
 } = require("../controlers/sellerControlers/sellerProductsControler");
 
+const {
+  upsertMenuCard,
+  editMenuCard,
+  getMenuCard,
+  deleteMenuCard,
+} = require("../controlers/sellerControlers/menuCardControler");
+
 //seller auth
 const {
   addSeller,
@@ -420,6 +427,10 @@ router.get("/getSellerCategoryList/:id", getSellerCategoryList);
 router.get("/getExistingProductList", getExistingProductList);
 router.get("/getUnapprovedProducts", getUnapprovedProducts);
 router.post("/saveBrandApprovelDocument", upload, saveBrandApprovelDocument);
+router.post("/seller/menu-card", upload, upsertMenuCard);
+router.put("/seller/menu-card/:id", upload, editMenuCard);
+router.get("/seller/menu-card", getMenuCard);
+router.delete("/seller/menu-card/:id", deleteMenuCard);
 
 router.get("/getSingleProduct/:slug", verifyToken, getSingleProduct);
 router.get("/checkSimilarProduct/:productId", verifyToken, typeCategoryResolver, checkSimilarProduct);

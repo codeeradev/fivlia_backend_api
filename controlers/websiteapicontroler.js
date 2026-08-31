@@ -28,6 +28,7 @@ const Charity = require("../modals/Charity");
 const CharityContent = require("../modals/charityContent");
 const Franchise = require("../modals/franchise");
 const Coupon = require("../modals/sellerCoupon");
+const MenuCard = require("../modals/MenuCard");
 const {
   filterProductsByRequestedType,
   resolveRequestedTypeId,
@@ -1556,6 +1557,7 @@ exports.contactUs = async (req, res) => {
 
 exports.getAllSellerProducts = async (req, res) => {
   const { id, page, limit, veg } = req.query;
+  const menuId = req.query.menuId || req.query.menuID || req.query.menuCardId;
   const skip = (page - 1) * limit;
   try {
     // 1. Fetch Stock data for the seller using sellerId
@@ -1583,6 +1585,47 @@ exports.getAllSellerProducts = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "No products found for this seller" });
+    }
+
+    if (menuId) {
+      if (!mongoose.Types.ObjectId.isValid(menuId)) {
+        return res.status(400).json({ message: "Valid menuId is required" });
+      }
+
+      const menuCard = await MenuCard.findOne({
+        _id: menuId,
+        sellerId: id,
+      })
+        .select("products")
+        .lean();
+
+      if (!menuCard) {
+        return res.status(404).json({ message: "Menu card not found" });
+      }
+
+      const menuProductIds = new Set(
+        (menuCard.products || []).map((productId) => productId.toString()),
+      );
+      productIds = productIds.filter((productId) =>
+        menuProductIds.has(productId.toString()),
+      );
+
+      if (!productIds.length) {
+        return res.status(200).json({
+          sellerImage: seller.advertisementImages || [],
+          seller,
+          categories: [],
+          products: [],
+          offerApplied: !!activeOffer,
+          offer: activeOffer?.offer ?? null,
+          offerType: activeOffer?.offerType || null,
+          offerPreview: activeOffer ? buildOfferPreviewText(activeOffer) : null,
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit) || 100,
+          totalPages: 0,
+        });
+      }
     }
 
     const productFilter = { _id: { $in: productIds } };
