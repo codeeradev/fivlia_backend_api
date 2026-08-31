@@ -156,11 +156,15 @@ exports.getMenuCard = async (req, res) => {
     const menuCards = await populateMenuCard(
       MenuCard.find({ sellerId }).sort({ createdAt: -1 }).lean(),
     );
+    const menuCardsWithCount = menuCards.map((menuCard) => ({
+      ...menuCard,
+      itemCount: menuCard.products?.length || 0,
+    }));
 
     return res.status(200).json({
       success: true,
-      menuCards,
-      menuCard: menuCards[0] || null,
+      menuCards: menuCardsWithCount,
+      menuCard: menuCardsWithCount[0] || null,
     });
   } catch (error) {
     console.error("Menu card fetch error:", error);
