@@ -32,6 +32,7 @@ const Transaction = require("../modals/driverModals/transaction");
 const {
   isDriverBusyForOrder,
 } = require("../config/driverOrderAccept/assignDriver");
+const { calculateOrderSettlement } = require("../utils/orderSettlement");
 
 const {
   buildPlatformPushConfig,
@@ -390,36 +391,20 @@ exports.driverOrderStatus = async (req, res) => {
 
         const setting = await SettingAdmin.findOne().lean();
 
-        const totalCommission = order.items.reduce((sum, item) => {
-          const itemTotal = item.price * item.quantity;
-          const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
-          return sum + commissionAmount;
-        }, 0);
-
-        const itemTotal = order.items.reduce((sum, item) => {
-          return sum + item.price * item.quantity;
-        }, 0);
-
         // 1. Apply the extra 5% tax only for food sellers and keep old commission flow unchanged.
         const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
 
-        const foodItemsTotal = order.items.reduce((sum, item) => {
-          const typeName = String(item.typeName || "")
-            .trim()
-            .toLowerCase();
-
-          if (typeName === "food") {
-            return sum + item.price * item.quantity;
-          }
-
-          return sum;
-        }, 0);
-
-        const foodSellerTaxAmount = !store.Authorized_Store
-          ? (foodItemsTotal * foodSellerTaxPercent) / 100
-          : 0;
-
-        const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
+        const {
+          totalCommission,
+          itemTotal,
+          foodSellerTaxAmount,
+          totalAdminDeduction,
+          adminReferralProfit,
+        } = calculateOrderSettlement({
+          order,
+          store,
+          foodSellerTaxPercent,
+        });
 
         // ===> Handle seller-sponsored free delivery payout
         const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
@@ -552,7 +537,7 @@ exports.driverOrderStatus = async (req, res) => {
           description: "Delivery Charge GST credited to Admin wallet",
         });
 
-        // ===> Track driver referral commission (1% of seller profit)
+        // ===> Track driver referral commission (1% of admin profit)
         if (store.referralCode) {
           try {
             // Find driver by referral code
@@ -573,10 +558,10 @@ exports.driverOrderStatus = async (req, res) => {
                 },
               );
 
-              if (!existingCommission) {
+              if (!existingCommission && adminReferralProfit > 0) {
                 const commissionPercentage = 1; // 1%
                 const commissionAmount =
-                  (creditToStore * commissionPercentage) / 100;
+                  (adminReferralProfit * commissionPercentage) / 100;
 
                 await DriverReferralCommission.create({
                   driverId: referringDriver._id,
@@ -584,6 +569,7 @@ exports.driverOrderStatus = async (req, res) => {
                   orderId: order.orderId,
                   orderObjectId: order._id,
                   sellerProfit: creditToStore,
+                  adminProfit: adminReferralProfit,
                   commissionAmount,
                   commissionPercentage,
                   status: "pending",

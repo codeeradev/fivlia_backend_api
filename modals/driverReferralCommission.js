@@ -26,6 +26,10 @@ const driverReferralCommissionSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    adminProfit: {
+      type: Number,
+      default: 0,
+    },
     commissionAmount: {
       type: Number,
       required: true,

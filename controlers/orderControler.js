@@ -86,6 +86,10 @@ const {
   verifyRazorpayPayment,
   getCommison,
 } = require("../utils/razorpayService");
+const {
+  FOOD_TYPE_ID,
+  calculateOrderSettlement,
+} = require("../utils/orderSettlement");
 
 const telegramOrderLog = require("../utils/telegram_logs");
 
@@ -452,7 +456,7 @@ exports.placeOrder = async (req, res) => {
       const productId = item.productId || item._doc?.productId;
 
       const product = await Products.findById(productId)
-        .select("tax category")
+        .select("tax category typeId foodTypeId isVeg")
         .lean();
       if (!product) {
         console.error(`Product not found: ${item.productId}`);
@@ -468,8 +472,11 @@ exports.placeOrder = async (req, res) => {
         .select("typeId")
         .lean();
 
-      const typeId = category?.typeId?._id;
-      const typeName = category?.typeId?.name;
+      const typeId = product.typeId || category?.typeId?._id;
+      const typeName =
+        String(product.typeId || "") === FOOD_TYPE_ID
+          ? "food"
+          : category?.typeId?.name;
       const gst = product.tax;
 
       const commision = await getCommison(product._id);
@@ -485,6 +492,8 @@ exports.placeOrder = async (req, res) => {
         gst,
         typeId,
         typeName,
+        foodTypeId: product.foodTypeId,
+        isVeg: product.isVeg,
         offerId: item.offerId || null,
         offerTitle: item.offerTitle || null,
         offerType: item.offerType || null,
@@ -497,7 +506,7 @@ exports.placeOrder = async (req, res) => {
       const freeProduct = await Products.findById(
         offerContext.freeProductItem.productId,
       )
-        .select("tax category productName productThumbnailUrl")
+        .select("tax category productName productThumbnailUrl typeId foodTypeId isVeg")
         .lean();
 
       if (freeProduct) {
@@ -506,6 +515,8 @@ exports.placeOrder = async (req, res) => {
           .populate("typeId", "name")
           .select("typeId")
           .lean();
+
+        const freeTypeId = freeProduct.typeId || freeCategory?.typeId?._id;
 
         orderItems.push({
           productId: offerContext.freeProductItem.productId,
@@ -518,8 +529,13 @@ exports.placeOrder = async (req, res) => {
             offerContext.freeProductItem.image ||
             freeProduct.productThumbnailUrl,
           gst: freeProduct.tax,
-          typeId: freeCategory?.typeId?._id,
-          typeName: freeCategory?.typeId?.name,
+          typeId: freeTypeId,
+          typeName:
+            String(freeTypeId || "") === FOOD_TYPE_ID
+              ? "food"
+              : freeCategory?.typeId?.name,
+          foodTypeId: freeProduct.foodTypeId,
+          isVeg: freeProduct.isVeg,
           offerId: offerContext.freeProductItem.offerId || null,
           offerTitle: offerContext.freeProductItem.offerTitle || null,
           offerType: offerContext.freeProductItem.offerType || "free_product",
@@ -1508,37 +1524,21 @@ exports.orderStatus = async (req, res) => {
           const store = storeBefore;
           const setting = await SettingAdmin.findOne().session(session).lean();
 
-          const totalCommission = updatedOrder.items.reduce((sum, item) => {
-            const itemTotal = item.price * item.quantity;
-            const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
-            return sum + commissionAmount;
-          }, 0);
-
-          const itemTotal = updatedOrder.items.reduce((sum, item) => {
-            return sum + item.price * item.quantity;
-          }, 0);
-
           const foodSellerTaxPercent = Number(
             setting?.foodSellerTaxPercent || 5,
           );
 
-          const foodItemsTotal = updatedOrder.items.reduce((sum, item) => {
-            const typeName = String(item.typeName || "")
-              .trim()
-              .toLowerCase();
-
-            if (typeName === "food") {
-              return sum + item.price * item.quantity;
-            }
-
-            return sum;
-          }, 0);
-
-          const foodSellerTaxAmount = !store.Authorized_Store
-            ? (foodItemsTotal * foodSellerTaxPercent) / 100
-            : 0;
-
-          const totalAdminDeduction = totalCommission + foodSellerTaxAmount;
+          const {
+            totalCommission,
+            itemTotal,
+            foodSellerTaxAmount,
+            totalAdminDeduction,
+            adminReferralProfit,
+          } = calculateOrderSettlement({
+            order: updatedOrder,
+            store,
+            foodSellerTaxPercent,
+          });
           const sellerSponsoredPayout =
             updatedOrder.sellerSponsoredDeliveryPayout || 0;
 
@@ -1725,10 +1725,10 @@ exports.orderStatus = async (req, res) => {
                     orderId: updatedOrder.orderId,
                   }).session(session);
 
-                if (!existingCommission) {
+                if (!existingCommission && adminReferralProfit > 0) {
                   const commissionPercentage = 1;
                   const commissionAmount =
-                    (creditToStore * commissionPercentage) / 100;
+                    (adminReferralProfit * commissionPercentage) / 100;
 
                   await DriverReferralCommission.create(
                     [
@@ -1738,6 +1738,7 @@ exports.orderStatus = async (req, res) => {
                         orderId: updatedOrder.orderId,
                         orderObjectId: updatedOrder._id,
                         sellerProfit: creditToStore,
+                        adminProfit: adminReferralProfit,
                         commissionAmount,
                         commissionPercentage,
                         status: "pending",

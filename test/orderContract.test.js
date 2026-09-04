@@ -14,6 +14,9 @@ const {
 const {
   recoverPendingDriverOffers,
 } = require("../utils/pendingOrderRecovery");
+const {
+  calculateOrderSettlement,
+} = require("../utils/orderSettlement");
 
 test("retry count covers the configured cancellation window", () => {
   assert.deepEqual(getDynamicRetryCount(5, 10000), {
@@ -146,4 +149,29 @@ test("pending recovery removes an offer when the driver became busy", async () =
   assert.deepEqual(recovered, []);
   assert.deepEqual(removed, ["BUSY-OFFER"]);
   assert.equal(dispatchCalls, 0);
+});
+
+test("food seller settlement deducts commission and food seller tax", () => {
+  const settlement = calculateOrderSettlement({
+    order: {
+      items: [
+        {
+          price: 400,
+          quantity: 1,
+          commision: 7,
+        },
+      ],
+    },
+    store: {
+      Authorized_Store: false,
+      sellFood: true,
+    },
+    foodSellerTaxPercent: 5,
+  });
+
+  assert.equal(settlement.totalCommission, 28);
+  assert.equal(settlement.foodSellerTaxAmount, 20);
+  assert.equal(settlement.totalAdminDeduction, 48);
+  assert.equal(settlement.adminReferralProfit, 48);
+  assert.equal(settlement.itemTotal - settlement.totalAdminDeduction, 352);
 });

@@ -4,6 +4,7 @@ const {
   CUSTOM_PUSH_SOUND,
   DEFAULT_PUSH_SOUND,
 } = require("./pushSoundConfig");
+const { calculateOrderSettlement } = require("./orderSettlement");
 
 module.exports.deliverOrderCommon = async ({
   orderId,
@@ -35,16 +36,18 @@ module.exports.deliverOrderCommon = async ({
   const storeBefore = await Store.findById(order.storeId).lean();
   const store = storeBefore;
 
-  // 🧮 Commission calculation
-  const totalCommission = order.items.reduce((sum, item) => {
-    const itemTotal = item.price * item.quantity;
-    const commissionAmount = ((item.commision || 0) / 100) * itemTotal;
-    return sum + commissionAmount;
-  }, 0);
-
-  const itemTotal = order.items.reduce((sum, item) => {
-    return sum + item.price * item.quantity;
-  }, 0);
+  const setting = await SettingAdmin.findOne().lean();
+  const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
+  const {
+    totalCommission,
+    itemTotal,
+    foodSellerTaxAmount,
+    totalAdminDeduction,
+  } = calculateOrderSettlement({
+    order,
+    store,
+    foodSellerTaxPercent,
+  });
 
   // ===> Handle seller-sponsored free delivery payout
   const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
@@ -52,7 +55,7 @@ module.exports.deliverOrderCommon = async ({
   // 🏦 Store wallet credit
   let creditToStore = itemTotal;
   if (!store.Authorized_Store) {
-    creditToStore -= totalCommission;
+    creditToStore -= totalAdminDeduction;
   }
   
   // Deduct seller-sponsored delivery payout if applicable
@@ -77,6 +80,9 @@ module.exports.deliverOrderCommon = async ({
     if (totalCommission > 0) {
       deductions.push(`₹${totalCommission.toFixed(2)} commission`);
     }
+    if (foodSellerTaxAmount > 0) {
+      deductions.push(`₹${foodSellerTaxAmount.toFixed(2)} food seller tax`);
+    }
     if (sellerSponsoredPayout > 0) {
       deductions.push(`₹${sellerSponsoredPayout.toFixed(2)} free delivery payout`);
     }
@@ -97,14 +103,14 @@ module.exports.deliverOrderCommon = async ({
   });
 
   // 🏛️ Admin wallet commission
-  if (!store.Authorized_Store && totalCommission > 0) {
+  if (!store.Authorized_Store && totalAdminDeduction > 0) {
     const lastAmount = await admin_transaction
       .findById("68ea20d2c05a14a96c12788d")
       .lean();
 
     const updatedWallet = await admin_transaction.findByIdAndUpdate(
       "68ea20d2c05a14a96c12788d",
-      { $inc: { wallet: totalCommission } },
+      { $inc: { wallet: totalAdminDeduction } },
       { new: true }
     );
 
@@ -112,9 +118,12 @@ module.exports.deliverOrderCommon = async ({
       currentAmount: updatedWallet.wallet,
       lastAmount: lastAmount.wallet,
       type: "Credit",
-      amount: totalCommission,
+      amount: totalAdminDeduction,
       orderId: order.orderId,
-      description: "Commission credited to Admin wallet",
+      description:
+        foodSellerTaxAmount > 0
+          ? "Commission and food seller tax credited to Admin wallet"
+          : "Commission credited to Admin wallet",
     });
   }
 
@@ -139,6 +148,8 @@ module.exports.deliverOrderCommon = async ({
       storeInvoiceId,
       feeInvoiceId,
       deliverStatus: true,
+      foodSellerTaxPercent,
+      foodSellerTaxAmount,
     },
     { new: true }
   );
