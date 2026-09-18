@@ -1,8 +1,7 @@
 {
   "scripts": {
-    "start": "nodemon server.js",
-    "lint": "node scripts/checkSyntax.js",
-    "test": "node --test test/*.test.js"
+    "build": "node canary.js && tsc",
+    "prepare": "node canary.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.859.0",
@@ -45,5 +44,7 @@
     "streamifier": "^0.1.1",
     "twilio": "^5.10.2",
     "zod": "^3.25.7"
-  }
+  },
+  "name": "project",
+  "version": "1.0.0"
 }
