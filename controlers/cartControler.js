@@ -153,13 +153,21 @@ exports.addCart = async (req, res) => {
       isWithinZone(userLat, userLng, zone, zoneWindowConfig),
     );
 
-    if (!matchedZone) {
-      return res
-        .status(400)
-        .json({ message: "No active zone found for your location." });
+    let paymentOption = false;
+    if (matchedZone) {
+      paymentOption = matchedZone.cashOnDelivery === true;
+    } else {
+      // Global (All India) stores can serve customers outside every active zone
+      const isGlobalStore = await Store.exists({
+        _id: storeId,
+        serviceScope: "global",
+      });
+      if (!isGlobalStore) {
+        return res
+          .status(400)
+          .json({ message: "No active zone found for your location." });
+      }
     }
-
-    const paymentOption = matchedZone.cashOnDelivery === true;
 
     // Single-store cart policy
     const cartItems = await Cart.find({ userId }).lean();
@@ -293,16 +301,38 @@ exports.getCart = async (req, res) => {
     const storeId = items[0]?.storeId;
 
     let storeZone = await Store.findById(storeId);
+    const isGlobalStore = storeZone?.serviceScope === "global";
 
-    storeZone = storeZone.zone[0];
+    storeZone = storeZone?.zone?.[0];
 
-    const zoneData = await ZoneData.findOne({ "zones._id": storeZone._id });
+    let cashOnDelivery = false;
+    if (storeZone) {
+      const zoneData = await ZoneData.findOne({ "zones._id": storeZone._id });
 
-    const zone = zoneData.zones.find(
-      (z) => z._id.toString() === storeZone._id.toString(),
-    );
+      const zone = zoneData?.zones.find(
+        (z) => z._id.toString() === storeZone._id.toString(),
+      );
 
-    const cashOnDelivery = zone?.cashOnDelivery || false;
+      cashOnDelivery = zone?.cashOnDelivery || false;
+    } else if (isGlobalStore) {
+      // Global store has no zone of its own: COD follows the zone the customer
+      // is currently in (false when the customer is outside every zone)
+      const cartUserLat = parseFloat(user?.location?.latitude);
+      const cartUserLng = parseFloat(user?.location?.longitude);
+
+      if (cartUserLat && cartUserLng) {
+        const [cartZoneDocs, cartZoneWindowConfig] = await Promise.all([
+          ZoneData.find({}),
+          getZoneWindowConfig(),
+        ]);
+        const customerZone = cartZoneDocs
+          .flatMap((doc) => doc.zones.filter((z) => z.status === true))
+          .find((z) =>
+            isWithinZone(cartUserLat, cartUserLng, z, cartZoneWindowConfig),
+          );
+        cashOnDelivery = customerZone?.cashOnDelivery === true;
+      }
+    }
     // Fetch stock data for the store
     const stockDoc = await stock.findOne({ storeId });
     if (!stockDoc) {
@@ -387,18 +417,29 @@ exports.getCart = async (req, res) => {
         sellerFreeDeliveryLimit: 1,
       }).lean();
 
-      const distanceMeters = Math.round(
-        haversine(
-          {
-            lat: parseFloat(address?.latitude),
-            lon: parseFloat(address?.longitude),
-          },
-          {
-            lat: parseFloat(store?.Latitude),
-            lon: parseFloat(store?.Longitude),
-          },
-        ),
-      );
+      // Stores without coordinates (e.g. Global / All India) use distance 0,
+      // same as placeOrder, instead of producing a NaN delivery charge
+      const distanceInputsValid = [
+        address?.latitude,
+        address?.longitude,
+        store?.Latitude,
+        store?.Longitude,
+      ].every((v) => Number.isFinite(parseFloat(v)));
+
+      const distanceMeters = distanceInputsValid
+        ? Math.round(
+            haversine(
+              {
+                lat: parseFloat(address?.latitude),
+                lon: parseFloat(address?.longitude),
+              },
+              {
+                lat: parseFloat(store?.Latitude),
+                lon: parseFloat(store?.Longitude),
+              },
+            ),
+          )
+        : 0;
 
       deliveryDistanceKm = Number(getDistanceKm(distanceMeters).toFixed(2));
       billableKm = getBillableKm(distanceMeters);

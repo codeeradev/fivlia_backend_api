@@ -1,4 +1,5 @@
 .env
+.codex
 package-lock.json
 node_modules
 firebase/fivlia.json

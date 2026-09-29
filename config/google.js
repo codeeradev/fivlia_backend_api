@@ -287,7 +287,12 @@ async function getStoresWithinRadius(userLat, userLng) {
     isWithinZone(userLat, userLng, zone, zoneWindowConfig, nowInZoneTimezone)
   );
 
-  if (matchedZones.length === 0) {
+  // Global (All India) stores are not tied to any zone, so they are always eligible
+  const globalStores = allStores.filter(
+    (store) => store.serviceScope === "global"
+  );
+
+  if (matchedZones.length === 0 && globalStores.length === 0) {
     return {
       zoneAvailable: false,
       matchedStores: [],
@@ -302,9 +307,16 @@ async function getStoresWithinRadius(userLat, userLng) {
       store.zone.some((z) => matchedZoneIds.includes(z._id.toString()))
   );
 
+  // zone stores + global stores (without duplicates)
+  const zoneStoreIds = new Set(zoneStores.map((s) => s._id.toString()));
+  const eligibleStores = [
+    ...zoneStores,
+    ...globalStores.filter((s) => !zoneStoreIds.has(s._id.toString())),
+  ];
+
   const currentMinute = nowInZoneTimezone.hours() * 60 + nowInZoneTimezone.minutes();
 
-  const openStores = zoneStores.filter((store) => {
+  const openStores = eligibleStores.filter((store) => {
     const { openTime, closeTime } = store;
     if (openTime && closeTime) {
       const openMinute = parseWindowMinutes(openTime);
@@ -316,6 +328,13 @@ async function getStoresWithinRadius(userLat, userLng) {
   });
 
   if (openStores.length === 0) {
+    // Outside every zone and no global store is open: same response as before
+    if (matchedZones.length === 0) {
+      return {
+        zoneAvailable: false,
+        matchedStores: [],
+      };
+    }
     return {
       zoneAvailable: true,
       storesOpen: false,
@@ -396,4 +415,3 @@ module.exports = {
   getCurrentZoneWindowMode,
   getActiveZoneRange,
 };
-

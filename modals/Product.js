@@ -17,6 +17,10 @@ const variantSchema = new mongoose.Schema(
   {
     sell_price: { type: Number },
     image: String,
+    weight: {
+      value: { type: Number, min: 0 },
+      unit: { type: String, enum: ["kg", "g"] },
+    },
   },
   { strict: false }
 );
@@ -54,6 +58,10 @@ const productSchema = new mongoose.Schema(
     location: [locationSchema],
     tax: String,
     minQuantity: Number,
+    weight: {
+      value: { type: Number, default: 0 },
+      unit: { type: String, enum: ["kg", "g"], default: "kg" },
+    },
     type: String,
     productType: {type:String, enum: ["gym", "healthy", "snacks"], default: "snacks"},
     maxQuantity: Number,

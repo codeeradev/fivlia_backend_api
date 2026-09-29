@@ -17,6 +17,16 @@ const Rating = require("../modals/rating");
 const { isTruthyFlag, toNumber } = require("../utils/sellerDelivery");
 // const sendVerificationEmail = require("../config/nodeMailer");
 
+const SERVICE_SCOPES = ["city", "global"];
+
+// Returns "city" | "global", or null when the value is not a valid scope.
+// Missing/empty value defaults to "city" (legacy behaviour).
+const resolveServiceScope = (value) => {
+  if (value === undefined || value === null || value === "") return "city";
+  const scope = String(value).trim().toLowerCase();
+  return SERVICE_SCOPES.includes(scope) ? scope : null;
+};
+
 exports.storeLogin = async (req, res) => {
   try {
     const { email, PhoneNumber, password, type } = req.body;
@@ -108,6 +118,8 @@ exports.createStore = async (req, res) => {
       status,
       Description,
       isAssured,
+      typeId,
+      serviceScope,
       Category: categoryInput,
     } = req.body;
 
@@ -138,32 +150,66 @@ exports.createStore = async (req, res) => {
     //
     // 3️⃣ Resolve `city` → { _id, name }
     //
-    const cityDoc = await ZoneData.findById(city).lean();
-    if (!cityDoc) {
-      return res.status(400).json({ message: `City not found: ${city}` });
+    // Service scope: "city" (city + zones required) or "global" (All India)
+    const scope = resolveServiceScope(serviceScope);
+    if (!scope) {
+      return res
+        .status(400)
+        .json({ message: `Invalid serviceScope: ${serviceScope}` });
     }
-    const cityObj = { _id: cityDoc._id, name: cityDoc.city };
 
-    //
-    // 4️⃣ Resolve each `zone` ID → { _id, name }
-    //
-    const zoneObjs = [];
-    for (let zones of zone) {
-      zones = zones.toString().trim();
-      const zdoc = cityDoc.zones.find((z) => z._id.toString() === zones);
-      if (zdoc)
-        zoneObjs.push({
-          _id: zdoc._id,
-          name: zdoc.address,
-          title: zdoc.zoneTitle,
-          latitude: zdoc.latitude,
-          longitude: zdoc.longitude,
-          range: zdoc.range,
-          status: zdoc.status,
-        });
+    // Global stores do not need coordinates; city wise stores still do
+    const latNum = parseFloat(Latitude);
+    const lngNum = parseFloat(Longitude);
+    const hasCoordinates = Number.isFinite(latNum) && Number.isFinite(lngNum);
+    if (scope === "city" && !hasCoordinates) {
+      return res.status(400).json({
+        message: "Latitude and Longitude are required for a city wise store",
+      });
     }
-    console.log("city", cityObj);
-    console.log("zone", zoneObjs);
+
+    let cityObj;
+    const zoneObjs = [];
+
+    if (scope === "city") {
+      if (!city) {
+        return res
+          .status(400)
+          .json({ message: "City is required for a city wise store" });
+      }
+
+      const cityDoc = await ZoneData.findById(city).lean();
+      if (!cityDoc) {
+        return res.status(400).json({ message: `City not found: ${city}` });
+      }
+      cityObj = { _id: cityDoc._id, name: cityDoc.city };
+
+      //
+      // 4️⃣ Resolve each `zone` ID → { _id, name }
+      //
+      for (let zones of Array.isArray(zone) ? zone : []) {
+        zones = zones.toString().trim();
+        const zdoc = cityDoc.zones.find((z) => z._id.toString() === zones);
+        if (zdoc)
+          zoneObjs.push({
+            _id: zdoc._id,
+            name: zdoc.address,
+            title: zdoc.zoneTitle,
+            latitude: zdoc.latitude,
+            longitude: zdoc.longitude,
+            range: zdoc.range,
+            status: zdoc.status,
+          });
+      }
+
+      if (zoneObjs.length === 0) {
+        return res
+          .status(400)
+          .json({ message: "Please select at least one valid zone" });
+      }
+      console.log("city", cityObj);
+      console.log("zone", zoneObjs);
+    }
 
     //
     // 5️⃣ Category → full list + sub/subsub for product lookup
@@ -206,10 +252,10 @@ exports.createStore = async (req, res) => {
     //
     const newStore = await Store.create({
       storeName,
-      city: cityObj,
-      zone: zoneObjs,
-      Latitude: parseFloat(Latitude),
-      Longitude: parseFloat(Longitude),
+      serviceScope: scope,
+      // global stores are not tied to any city/zone
+      ...(scope === "city" ? { city: cityObj, zone: zoneObjs } : {}),
+      ...(hasCoordinates ? { Latitude: latNum, Longitude: lngNum } : {}),
       ownerName,
       PhoneNumber,
       email,
@@ -222,7 +268,7 @@ exports.createStore = async (req, res) => {
       image,
       products: products.map((p) => p._id),
       fivliaAssured: isAssured,
-      typeId,
+      typeId: typeId || undefined,
     });
 
     return res.status(201).json({
@@ -266,14 +312,39 @@ exports.storeEdit = async (req, res) => {
       isAssured,
       sellerFreeDeliveryEnabled,
       sellerFreeDeliveryLimit,
+      serviceScope,
       Category: categoryInput,
     } = req.body;
 
     // ✅ Store name
     if (storeName) updateObj.storeName = storeName;
 
-    // ✅ City & zone logic only if city is passed
-    if (city) {
+    // ✅ Service scope (city wise / global). Only applied when it is sent,
+    // so every existing caller of this API behaves exactly as before.
+    let scopeUpdate = null;
+    if (
+      serviceScope !== undefined &&
+      serviceScope !== null &&
+      serviceScope !== ""
+    ) {
+      scopeUpdate = resolveServiceScope(serviceScope);
+      if (!scopeUpdate) {
+        return res
+          .status(400)
+          .json({ message: `Invalid serviceScope: ${serviceScope}` });
+      }
+      updateObj.serviceScope = scopeUpdate;
+    }
+    const isGlobalUpdate = scopeUpdate === "global";
+
+    if (scopeUpdate === "city" && !city) {
+      return res
+        .status(400)
+        .json({ message: "City is required for a city wise store" });
+    }
+
+    // ✅ City & zone logic only if city is passed (skipped for global stores)
+    if (city && !isGlobalUpdate) {
       const cityDoc = await ZoneData.findById(city).lean();
       if (!cityDoc) return res.status(400).json({ message: "City not found" });
 
@@ -301,7 +372,17 @@ exports.storeEdit = async (req, res) => {
           }
         }
 
+        if (scopeUpdate === "city" && zoneObjs.length === 0) {
+          return res
+            .status(400)
+            .json({ message: "Please select at least one valid zone" });
+        }
+
         updateObj.zone = zoneObjs;
+      } else if (scopeUpdate === "city") {
+        return res
+          .status(400)
+          .json({ message: "Please select at least one zone" });
       }
     }
 
@@ -416,7 +497,12 @@ exports.storeEdit = async (req, res) => {
     if (image) updateObj.image = image;
 
     // ✅ Perform update
-    const updatedStore = await Store.findByIdAndUpdate(storeId, updateObj, {
+    // Switching to global clears the old city/zone; otherwise update as before
+    const updateQuery = isGlobalUpdate
+      ? { $set: { ...updateObj, zone: [] }, $unset: { city: "" } }
+      : updateObj;
+
+    const updatedStore = await Store.findByIdAndUpdate(storeId, updateQuery, {
       new: true,
     });
 

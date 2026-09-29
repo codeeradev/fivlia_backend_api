@@ -24,6 +24,7 @@ const Rating = require("../modals/rating");
 const path = require("path");
 const csv = require("csv-parser");
 const fs = require("fs");
+const { normalizeVariantWeight } = require("../utils/productWeight");
 
 const {
   resolveCategory,
@@ -195,7 +196,9 @@ exports.addProduct = async (req, res) => {
       isVeg,
       sellerId,
       productType,
-      foodTypeId
+      foodTypeId,
+      weight,
+      weightUnit,
     } = req.body;
 
     const MultipleImage =
@@ -203,6 +206,17 @@ exports.addProduct = async (req, res) => {
 
     const imageKey = req.files?.image?.[0]?.key || "";
     const image = imageKey ? `/${imageKey}` : "";
+
+    let weightData;
+    if (weight !== undefined && weight !== null && weight !== "") {
+      const parsedWeight = Number(weight);
+      if (!isNaN(parsedWeight)) {
+        weightData = {
+          value: Math.round(parsedWeight * 100) / 100,
+          unit: weightUnit === "g" ? "g" : "kg",
+        };
+      }
+    }
 
     let parsedVariants = [];
     if (variants) {
@@ -402,7 +416,7 @@ exports.addProduct = async (req, res) => {
       const image = imageKey ? `/${imageKey}` : "";
 
       finalVariants.push({
-        ...variant,
+        ...normalizeVariantWeight(variant),
         discountValue: discount,
         ...(image && { image }),
       });
@@ -456,6 +470,7 @@ exports.addProduct = async (req, res) => {
       ...(fulfilled_by && { fulfilled_by }),
       ...(minQuantity && { minQuantity }),
       ...(maxQuantity && { maxQuantity }),
+      ...(weightData && { weight: weightData }),
       ...(finalFilterArray.length && { filter: finalFilterArray }),
       ...(finalVariants.length && { variants: finalVariants }),
       ...(ratings && { ratings }),
@@ -1669,7 +1684,9 @@ exports.updateProduct = async (req, res) => {
       isVeg,
       returnProduct,
       productType,
-      foodTypeId
+      foodTypeId,
+      weight,
+      weightUnit,
     } = req.body;
 
     const MultipleImage =
@@ -1677,6 +1694,17 @@ exports.updateProduct = async (req, res) => {
 
     const imageKey = req.files?.image?.[0]?.key || "";
     const image = imageKey ? `/${imageKey}` : "";
+
+    let weightData;
+    if (weight !== undefined && weight !== null && weight !== "") {
+      const parsedWeight = Number(weight);
+      if (!isNaN(parsedWeight)) {
+        weightData = {
+          value: Math.round(parsedWeight * 100) / 100,
+          unit: weightUnit === "g" ? "g" : "kg",
+        };
+      }
+    }
 
     // Fetch the existing product to get its variants
     const existingProduct = await Products.findById(id).select("variants");
@@ -1903,6 +1931,10 @@ exports.updateProduct = async (req, res) => {
         unitObj = await Unit.findById(unit);
       } else if (typeof unit === "object" && unit._id) {
         unitObj = await Unit.findById(unit._id);
+      } else if (typeof unit === "string" && unit.trim()) {
+        unitObj = await Unit.findOne({
+          unitname: { $regex: `^${unit.trim()}$`, $options: "i" },
+        });
       }
 
       if (!unitObj) {
@@ -2021,7 +2053,7 @@ exports.updateProduct = async (req, res) => {
           : 0;
 
       return {
-        ...variant,
+        ...normalizeVariantWeight(variant),
         _id: variant._id || new mongoose.Types.ObjectId(),
         image,
         discountValue,
@@ -2049,6 +2081,9 @@ exports.updateProduct = async (req, res) => {
       ...(ribbon && { ribbon }),
       ...(returnProductData && { returnProduct: returnProductData }),
       ...(unitObj && { unit: { _id: unitObj._id, name: unitObj.unitname } }),
+      ...(!unitObj &&
+        typeof unit === "string" &&
+        unit.trim() && { unit: { name: unit.trim() } }),
       ...(brandObj && {
         brand_Name: { _id: brandObj._id, name: brandObj.brandName },
       }),
@@ -2062,6 +2097,7 @@ exports.updateProduct = async (req, res) => {
       ...(fulfilled_by && { fulfilled_by }),
       ...(minQuantity && { minQuantity }),
       ...(maxQuantity && { maxQuantity }),
+      ...(weightData && { weight: weightData }),
       ...(finalFilterArray.length && { filter: finalFilterArray }),
       ...(finalVariants.length && { variants: finalVariants }),
       ...(ratings && { ratings }),
@@ -2430,6 +2466,7 @@ exports.adminProducts = async (req, res) => {
       status: 1,
       createdAt: 1,
       typeId: 1,
+      weight: 1,
     };
 
     // Get paginated products
@@ -2988,6 +3025,15 @@ exports.bulkProductUpload = async (req, res) => {
             else if (rp === "1") returnPolicyValue = "3 Day Return";
           }
 
+          // WEIGHT (optional, defaults to 0 kg if missing/invalid)
+          const rawWeight = Number(n["weight"]);
+          const weightUnitCsv =
+            (n["weight unit"] || "").trim().toLowerCase() === "g" ? "g" : "kg";
+          const weightData = {
+            value: isNaN(rawWeight) ? 0 : Math.round(rawWeight * 100) / 100,
+            unit: weightUnitCsv,
+          };
+
           // SKU
           const sku = await generateSKU();
 
@@ -3003,6 +3049,7 @@ exports.bulkProductUpload = async (req, res) => {
             productImageUrl: [img],
             productThumbnailUrl: img,
             tax: n["tax"] || "0",
+            weight: weightData,
             feature_product: Number(n["feature product"]) === 1,
             isVeg: Number(n["isveg"]) || 0,
             location: buildLocationArray(zoneData),

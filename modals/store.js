@@ -21,6 +21,14 @@ const storeScheema = new mongoose.Schema(
         range: Number,
       },
     ],
+    // "city"  -> store serves the selected city/zones (default, legacy behaviour)
+    // "global"-> store serves all of India, no city/zone required
+    // Stores created before this field existed have no value and are treated as "city".
+    serviceScope: {
+      type: String,
+      enum: ["city", "global"],
+      default: "city",
+    },
     Latitude: String,
     Longitude: String,
     status: { type: Boolean, default: false },
