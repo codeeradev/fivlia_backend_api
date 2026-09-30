@@ -244,12 +244,16 @@ exports.getBanner = async (req, res) => {
 
     const user = await User.findById(userId).lean();
 
-    if (!user || !user.location?.latitude || !user.location?.longitude) {
+    if (!user) {
       return res.status(400).json({ message: "User location not found" });
     }
 
-    const userLat = user.location.latitude;
-    const userLng = user.location.longitude;
+    // A user without a saved location can still see All India (global) banners
+    const hasLocation = Boolean(
+      user.location?.latitude && user.location?.longitude,
+    );
+    const userLat = user.location?.latitude;
+    const userLng = user.location?.longitude;
 
     const zoneDocs = await ZoneData.find({ status: true }, "zones").lean();
 
@@ -315,6 +319,18 @@ exports.getBanner = async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .lean();
+
+    if (!hasLocation) {
+      const globalOnly = allBanners
+        .filter((b) => b.isGlobal === true && b.type2 !== "Store")
+        .map((b) => ({ ...b, source: "admin" }));
+
+      return res.status(200).json({
+        message: "Banners fetched successfully.",
+        count: globalOnly.length,
+        data: globalOnly,
+      });
+    }
 
     const now = new Date();
 
@@ -423,6 +439,7 @@ exports.updateBannerStatus = async (req, res) => {
       brand: brandId,
       storeId,
       typeId,
+      isGlobal,
     } = req.body;
 
     const rawImagePath = req.files?.image?.[0]?.key;
@@ -441,8 +458,20 @@ exports.updateBannerStatus = async (req, res) => {
 
     if (rawImagePath) updateData.image = image;
 
+    // All India (global) banner: not tied to any city / zone
+    let isGlobalBanner;
+    if (isGlobal !== undefined) {
+      isGlobalBanner =
+        isGlobal === true || String(isGlobal).toLowerCase() === "true";
+      updateData.isGlobal = isGlobalBanner;
+      if (isGlobalBanner) {
+        updateData.city = [];
+        updateData.zones = [];
+      }
+    }
+
     // Handle city only on full banner edits. Status toggles do not send city.
-    if (city !== undefined) {
+    if (city !== undefined && !isGlobalBanner) {
       if (typeof city === "string") {
         try {
           city = JSON.parse(city);
@@ -554,8 +583,8 @@ exports.updateBannerStatus = async (req, res) => {
       }
     }
 
-    // Handle zones
-    if (zones) {
+    // Handle zones (skipped for global banners, zones were cleared above)
+    if (zones && !isGlobalBanner) {
       updateData.zones = typeof zones === "string" ? JSON.parse(zones) : zones;
     }
 
