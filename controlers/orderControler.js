@@ -30,6 +30,11 @@ const AdminStaff = require("../modals/roleBase/adminStaff");
 const crypto = require("crypto");
 const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
 const {
+  isGlobalStore,
+  getOrderScope,
+  computeGlobalShippingCharge,
+} = require("../utils/globalDelivery");
+const {
   getAppliedOfferContext,
   buildOfferPreviewText,
 } = require("../utils/storeOffer");
@@ -233,6 +238,20 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
+    // Global (All India) store: online payment only. Checked first so no
+    // order id is consumed for a request that will be rejected.
+    const storeScopeDoc = await Store.findById(storeId, {
+      serviceScope: 1,
+    }).lean();
+    const isGlobalOrder = isGlobalStore(storeScopeDoc);
+    const orderScope = getOrderScope(storeScopeDoc);
+
+    if (isGlobalOrder && paymentMode === true) {
+      return res.status(400).json({
+        message: "Cash on delivery is not available for this store.",
+      });
+    }
+
     const cartItems = await Cart.find({ _id: { $in: cartIds } });
     // console.log(chargesData);
     if (!cartItems || cartItems.length === 0) {
@@ -380,44 +399,50 @@ exports.placeOrder = async (req, res) => {
       sellerFreeDeliveryLimit: 1,
     }).lean();
 
-    const storeLat = parseFloat(storeData?.Latitude);
-    const storeLng = parseFloat(storeData?.Longitude);
+    if (isGlobalOrder) {
+      // Global store: flat shipping (same function as getCart), no distance
+      deliveryDistanceKm = 0;
+      deliveryChargeRaw = computeGlobalShippingCharge(itemsTotal, chargesData);
+    } else {
+      const storeLat = parseFloat(storeData?.Latitude);
+      const storeLng = parseFloat(storeData?.Longitude);
 
-    const mapApi = chargesData?.Map_Api?.[0] || {};
-    const googleApi = mapApi.google || {};
-    const googleApiKey = googleApi.status ? googleApi.api_key : null;
+      const mapApi = chargesData?.Map_Api?.[0] || {};
+      const googleApi = mapApi.google || {};
+      const googleApiKey = googleApi.status ? googleApi.api_key : null;
 
-    let distanceMeters = 0;
-    if (
-      Number.isFinite(storeLat) &&
-      Number.isFinite(storeLng) &&
-      Number.isFinite(userLat) &&
-      Number.isFinite(userLng)
-    ) {
-      distanceMeters = await getDistanceMeters({
-        storeLat,
-        storeLng,
-        userLat,
-        userLng,
-        googleApiKey,
+      let distanceMeters = 0;
+      if (
+        Number.isFinite(storeLat) &&
+        Number.isFinite(storeLng) &&
+        Number.isFinite(userLat) &&
+        Number.isFinite(userLng)
+      ) {
+        distanceMeters = await getDistanceMeters({
+          storeLat,
+          storeLng,
+          userLat,
+          userLng,
+          googleApiKey,
+        });
+      }
+
+      const distanceKm = getDistanceKm(distanceMeters);
+      deliveryDistanceKm = Number(distanceKm.toFixed(2));
+
+      const zoneWindowConfig = await getZoneWindowConfig();
+      const currentWindowMode = getCurrentZoneWindowMode(zoneWindowConfig);
+      const { fixedFirstKm, perKm } = resolveDeliveryRatesForMode({
+        settings: chargesData,
+        mode: currentWindowMode,
+      });
+
+      deliveryChargeRaw = computeDeliveryCharge({
+        distanceMeters,
+        fixedFirstKm,
+        perKm,
       });
     }
-
-    const distanceKm = getDistanceKm(distanceMeters);
-    deliveryDistanceKm = Number(distanceKm.toFixed(2));
-
-    const zoneWindowConfig = await getZoneWindowConfig();
-    const currentWindowMode = getCurrentZoneWindowMode(zoneWindowConfig);
-    const { fixedFirstKm, perKm } = resolveDeliveryRatesForMode({
-      settings: chargesData,
-      mode: currentWindowMode,
-    });
-
-    deliveryChargeRaw = computeDeliveryCharge({
-      distanceMeters,
-      fixedFirstKm,
-      perKm,
-    });
 
     deliveryBaseCharge = deliveryChargeRaw;
 
@@ -559,6 +584,7 @@ exports.placeOrder = async (req, res) => {
         storeId,
         deliveryPayout: totalDeliveryCharge,
         deliveryCharges: deliveryChargeRaw,
+        serviceScope: orderScope,
         deliveryDistanceKm,
         platformFee: chargesData.Platform_Fee,
         deliveryBaseCharge,
@@ -715,6 +741,7 @@ exports.placeOrder = async (req, res) => {
         cartIds,
         deliveryPayout: totalDeliveryCharge,
         deliveryCharges: deliveryChargeRaw,
+        serviceScope: orderScope,
         deliveryDistanceKm,
         platformFee: chargesData.Platform_Fee,
         deliveryBaseCharge,
@@ -907,6 +934,10 @@ exports.verifyPayment = async (req, res) => {
       addressId: tempOrder.addressId,
       userId: tempOrder.userId,
       cashOnDelivery: tempOrder.cashOnDelivery,
+      serviceScope: tempOrder.serviceScope || "city",
+      ...(tempOrder.shipping?.courierName
+        ? { shipping: tempOrder.shipping }
+        : {}),
       totalPrice: tempOrder.totalPrice,
       instructions: tempOrder.instructions,
       deliveryCharges: tempOrder.deliveryCharges,
@@ -1248,7 +1279,14 @@ exports.getOrderDetails = async (req, res) => {
         storeName = order.storeId.storeName || "";
       }
 
-      if (settings && order.totalPrice > settings.freeDeliveryLimit) {
+      const isGlobalOrderRow = order.serviceScope === "global";
+
+      // Global orders keep the stored shipping charge (no free-delivery override)
+      if (
+        !isGlobalOrderRow &&
+        settings &&
+        order.totalPrice > settings.freeDeliveryLimit
+      ) {
         order.deliveryCharges = 0;
       }
 
@@ -1286,6 +1324,7 @@ exports.getOrderDetails = async (req, res) => {
         id: order._id,
         orderId: order.orderId,
         orderStatus: order.orderStatus,
+        serviceScope: order.serviceScope || "city",
         totalPrice: order.totalPrice,
         cashOnDelivery: order.cashOnDelivery,
         deliveryCharges: order.deliveryCharges,
@@ -1293,9 +1332,13 @@ exports.getOrderDetails = async (req, res) => {
         transactionId: order.transactionId || "",
         items: itemsWithDetails,
         address,
-        driver: driverInfo,
-        storeLocation,
+        driver: isGlobalOrderRow ? null : driverInfo,
+        storeLocation: isGlobalOrderRow ? null : storeLocation,
         storeName,
+        shipping:
+          isGlobalOrderRow && order.shipping?.courierName
+            ? order.shipping
+            : null,
         createdAt: order.createdAt,
       });
     }
@@ -1354,6 +1397,16 @@ exports.orderStatus = async (req, res) => {
     }
 
     const orderDoc = await Order.findById(id).lean();
+
+    // "Shipped" exists only for global orders (courier delivery)
+    if (normalizedStatus === "shipped") {
+      if (orderDoc && orderDoc.serviceScope !== "global") {
+        return res.status(400).json({
+          message: "Only global orders can be marked as Shipped",
+        });
+      }
+      updateData.orderStatus = "Shipped";
+    }
 
     if (driverId) {
       driverDoc = await driver.findOne({ _id: driverId });
@@ -1511,7 +1564,10 @@ exports.orderStatus = async (req, res) => {
         deleteAssignmentsCount = deleteAssignments.deletedCount || 0;
       }
 
-      if (status === "Delivered" && updatedOrder.driver?.driverId) {
+      if (
+        status === "Delivered" &&
+        (updatedOrder.driver?.driverId || updatedOrder.serviceScope === "global")
+      ) {
         if (!updatedOrder.deliverStatus) {
           const storeBefore = await Store.findById(updatedOrder.storeId)
             .session(session)
@@ -1637,11 +1693,16 @@ exports.orderStatus = async (req, res) => {
             );
           }
 
-          const payout = updatedOrder.deliveryPayout || 0;
+          const isGlobalDelivery = updatedOrder.serviceScope === "global";
+          // Global orders have no driver, so there is no driver payout.
+          // The whole shipping charge is credited to the admin wallet.
+          const payout = isGlobalDelivery ? 0 : updatedOrder.deliveryPayout || 0;
           const deliveryChargeRaw = updatedOrder.deliveryCharges || 0;
-          const taxedAmount = Math.max(0, deliveryChargeRaw - payout);
+          const taxedAmount = isGlobalDelivery
+            ? deliveryChargeRaw
+            : Math.max(0, deliveryChargeRaw - payout);
 
-          if (!payout) {
+          if (!payout && !isGlobalDelivery) {
             console.warn("problem is drvier payout order status change");
           }
 
@@ -1652,59 +1713,65 @@ exports.orderStatus = async (req, res) => {
             { session },
           );
 
-          const updatedDriver = await driver.findOneAndUpdate(
-            { "address.mobileNo": updatedOrder.driver.mobileNumber },
-            { $inc: { wallet: payout } },
-            { new: true, session },
-          );
+          if (!isGlobalDelivery) {
+            const updatedDriver = await driver.findOneAndUpdate(
+              { "address.mobileNo": updatedOrder.driver.mobileNumber },
+              { $inc: { wallet: payout } },
+              { new: true, session },
+            );
 
-          if (!updatedDriver) {
-            throw new Error(
-              "Driver not found while updating driver wallet order status change",
+            if (!updatedDriver) {
+              throw new Error(
+                "Driver not found while updating driver wallet order status change",
+              );
+            }
+
+            await Transaction.create(
+              [
+                {
+                  driverId: updatedDriver._id,
+                  type: "credit",
+                  amount: payout,
+                  orderId: updatedOrder._id,
+                  description: `Payout for Order #${updatedOrder.orderId}`,
+                },
+              ],
+              { session },
             );
           }
 
-          await Transaction.create(
-            [
-              {
-                driverId: updatedDriver._id,
-                type: "credit",
-                amount: payout,
-                orderId: updatedOrder._id,
-                description: `Payout for Order #${updatedOrder.orderId}`,
-              },
-            ],
-            { session },
-          );
+          if (!isGlobalDelivery || taxedAmount > 0) {
+            const lastAmount = await admin_transaction
+              .findById("68ea20d2c05a14a96c12788d")
+              .session(session)
+              .lean();
 
-          const lastAmount = await admin_transaction
-            .findById("68ea20d2c05a14a96c12788d")
-            .session(session)
-            .lean();
+            const updatedWallet = await admin_transaction.findByIdAndUpdate(
+              "68ea20d2c05a14a96c12788d",
+              { $inc: { wallet: taxedAmount } },
+              { new: true, session },
+            );
 
-          const updatedWallet = await admin_transaction.findByIdAndUpdate(
-            "68ea20d2c05a14a96c12788d",
-            { $inc: { wallet: taxedAmount } },
-            { new: true, session },
-          );
+            if (!updatedWallet) {
+              throw new Error("Admin tax wallet update failed");
+            }
 
-          if (!updatedWallet) {
-            throw new Error("Admin tax wallet update failed");
+            await admin_transaction.create(
+              [
+                {
+                  currentAmount: updatedWallet.wallet,
+                  lastAmount: lastAmount.wallet,
+                  type: "Credit",
+                  amount: taxedAmount,
+                  orderId: updatedOrder.orderId,
+                  description: isGlobalDelivery
+                    ? "Global shipping charge credited to Admin wallet"
+                    : "Delivery Charge GST credited to Admin wallet",
+                },
+              ],
+              { session },
+            );
           }
-
-          await admin_transaction.create(
-            [
-              {
-                currentAmount: updatedWallet.wallet,
-                lastAmount: lastAmount.wallet,
-                type: "Credit",
-                amount: taxedAmount,
-                orderId: updatedOrder.orderId,
-                description: "Delivery Charge GST credited to Admin wallet",
-              },
-            ],
-            { session },
-          );
 
           if (store.referralCode) {
             try {
@@ -1950,7 +2017,10 @@ exports.orderStatus = async (req, res) => {
       });
     }
 
-    if (status === "Delivered" && updatedOrder.driver?.driverId) {
+    if (
+      status === "Delivered" &&
+      (updatedOrder.driver?.driverId || updatedOrder.serviceScope === "global")
+    ) {
       if (deliverySettlementApplied) {
         const store = await Store.findById(updatedOrder.storeId).lean();
 
@@ -1959,7 +2029,9 @@ exports.orderStatus = async (req, res) => {
             await sendNotification(
               store.fcmTokenMobile,
               "Order Delivered 🎉",
-              `Driver delivered order #${updatedOrder.orderId}.`,
+              updatedOrder.serviceScope === "global"
+                ? `Order #${updatedOrder.orderId} has been delivered.`
+                : `Driver delivered order #${updatedOrder.orderId}.`,
               "/dashboard1",
               { orderId: updatedOrder.orderId },
               CUSTOM_PUSH_SOUND,
@@ -2018,9 +2090,17 @@ exports.orderStatus = async (req, res) => {
       "orderControler.orderStatus",
     );
 
+    const settlementEligible =
+      status === "Delivered" &&
+      (updatedOrder.driver?.driverId || updatedOrder.serviceScope === "global");
+
     return res.status(200).json({
       message: "Order Status Updated",
       isDelivered,
+      // only present on a repeated Delivered call (settlement already done)
+      ...(settlementEligible && !deliverySettlementApplied
+        ? { alreadyDelivered: true }
+        : {}),
       update: updatedOrder,
     });
   } catch (error) {
@@ -2032,6 +2112,197 @@ exports.orderStatus = async (req, res) => {
     if (session) {
       await session.endSession();
     }
+  }
+};
+
+// PUT /seller/order/ship/:orderId  (seller / admin)
+// Marks a GLOBAL order as shipped and stores the courier details.
+exports.shipOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const courierName = String(req.body?.courierName || "").trim();
+    const trackingId = String(req.body?.trackingId || "").trim();
+    const trackingUrl = String(req.body?.trackingUrl || "").trim();
+    const expectedDeliveryRaw = String(req.body?.expectedDeliveryDate || "").trim();
+
+    if (!courierName || !trackingId || !expectedDeliveryRaw) {
+      return res.status(400).json({
+        status: false,
+        message: "courierName, trackingId and expectedDeliveryDate are required",
+      });
+    }
+
+    // expectedDeliveryDate: YYYY-MM-DD, not in the past (India date)
+    const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(expectedDeliveryRaw);
+    const expectedDeliveryDate = dateOk
+      ? new Date(`${expectedDeliveryRaw}T00:00:00.000Z`)
+      : null;
+    if (!expectedDeliveryDate || Number.isNaN(expectedDeliveryDate.getTime())) {
+      return res.status(400).json({
+        status: false,
+        message: "expectedDeliveryDate must be in YYYY-MM-DD format",
+      });
+    }
+    const todayIST = new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+    });
+    if (expectedDeliveryRaw < todayIST) {
+      return res.status(400).json({
+        status: false,
+        message: "expectedDeliveryDate cannot be in the past",
+      });
+    }
+
+    if (trackingUrl) {
+      let validUrl = false;
+      try {
+        const u = new URL(trackingUrl);
+        validUrl = u.protocol === "http:" || u.protocol === "https:";
+      } catch (e) {
+        validUrl = false;
+      }
+      if (!validUrl) {
+        return res
+          .status(400)
+          .json({ status: false, message: "trackingUrl must be a valid URL" });
+      }
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(404).json({ status: false, message: "Order not found" });
+    }
+
+    const order = await Order.findById(orderId).lean();
+    if (!order) {
+      return res.status(404).json({ status: false, message: "Order not found" });
+    }
+
+    // Ownership: a seller can only ship its own store's orders; admin can ship any
+    const isAdmin = req.auth?.role === "admin";
+    if (!isAdmin && String(order.storeId) !== String(req.auth?.storeId)) {
+      return res.status(403).json({
+        status: false,
+        message: "This order does not belong to your store",
+      });
+    }
+
+    if (order.serviceScope !== "global") {
+      return res.status(400).json({
+        status: false,
+        message: "Only global orders can be shipped this way",
+      });
+    }
+
+    const currentStatus = normalizeOrderStatus(order.orderStatus);
+    if (!["accepted", "ready", "ready to pickup"].includes(currentStatus)) {
+      return res.status(400).json({
+        status: false,
+        message: "Order must be accepted before it can be shipped",
+      });
+    }
+
+    const shippedAt = new Date();
+    const shipping = {
+      courierName,
+      trackingId,
+      shippedAt,
+      expectedDeliveryDate,
+      ...(trackingUrl ? { trackingUrl } : {}),
+    };
+
+    // Conditional on the status we just read, so two calls cannot both win
+    const updatedOrder = await Order.findOneAndUpdate(
+      { _id: order._id, orderStatus: order.orderStatus },
+      { $set: { orderStatus: "Shipped", shipping } },
+      { new: true },
+    );
+
+    if (!updatedOrder) {
+      return res.status(400).json({
+        status: false,
+        message: "Order must be accepted before it can be shipped",
+      });
+    }
+
+    // Customer push notification (never fails the request)
+    try {
+      const user = await User.findById(updatedOrder.userId).lean();
+      if (user?.fcmToken && user.fcmToken !== "null") {
+        await sendNotification(
+          user.fcmToken,
+          `📦 Order #${updatedOrder.orderId} Shipped`,
+          `Your order has been shipped via ${courierName}. Tracking ID: ${trackingId}`,
+          "/dashboard1",
+          {
+            orderId: String(updatedOrder.orderId),
+            status: "Shipped",
+            courierName,
+            trackingId,
+            trackingUrl: trackingUrl || "",
+          },
+          DEFAULT_PUSH_SOUND,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "⚠️ Shipped notification failed:",
+        err.response?.data?.error?.message || err.message,
+      );
+    }
+
+    // Seller dashboard + customer app live update
+    try {
+      const sellerSocket = sellerSocketMap.get(String(updatedOrder.storeId));
+      if (sellerSocket) {
+        sellerSocket.emit("storeOrder", {
+          orderId: updatedOrder.orderId,
+          status: updatedOrder.orderStatus,
+        });
+      }
+    } catch (err) {
+      console.error("Seller socket emit failed:", err.message);
+    }
+
+    try {
+      const socketOrderPayload = await Order.findById(updatedOrder._id).lean();
+      await emitUserOrderStatusUpdate(
+        socketOrderPayload || updatedOrder,
+        "orderControler.shipOrder",
+      );
+    } catch (err) {
+      console.error("User socket emit failed:", err.message);
+    }
+
+    try {
+      await telegramOrderLog("🚚 ORDER SHIPPED", {
+        orderId: updatedOrder.orderId,
+        status: "Shipped",
+        storeId: updatedOrder.storeId,
+      });
+    } catch (err) {
+      console.warn("telegram log failed:", err.message);
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: "Order marked as shipped",
+      order: {
+        id: updatedOrder._id,
+        orderId: updatedOrder.orderId,
+        orderStatus: updatedOrder.orderStatus,
+        serviceScope: updatedOrder.serviceScope,
+        shipping: {
+          courierName: updatedOrder.shipping.courierName,
+          trackingId: updatedOrder.shipping.trackingId,
+          trackingUrl: updatedOrder.shipping.trackingUrl || null,
+          shippedAt: updatedOrder.shipping.shippedAt,
+          expectedDeliveryDate: updatedOrder.shipping.expectedDeliveryDate,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("shipOrder error:", error.message);
+    return res.status(500).json({ status: false, message: "Server error" });
   }
 };
 

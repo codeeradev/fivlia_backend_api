@@ -172,7 +172,7 @@ exports.getFoodSeller = async (req, res) => {
       _id: { $in: allowedStoreIds },
     })
       .select(
-        "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg",
+        "storeName image referralCode advertisementImages sellerFreeDeliveryEnabled sellerFreeDeliveryLimit fullAddress foodTypes isVeg serviceScope",
       )
       .lean();
 
@@ -352,6 +352,7 @@ exports.getFoodSeller = async (req, res) => {
             return {
               storeId: store._id,
               storeName: store.storeName,
+              deliveryMode: store.serviceScope === "global" ? "global" : "local",
               distance: storeDistanceMap[store._id.toString()] || null,
 
               topProductOffer: offerMap[store._id.toString()]
@@ -400,6 +401,7 @@ exports.getFoodSeller = async (req, res) => {
         return {
           storeId: store._id,
           storeName: store.storeName,
+          deliveryMode: store.serviceScope === "global" ? "global" : "local",
 
           topProductOffer: offerMap[store._id.toString()]
             ? `${offerMap[store._id.toString()]}`

@@ -13,19 +13,13 @@ const settingAdminSchema = new mongoose.Schema({
   },
   Password: String,
   Platform_Fee: Number,
-
   codLimit: Number,
-
   GST_Number: String,
   Description: String,
-
   Delivery_Charges: Number,
   Delivery_Charges_Gst: Number,
-
   adminSignature: String,
-
   DeliveryStatus: String,
-
   foodSellerTaxPercent: String,
   Auth: [
     {
@@ -52,7 +46,6 @@ const settingAdminSchema = new mongoose.Schema({
       ola: { api_key: String, status: Boolean },
     },
   ],
-
   minPrice: Number,
   maxPrice: Number,
   maxQuantity: Number,
@@ -72,6 +65,10 @@ const settingAdminSchema = new mongoose.Schema({
   perKmNightCharges: Number,
   foodGlobalCommission: Number,
   ready_in_min: Number,
+  globalShippingCharge: { type: Number, default: 0 },
+  globalFreeShippingLimit: { type: Number, default: 0 },
+  globalDeliveryDaysMin: { type: Number, default: 3 },
+  globalDeliveryDaysMax: { type: Number, default: 5 },
   homeScreen: {
     food: {
       primary_color: String,
@@ -92,4 +89,3 @@ const settingAdminSchema = new mongoose.Schema({
 module.exports = {
   SettingAdmin: mongoose.model("SettingAdmin", settingAdminSchema),
 };
-// {"RazorPayKey":{"test":"rzp_live_Fb8vLci1im6l0l","live":"rzp_live_Fb8vLci1im6l0l","status":true,"secretKey":"","activeMode":"test"},"PhonePe":{"test":"","live":"","status":false,"secretKey":""}}

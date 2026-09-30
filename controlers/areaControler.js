@@ -524,10 +524,8 @@ exports.addAddress = async (req, res) => {
 
     const userLat = latitude;
     const userLng = longitude;
-    const { zoneAvailable, matchedStores } = await getStoresWithinRadius(
-      userLat,
-      userLng,
-    );
+    const { zoneAvailable, matchedStores, serviceMode } =
+      await getStoresWithinRadius(userLat, userLng);
 
     if (!zoneAvailable) {
       return res.status(200).json({
@@ -565,6 +563,7 @@ exports.addAddress = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: "Address added successfully",
+      serviceMode: serviceMode || "local",
       newAddress,
     });
   } catch (error) {

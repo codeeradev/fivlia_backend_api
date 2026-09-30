@@ -24,6 +24,7 @@ const { contactUsTemplate } = require("../utils/emailTemplates");
 const Blog = require("../modals/blog");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
+const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
 const Charity = require("../modals/Charity");
 const CharityContent = require("../modals/charityContent");
 const Franchise = require("../modals/franchise");
@@ -181,6 +182,7 @@ exports.forwebbestselling = async (req, res) => {
             storeId: store._id,
             storeName: store.soldBy?.storeName || store.storeName,
             official: store.soldBy?.official || 0,
+            deliveryMode: store.soldBy?.deliveryMode || "local",
             rating: 5, // fixed rating
             distance: store.distance || 999999,
             price: stockEntry.price ?? variant.sell_price ?? 0,
@@ -452,6 +454,7 @@ exports.forwebgetProduct = async (req, res) => {
             storeId: store._id.toString(),
             storeName: store.soldBy?.storeName || store.storeName,
             official: store.soldBy?.official || 0,
+            deliveryMode: store.soldBy?.deliveryMode || "local",
             rating: variant.rating ?? product.rating ?? 0,
             distance: store.distance ?? Number.MAX_SAFE_INTEGER,
             price,
@@ -785,6 +788,7 @@ exports.forwebgetFeatureProduct = async (req, res) => {
             storeId: store._id,
             storeName: store.soldBy?.storeName || store.storeName,
             official: store.soldBy?.official || 0,
+            deliveryMode: store.soldBy?.deliveryMode || "local",
             rating: 5,
             distance: store.distance || 999999,
             price: stockEntry.price ?? variant.sell_price ?? 0,
@@ -1377,9 +1381,12 @@ exports.getDeliveryEstimateForWebsite = async (req, res) => {
       });
     }
 
-    // Find nearest store
+    // Find nearest LOCAL store (global stores have no coordinates)
     const nearestStore = matchedStores
-      .filter((store) => store.Latitude && store.Longitude)
+      .filter(
+        (store) =>
+          store.serviceScope !== "global" && store.Latitude && store.Longitude,
+      )
       .map((store) => ({
         store,
         distanceMeters: haversine(
@@ -1390,6 +1397,19 @@ exports.getDeliveryEstimateForWebsite = async (req, res) => {
       .sort((a, b) => a.distanceMeters - b.distanceMeters)[0];
 
     if (!nearestStore) {
+      // No local store: fall back to a global (All India) store if one is open
+      const globalStore = matchedStores.find(
+        (store) => store.serviceScope === "global",
+      );
+      if (globalStore) {
+        const globalSettings = await SettingAdmin.findOne().lean();
+        return res.json({
+          status: true,
+          result: 2,
+          deliveryMode: "global",
+          filtered: [buildGlobalEstimateEntry(globalStore, globalSettings)],
+        });
+      }
       return res.json({ status: false, filtered: [] });
     }
 
@@ -1433,6 +1453,7 @@ exports.getDeliveryEstimateForWebsite = async (req, res) => {
 
     res.json({
       status: true,
+      deliveryMode: "local",
       filtered: [{ duration }],
     });
   } catch (err) {

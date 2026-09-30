@@ -3,6 +3,11 @@ const Order = require("../modals/order");
 const User = require("../modals/User");
 const Tax = require("../modals/tax");
 const Page = require("../modals/pages");
+const {
+  GLOBAL_SETTING_KEYS,
+  validateGlobalSettings,
+  withGlobalSettingDefaults,
+} = require("../utils/globalDelivery");
 exports.getSettings = async (req, res) => {
   try {
     const settings = await SettingAdmin.findOne().lean();
@@ -10,7 +15,9 @@ exports.getSettings = async (req, res) => {
       return res.status(404).json({ message: "Settings not found" });
     }
 
-    return res.status(200).json({ message: "Settings", settings });
+    return res
+      .status(200)
+      .json({ message: "Settings", settings: withGlobalSettingDefaults(settings) });
   } catch (error) {
     console.error("Get User Settings Error =>", error);
     return res
@@ -24,10 +31,11 @@ exports.settings = async (req, res) => {
     const userId = req.user;
 
     // Get the settings document (full, with all fields)
-    const settings = await SettingAdmin.findOne().lean();
-    if (!settings) {
+    const settingsDoc = await SettingAdmin.findOne().lean();
+    if (!settingsDoc) {
       return res.status(404).json({ message: "Settings not found" });
     }
+    const settings = withGlobalSettingDefaults(settingsDoc);
 
     const pages = await Page.find({
       pageSlug: {
@@ -107,6 +115,16 @@ exports.adminSetting = async (req, res) => {
     }
 
     const currentSettings = await SettingAdmin.findOne().lean();
+
+    // Global (All India) settings: validate before anything is saved
+    const globalCheck = validateGlobalSettings(updateFields, currentSettings);
+    if (globalCheck.error) {
+      return res.status(400).json({ message: globalCheck.error });
+    }
+    GLOBAL_SETTING_KEYS.forEach((key) => {
+      if (key in updateFields) delete updateFields[key];
+    });
+    Object.assign(updateFields, globalCheck.values);
 
     if (req.files?.file?.[0]) {
       updateFields.homeScreen = {

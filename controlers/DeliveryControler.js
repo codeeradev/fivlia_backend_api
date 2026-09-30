@@ -10,6 +10,7 @@ const { ZoneData } = require("../modals/cityZone");
 const { getDistance } = require("../config/Ola");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
+const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
 
 function addFiveMinutes(durationText,settings) {
   const match = durationText.match(/(\d+)\s*min/);
@@ -59,11 +60,25 @@ const getDeliveryEstimate = async (req, res) => {
       });
     }
 
-    // Filter stores with valid lat/lng
+    // Nearest store is chosen from LOCAL (city) stores only
     const validStores = matchedStores.filter(
-      (store) => store.Latitude && store.Longitude
+      (store) =>
+        store.serviceScope !== "global" && store.Latitude && store.Longitude
     );
     if (!validStores.length) {
+      // No local store: fall back to a global (All India) store if one is open
+      const globalStore = matchedStores.find(
+        (store) => store.serviceScope === "global"
+      );
+      if (globalStore) {
+        const globalSettings = await SettingAdmin.findOne().lean();
+        return res.json({
+          status: true,
+          result: 2,
+          deliveryMode: "global",
+          filtered: [buildGlobalEstimateEntry(globalStore, globalSettings)],
+        });
+      }
       return res.json({ status: false, result: 0, filtered: [] });
     }
 
@@ -166,7 +181,7 @@ const getDeliveryEstimate = async (req, res) => {
       },
     ];
 
-    res.json({ status: true, result: 2, filtered });
+    res.json({ status: true, result: 2, deliveryMode: "local", filtered });
   } catch (err) {
     console.error("💥 Delivery Error:", err);
     res

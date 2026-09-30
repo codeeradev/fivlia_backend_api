@@ -295,6 +295,9 @@ async function getStoresWithinRadius(userLat, userLng) {
   if (matchedZones.length === 0 && globalStores.length === 0) {
     return {
       zoneAvailable: false,
+      hasLocalStores: false,
+      hasGlobalStores: false,
+      serviceMode: "none",
       matchedStores: [],
     };
   }
@@ -332,12 +335,18 @@ async function getStoresWithinRadius(userLat, userLng) {
     if (matchedZones.length === 0) {
       return {
         zoneAvailable: false,
+        hasLocalStores: false,
+        hasGlobalStores: false,
+        serviceMode: "none",
         matchedStores: [],
       };
     }
     return {
       zoneAvailable: true,
       storesOpen: false,
+      hasLocalStores: false,
+      hasGlobalStores: false,
+      serviceMode: "none",
       matchedStores: [],
     };
   }
@@ -348,12 +357,25 @@ async function getStoresWithinRadius(userLat, userLng) {
       storeId: store._id,
       storeName: store.Authorized_Store ? "Fivlia" : store.storeName,
       official: store.Authorized_Store ? 1 : 0,
+      deliveryMode: store.serviceScope === "global" ? "global" : "local",
     },
   }));
+
+  const hasGlobalStores = openStores.some((s) => s.serviceScope === "global");
+  const hasLocalStores = openStores.some((s) => s.serviceScope !== "global");
+  const serviceMode =
+    hasLocalStores && hasGlobalStores
+      ? "mixed"
+      : hasGlobalStores
+        ? "global_only"
+        : "local";
 
   return {
     zoneAvailable: true,
     storesOpen: true,
+    hasLocalStores,
+    hasGlobalStores,
+    serviceMode,
     matchedStores,
   };
 }
@@ -377,6 +399,9 @@ async function getBannersWithinRadius(userLat, userLng, banners = []) {
   const nowInZoneTimezone = getNowInTimezone(zoneWindowConfig?.timezone);
 
   return banners.filter((banner) => {
+    // Global banners are shown to every user, even outside all zones
+    if (banner.isGlobal === true) return true;
+
     if (!Array.isArray(banner.city)) return false;
 
     return banner.city.some((cityObj) => {

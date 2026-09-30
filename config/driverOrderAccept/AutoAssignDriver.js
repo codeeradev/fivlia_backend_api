@@ -52,6 +52,12 @@ const runAutoAssignDriver = async (orderId) => {
       return;
     }
 
+    // Global (All India) orders are shipped by courier, never by a local driver
+    if (order.serviceScope === "global") {
+      console.log(`Order ${order.orderId} is a global order, skipping driver assignment`);
+      return;
+    }
+
     if (order.driver?.driverId) {
       console.log(`Order ${order.orderId} already has a driver assigned`);
       return;

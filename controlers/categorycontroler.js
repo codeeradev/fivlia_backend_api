@@ -71,7 +71,10 @@ exports.banner = async (req, res) => {
       type2,
       storeId,
       typeId,
+      isGlobal,
     } = req.body;
+    const isGlobalBanner =
+      isGlobal === true || String(isGlobal).toLowerCase() === "true";
     const rawImagePath = req.files?.image?.[0]?.key || "";
     const image = rawImagePath ? `/${rawImagePath}` : "";
 
@@ -96,17 +99,21 @@ exports.banner = async (req, res) => {
       return res.status(400).json({ message: "Valid typeId is required" });
     }
 
-    if (typeof city === "string") {
-      try {
-        city = JSON.parse(city);
-      } catch (err) {
-        return res.status(400).json({ message: "Invalid city format" });
+    // Global banners are not tied to a city / zone, so city is not required
+    let cityDoc = [];
+    if (!isGlobalBanner) {
+      if (typeof city === "string") {
+        try {
+          city = JSON.parse(city);
+        } catch (err) {
+          return res.status(400).json({ message: "Invalid city format" });
+        }
       }
+
+      const cityIds = Array.isArray(city) ? city : [city];
+
+      cityDoc = await ZoneData.find({ _id: { $in: cityIds } });
     }
-
-    let cityIds = Array.isArray(city) ? city : [city];
-
-    const cityDoc = await ZoneData.find({ _id: { $in: cityIds } });
 
     let foundCategory = null;
     let foundSubCategory = null;
@@ -214,7 +221,8 @@ exports.banner = async (req, res) => {
       status: status !== undefined ? status : true,
       storeId,
       typeId,
-      zones,
+      zones: isGlobalBanner ? [] : zones,
+      isGlobal: isGlobalBanner,
     });
     return res
       .status(200)

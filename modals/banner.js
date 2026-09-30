@@ -21,13 +21,9 @@ const bannerSchema = new mongoose.Schema({
     brand: {name:{type:String}, _id:{type:mongoose.Schema.Types.ObjectId, ref:'brands'},slug: String},
     storeId:{type:mongoose.Schema.Types.ObjectId, ref:'stores'},
     status:{type:Boolean,default:true},
+    isGlobal:{type:Boolean,default:false},
     type:{type:String,enum:['offer','normal'],default:'normal'},
     type2:String,
     typeId:{ type: mongoose.Schema.Types.ObjectId, ref: "type", required: true },
 },{timestamps:true})
 module.exports=mongoose.model('Banner',bannerSchema)
-
-
-
-
-//   zones: [{type: {type: String,enum: ['Point'],required: true},coordinates: {type: [Number],required: true},    address: {type: String,required: true}}],

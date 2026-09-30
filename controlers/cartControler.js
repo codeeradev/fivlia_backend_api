@@ -16,6 +16,10 @@ const {
   resolveDeliveryRatesForMode,
 } = require("../utils/deliveryCharge");
 const {
+  computeGlobalShippingCharge,
+  formatGlobalDeliveryText,
+} = require("../utils/globalDelivery");
+const {
   filterProductsByRequestedType,
   resolveRequestedTypeId,
 } = require("../utils/productTypeFilter");
@@ -441,29 +445,37 @@ exports.getCart = async (req, res) => {
           )
         : 0;
 
-      deliveryDistanceKm = Number(getDistanceKm(distanceMeters).toFixed(2));
-      billableKm = getBillableKm(distanceMeters);
-
-      const zoneWindowConfig = await getZoneWindowConfig();
-      const currentWindowMode = getCurrentZoneWindowMode(zoneWindowConfig);
-      const { fixedFirstKm, perKm, appliedMode } = resolveDeliveryRatesForMode({
-        settings,
-        mode: currentWindowMode,
-      });
-      deliveryChargeMode = appliedMode;
-
-      deliveryCharge = computeDeliveryCharge({
-        distanceMeters,
-        fixedFirstKm,
-        perKm,
-      });
-
-      deliveryBaseCharge = deliveryCharge;
-
       const itemsTotal = offerContext.cartDiscount.items.reduce(
         (sum, item) => sum + item.finalUnitPrice * item.quantity,
         0,
       );
+
+      if (isGlobalStore) {
+        // Global store: flat shipping, no distance based charge
+        deliveryDistanceKm = 0;
+        billableKm = 0;
+        deliveryCharge = computeGlobalShippingCharge(itemsTotal, settings);
+      } else {
+        deliveryDistanceKm = Number(getDistanceKm(distanceMeters).toFixed(2));
+        billableKm = getBillableKm(distanceMeters);
+
+        const zoneWindowConfig = await getZoneWindowConfig();
+        const currentWindowMode = getCurrentZoneWindowMode(zoneWindowConfig);
+        const { fixedFirstKm, perKm, appliedMode } =
+          resolveDeliveryRatesForMode({
+            settings,
+            mode: currentWindowMode,
+          });
+        deliveryChargeMode = appliedMode;
+
+        deliveryCharge = computeDeliveryCharge({
+          distanceMeters,
+          fixedFirstKm,
+          perKm,
+        });
+      }
+
+      deliveryBaseCharge = deliveryCharge;
 
       const deliveryGstPercent = Number(settings?.Delivery_Charges_Gst || 0);
 
@@ -543,8 +555,13 @@ exports.getCart = async (req, res) => {
           (freeProductItem?.freeProductSavings || 0),
         finalSubtotal: offerContext.cartDiscount.finalSubtotal,
       },
-      paymentOption: cashOnDelivery,
+      // Global orders are online payment only
+      paymentOption: isGlobalStore ? false : cashOnDelivery,
       StoreID: storeId,
+      deliveryMode: isGlobalStore ? "global" : "local",
+      estimatedDeliveryText: isGlobalStore
+        ? formatGlobalDeliveryText(settings)
+        : null,
       deliveryCharge,
       deliveryBaseCharge,
       deliveryChargeMode,
