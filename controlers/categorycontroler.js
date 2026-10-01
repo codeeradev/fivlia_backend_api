@@ -23,6 +23,10 @@ const slugify = require("slugify");
 const { CityData, ZoneData } = require("../modals/cityZone");
 const Coupon = require("../modals/sellerCoupon");
 const { buildOfferPreviewText } = require("../utils/storeOffer");
+const {
+  resolveGlobalOnlyScope,
+  getGlobalBrandIds,
+} = require("../utils/locationCategories");
 
 exports.update = async (req, res) => {
   try {
@@ -912,8 +916,14 @@ exports.getCategories = async (req, res) => {
 
       return res.status(404).json({ message: "Category not found" });
     }
-    // otherwise return all
-    const formatted = await Promise.all(allCategories.map(formatCategory));
+    // otherwise return all (global-only user: only the global stores' categories)
+    const globalScope = await resolveGlobalOnlyScope(req);
+    const visibleCategories = globalScope
+      ? allCategories.filter((c) =>
+          globalScope.mainCategoryIds.includes(String(c._id)),
+        )
+      : allCategories;
+    const formatted = await Promise.all(visibleCategories.map(formatCategory));
 
     return res.status(200).json({ categories: formatted });
   } catch (err) {
@@ -1126,6 +1136,15 @@ exports.getBrand = async (req, res) => {
 
     if (req.typeId && admin !== true) {
       brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
+    }
+
+    // Global-only user: only brands that have products in the global stores' categories
+    const globalScope = await resolveGlobalOnlyScope(req);
+    if (globalScope) {
+      const globalBrandIds = await getGlobalBrandIds(globalScope);
+      brandFilter._id = {
+        $in: globalBrandIds.map((id) => new mongoose.Types.ObjectId(id)),
+      };
     }
     // 🔁 For all brands (no products or stock)
     const brands = await brand.find(brandFilter).sort({ createdAt: -1 }).lean();
@@ -1652,14 +1671,23 @@ exports.getMainCategory = async (req, res) => {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;
 
+    // null for city/zone users (no change). Set only for a global-only user.
+    const globalScope = await resolveGlobalOnlyScope(req);
+
     if (req.typeId) {
-      const categories = await Category.find({ _id: { $in: req.categoryIds } })
+      const typeCategoryIds = globalScope
+        ? req.categoryIds.filter((id) =>
+            globalScope.mainCategoryIds.includes(String(id)),
+          )
+        : req.categoryIds;
+
+      const categories = await Category.find({ _id: { $in: typeCategoryIds } })
         .skip(skip)
         .limit(Number(limit))
         .lean();
 
       const totalCategories = await Category.countDocuments({
-        _id: { $in: req.categoryIds },
+        _id: { $in: typeCategoryIds },
       });
 
       return res.status(200).send({
@@ -1673,11 +1701,15 @@ exports.getMainCategory = async (req, res) => {
       });
     }
 
+    const categoryFilter = globalScope
+      ? { _id: { $in: globalScope.mainCategoryIds } }
+      : {};
+
     // Get total categories for pagination
-    const totalCategories = await Category.countDocuments();
+    const totalCategories = await Category.countDocuments(categoryFilter);
 
     // Fetch only current page categories
-    const data = await Category.find().skip(skip).limit(limit);
+    const data = await Category.find(categoryFilter).skip(skip).limit(limit);
 
     // Enrich with totalProducts
     const enriched = await Promise.all(
