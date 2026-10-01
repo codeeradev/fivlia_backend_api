@@ -1692,6 +1692,9 @@ exports.getMainCategory = async (req, res) => {
 
       return res.status(200).send({
         message: "Success",
+        ...(process.env.GLOBAL_SCOPE_DEBUG === "1" && {
+          globalScopeDebug: req.globalScopeDebug || "scope not evaluated",
+        }),
         typeId: req.typeId,
         limit,
         currentPage: page,
@@ -1740,6 +1743,9 @@ exports.getMainCategory = async (req, res) => {
 
     res.status(200).send({
       message: "Success",
+      ...(process.env.GLOBAL_SCOPE_DEBUG === "1" && {
+        globalScopeDebug: req.globalScopeDebug || "scope not evaluated",
+      }),
       limit,
       currentPage: page,
       totalPages: Math.ceil(totalCategories / limit),
