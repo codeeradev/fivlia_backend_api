@@ -14,6 +14,12 @@ const Category = require("../modals/category");
 const Products = require("../modals/Product");
 const { getStoresWithinRadius } = require("../config/google");
 
+// Turn on with GLOBAL_SCOPE_DEBUG=1 in .env to see, per request, why the
+// global-only filter did or did not apply. Off by default (no output).
+const dbg = (...args) => {
+  if (process.env.GLOBAL_SCOPE_DEBUG === "1") console.log("[globalScope]", ...args);
+};
+
 // Same bearer-token parsing as verifyToken, but never rejects the request.
 const getOptionalUser = async (req) => {
   try {
@@ -48,12 +54,26 @@ const storeMainCategoryIds = (store) => {
 const resolveGlobalOnlyScope = async (req) => {
   try {
     const user = await getOptionalUser(req);
+    if (!user) {
+      dbg("NOT FILTERING: no valid token / user not found");
+      return null;
+    }
     const lat = user?.location?.latitude;
     const lng = user?.location?.longitude;
-    if (!lat || !lng) return null;
+    if (!lat || !lng) {
+      dbg("NOT FILTERING: user", String(user._id), "has no saved location");
+      return null;
+    }
 
     const result = await getStoresWithinRadius(lat, lng);
-    if (result?.serviceMode !== "global_only") return null;
+    if (result?.serviceMode !== "global_only") {
+      dbg(
+        "NOT FILTERING: user", String(user._id), "at", lat, lng,
+        "serviceMode =", result?.serviceMode,
+        "(filter only applies when global_only)",
+      );
+      return null;
+    }
 
     const globalStores = (result.matchedStores || []).filter(
       (s) => s.serviceScope === "global",
@@ -81,6 +101,12 @@ const resolveGlobalOnlyScope = async (req) => {
       );
     }
 
+    dbg(
+      "FILTERING: user", String(user._id), "at", lat, lng,
+      "global stores =", globalStores.length,
+      "main categories =", mainCategoryIds.length,
+    );
+
     return {
       storeIds: globalStores.map((s) => s._id.toString()),
       mainCategoryIds,
@@ -88,6 +114,7 @@ const resolveGlobalOnlyScope = async (req) => {
     };
   } catch (err) {
     console.error("resolveGlobalOnlyScope failed, not filtering:", err.message);
+    dbg("NOT FILTERING: error", err.message);
     return null;
   }
 };
