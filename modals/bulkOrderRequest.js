@@ -4,6 +4,7 @@ const bulkOrderRequestSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "Login" },
     productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+    quantity: { type: Number, required: true, min: 1, default: 0 },
     status: {
       type: String,
       enum: ["pending", "completed", "converted", "rejected"],
@@ -14,4 +15,3 @@ const bulkOrderRequestSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("BulkOrderRequest", bulkOrderRequestSchema);
-

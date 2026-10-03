@@ -1,85 +1,99 @@
-// utils/locationDelivery.js
-// Shared helper: resolves the user's CURRENT location per request and decides
-// each store's deliveryMode ("local" | "global"), hiding local stores outside the zone.
-// Existing response shape is unchanged; only `deliveryMode` is added.
+// utils/locationCategories.js
+// Global-only scope helpers used by categorycontroler.js
+// (getMainCategory, getCategory, getBrand) and scripts/check_global_scope.js.
+//
+// resolveGlobalOnlyScope(req)
+//   -> null                       : normal user (city/zone/mixed) -> NO filtering, old behaviour
+//   -> { mainCategoryIds, storeIds } : user is in "global_only" mode -> show only the
+//                                      categories of the open global stores
+//
+// getGlobalBrandIds(scope) -> [brandId strings] that have products in those categories.
 
 const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
+const User = require("../modals/User");
+const Products = require("../modals/Product");
 
-// ---- ADJUST THESE 3 THINGS TO YOUR PROJECT -------------------------------
-// 1) Where getStoresWithinRadius lives (it is already used in POST /address)
-const { getStoresWithinRadius } = require("./locationCategories"); // <-- change path if different
-// 2) Your User model path
-const User = require("../modals/User"); // <-- change path/name if different
-// 3) How a store is marked as global
-const isGlobalStore = (store) =>
-  store?.isGlobal === true ||
-  store?.deliveryScope === "global" ||
-  store?.storeType === "global";
-// --------------------------------------------------------------------------
+const toIdString = (v) => (v ? String(v._id || v) : "");
 
-const GLOBAL_DISTANCE = 999999;
-
-// Priority: query params (selected address in app) -> saved user location.
-async function resolveLocation(req) {
-  const lat = parseFloat(req.query?.latitude ?? req.query?.lat);
-  const lng = parseFloat(req.query?.longitude ?? req.query?.lng ?? req.query?.long);
-  if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
-
-  const userId = req.user?._id || req.user?.id || req.userId;
-  if (userId && mongoose.Types.ObjectId.isValid(userId)) {
-    try {
-      const user = await User.findById(userId).select("location latitude longitude").lean();
-      const l = user?.location || user;
-      const ulat = parseFloat(l?.latitude);
-      const ulng = parseFloat(l?.longitude);
-      if (!isNaN(ulat) && !isNaN(ulng)) return { lat: ulat, lng: ulng };
-    } catch (e) {
-      console.error("resolveLocation error:", e.message);
-    }
+// Who is calling? /getMainCategory has no verifyToken, so decode the token here.
+async function resolveUser(req) {
+  if (req.user && (req.user._id || req.user.id)) {
+    // verifyToken already ran; make sure we have the location field
+    if (req.user.location) return req.user;
+    return User.findById(req.user._id || req.user.id).lean();
   }
-  return null;
-}
 
-// Call ONCE per request, before building variantOptions.
-async function getLocationContext(req) {
-  const loc = await resolveLocation(req);
-  let localIds = new Set();
-  if (loc) {
-    try {
-      const stores = await getStoresWithinRadius(loc.lat, loc.lng);
-      localIds = new Set(
-        (stores || []).filter((s) => !isGlobalStore(s)).map((s) => String(s._id))
-      );
-    } catch (e) {
-      console.error("getLocationContext error:", e.message);
-    }
+  const token = req.headers?.authorization?.split(" ")[1];
+  if (!token) return null;
+
+  try {
+    const decoded = jwt.verify(token, process.env.jwtSecretKey);
+    if (!decoded?._id || !mongoose.Types.ObjectId.isValid(decoded._id)) return null;
+    return await User.findById(decoded._id).lean();
+  } catch (e) {
+    return null; // bad/expired token -> treat as guest
   }
-  return { loc, localIds };
 }
 
-// Returns "global" | "local" | null (null = hide this store for this location)
-function getDeliveryMode(store, ctx) {
-  if (isGlobalStore(store)) return "global";
-  if (!ctx || !ctx.loc) return "local"; // location unknown: keep old behaviour
-  return ctx.localIds.has(String(store._id)) ? "local" : null;
-}
-
-// Convenience: returns the extra keys to spread into a variantOption,
-// or null if the store must be skipped.
-function deliveryFields(store, ctx, localDistance) {
-  const mode = getDeliveryMode(store, ctx);
-  if (!mode) return null;
-  return {
-    deliveryMode: mode,
-    distance: mode === "global" ? GLOBAL_DISTANCE : localDistance,
+async function resolveGlobalOnlyScope(req) {
+  const debug = (msg) => {
+    req.globalScopeDebug = msg;
+    return null;
   };
+
+  try {
+    const user = await resolveUser(req);
+    if (!user) return debug("no valid token -> filter skipped");
+
+    const lat = user.location?.latitude;
+    const lng = user.location?.longitude;
+    if (!lat || !lng) return debug("user has no saved location -> filter skipped");
+
+    // lazy require: avoids circular-dependency problems at load time
+    const { getStoresWithinRadius } = require("../config/google");
+    const result = await getStoresWithinRadius(lat, lng);
+
+    if (result.serviceMode !== "global_only") {
+      return debug(`serviceMode=${result.serviceMode} -> filter only applies to global_only`);
+    }
+
+    const globalStores = (result.matchedStores || []).filter(
+      (s) => s.serviceScope === "global" && s.status === true
+    );
+
+    const ids = new Set();
+    for (const s of globalStores) {
+      (s.Category || []).forEach((id) => ids.add(toIdString(id)));
+      (s.sellerCategories || []).forEach((c) => c?.categoryId && ids.add(toIdString(c.categoryId)));
+    }
+    ids.delete("");
+
+    req.globalScopeDebug = `global_only: ${globalStores.length} global store(s), ${ids.size} categor(ies)`;
+    return {
+      mainCategoryIds: [...ids],
+      storeIds: globalStores.map((s) => String(s._id)),
+    };
+  } catch (e) {
+    console.error("resolveGlobalOnlyScope error:", e.message);
+    return debug("error: " + e.message + " -> filter skipped");
+  }
 }
 
-module.exports = {
-  resolveLocation,
-  getLocationContext,
-  getDeliveryMode,
-  deliveryFields,
-  isGlobalStore,
-  GLOBAL_DISTANCE,
-};
+// Brands that have at least one product in the global stores' categories.
+async function getGlobalBrandIds(scope) {
+  if (!scope?.mainCategoryIds?.length) return [];
+
+  const categoryObjectIds = scope.mainCategoryIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const brandIds = await Products.distinct("brand_Name._id", {
+    "category._id": { $in: categoryObjectIds },
+    "brand_Name._id": { $exists: true, $ne: null },
+  });
+
+  return brandIds.map(String);
+}
+
+module.exports = { resolveGlobalOnlyScope, getGlobalBrandIds };

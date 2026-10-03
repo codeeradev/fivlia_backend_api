@@ -2894,9 +2894,16 @@ exports.sendNotifications = async (req, res) => {
 exports.bulkOrder = async (req, res) => {
   try {
     const { productId } = req.params;
-    const userId = req.user;
+    const userId = req.user._id;
+    const quantity = Number(req.body?.quantity);
 
-    await BulkOrderRequest.create({ productId, userId });
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return res.status(400).json({
+        message: "quantity is required and must be a whole number of at least 1",
+      });
+    }
+
+    await BulkOrderRequest.create({ productId, userId, quantity });
 
     // 🔔 ADMIN FCM NOTIFICATION
     const admin = await AdminStaff.findOne({
@@ -2909,7 +2916,7 @@ exports.bulkOrder = async (req, res) => {
         await sendNotification(
           admin.fcmToken,
           "Bulk Order request received",
-          `Bulk Order request received.`,
+          `Bulk Order request received for ${quantity} units.`,
           "/orders",
           {},
           CUSTOM_PUSH_SOUND,
@@ -2956,6 +2963,7 @@ exports.getBulkOrders = async (req, res) => {
     const formattedOrders = orders.map((order) => ({
       _id: order._id,
       status: order.status,
+      quantity: order.quantity ?? 1,
       createdAt: order.createdAt,
       user: order.userId
         ? {
@@ -3000,11 +3008,24 @@ exports.getBulkOrders = async (req, res) => {
 exports.updateBulkOrders = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, quantity } = req.body;
+
+    const update = {};
+    if (status !== undefined) update.status = status;
+    if (quantity !== undefined) {
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty < 1) {
+        return res
+          .status(400)
+          .json({ message: "quantity must be a whole number of at least 1" });
+      }
+      update.quantity = qty;
+    }
+
     const updatedOrder = await BulkOrderRequest.findByIdAndUpdate(
       id,
-      { status },
-      { new: true },
+      update,
+      { new: true, runValidators: true },
     );
 
     return res.status(200).json({ message: "completed", data: updatedOrder });
