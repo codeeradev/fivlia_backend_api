@@ -3,6 +3,8 @@ CATEGORY IDs:
 
 69cf8a4bad92aee54ecb1e76 (mallTypeId)
 
+http://127.0.0.1:8080
+
 Sub-Category Ids:
 add new category id for global store: 683eed3ff6f5264ba0295767 (Sports & Fitness)
 old category id: 683eebc7f6f5264ba0295761 (Groceries)
@@ -54,11 +56,3 @@ pass: Test@1234
 
 --------------   PROBLEM   -------------------
 
-
-Can i update store id or anything with this api: {{baseUrl}}/storeEdit/{{globalStoreId}}
-Do not provide me the complete files of the postman,
-
-only define me changes inside the files
-
-
-"productName": "Chana Dal Whole Black (Small Size)",

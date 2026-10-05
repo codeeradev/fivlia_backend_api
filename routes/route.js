@@ -1,6 +1,7 @@
 const express = require("express");
 const upload = require("../midllerware/multer");
 const uploadCsv = require("../midllerware/csvUpload.js");
+const { updateTracking } = require("../controlers/shippingControler");
 const router = express.Router();
 const verifyToken = require("../midllerware/authToken");
 const sellerOrAdminAuth = require("../midllerware/sellerOrAdminAuth");
@@ -564,6 +565,7 @@ router.put("/addCategoryInStore/:id", addCategoryInStore);
 router.put("/updateCart/:id", quantity);
 router.put("/orderStatus/:id", orderStatus);
 router.put("/seller/order/ship/:orderId", sellerOrAdminAuth, shipOrder);
+router.put("/order/tracking/:orderId", sellerOrAdminAuth, updateTracking);
 router.patch("/update-profile", upload, verifyToken, updateProfile);
 router.patch("/updateProduct/:id", upload, updateProduct);
 router.delete("/deleteAddress/:id", deleteAddress);

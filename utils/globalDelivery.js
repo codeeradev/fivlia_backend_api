@@ -30,12 +30,11 @@ const getGlobalSettings = (settings = {}) => {
   };
 };
 
-// Flat shipping. Free when itemsTotal >= limit (limit 0 = never free).
+// Flat shipping. This is the FINAL global delivery charge (admin setting
+// "globalShippingCharge"): it never depends on the cart value and no free-shipping
+// rule applies to global orders.
 const computeGlobalShippingCharge = (itemsTotal, settings = {}) => {
   const g = getGlobalSettings(settings);
-  if (g.freeShippingLimit > 0 && toNumber(itemsTotal) >= g.freeShippingLimit) {
-    return 0;
-  }
   return roundCurrency(g.shippingCharge);
 };
 

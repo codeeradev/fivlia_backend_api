@@ -78,6 +78,7 @@ const orderSchema = new mongoose.Schema(
     serviceScope: { type: String, enum: ["city", "global"], default: "city" },
     shipping: {
       courierName: String,
+      platform: String,
       trackingId: String,
       trackingUrl: String,
       shippedAt: Date,

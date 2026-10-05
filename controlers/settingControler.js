@@ -8,6 +8,7 @@ const {
   validateGlobalSettings,
   withGlobalSettingDefaults,
 } = require("../utils/globalDelivery");
+const { validateShippingPlatforms } = require("../utils/shippingPlatforms");
 exports.getSettings = async (req, res) => {
   try {
     const settings = await SettingAdmin.findOne().lean();
@@ -125,6 +126,17 @@ exports.adminSetting = async (req, res) => {
       if (key in updateFields) delete updateFields[key];
     });
     Object.assign(updateFields, globalCheck.values);
+
+    // Shipping platforms (third party couriers for global orders)
+    if ("shippingPlatforms" in updateFields) {
+      const platformCheck = validateShippingPlatforms(
+        updateFields.shippingPlatforms,
+      );
+      if (platformCheck.error) {
+        return res.status(400).json({ message: platformCheck.error });
+      }
+      updateFields.shippingPlatforms = platformCheck.values;
+    }
 
     if (req.files?.file?.[0]) {
       updateFields.homeScreen = {

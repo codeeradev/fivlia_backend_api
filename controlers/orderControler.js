@@ -30,6 +30,10 @@ const AdminStaff = require("../modals/roleBase/adminStaff");
 const crypto = require("crypto");
 const { resolveSellerDeliveryPricing } = require("../utils/sellerDelivery");
 const {
+  findShippingPlatform,
+  buildTrackingUrl,
+} = require("../utils/shippingPlatforms");
+const {
   isGlobalStore,
   getOrderScope,
   computeGlobalShippingCharge,
@@ -342,7 +346,9 @@ exports.placeOrder = async (req, res) => {
     const ready_in_min = chargesData.ready_in_min;
 
     const itemsTotal = offerContext.cartDiscount.finalSubtotal;
-    const platformFeeRate = (chargesData.Platform_Fee || 0) / 100;
+    // Global (All India) orders are delivered by a third party: no platform fee
+    const platformFeeStored = isGlobalOrder ? 0 : chargesData.Platform_Fee;
+    const platformFeeRate = (platformFeeStored || 0) / 100;
     const platformFeeAmount = itemsTotal * platformFeeRate;
 
     // OLD: total price before distance-based delivery charge
@@ -446,29 +452,36 @@ exports.placeOrder = async (req, res) => {
 
     deliveryBaseCharge = deliveryChargeRaw;
 
-    totalDeliveryCharge = deliveryBaseCharge / (1 + deliveryGstPercent / 100);
+    // Global orders: the admin "global delivery charge" is final. No delivery GST
+    // split and no driver payout (third party delivery).
+    totalDeliveryCharge = isGlobalOrder
+      ? 0
+      : deliveryBaseCharge / (1 + deliveryGstPercent / 100);
 
-    const deliveryPricing = resolveSellerDeliveryPricing({
-      itemsTotal,
-      settings: chargesData,
-      store: storeData,
-      freeDeliveryOffer: offerContext.freeDeliveryOffer,
-      deliveryChargeRaw: deliveryBaseCharge,
-      deliveryPayout: totalDeliveryCharge,
-    });
+    // Global orders: the global delivery charge is final, no free-delivery rule applies.
+    if (!isGlobalOrder) {
+      const deliveryPricing = resolveSellerDeliveryPricing({
+        itemsTotal,
+        settings: chargesData,
+        store: storeData,
+        freeDeliveryOffer: offerContext.freeDeliveryOffer,
+        deliveryChargeRaw: deliveryBaseCharge,
+        deliveryPayout: totalDeliveryCharge,
+      });
 
-    deliveryChargeRaw = deliveryPricing.customerDeliveryCharge;
+      deliveryChargeRaw = deliveryPricing.customerDeliveryCharge;
 
-    deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
+      deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
 
-    freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
+      freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
 
-    freeDeliverySource = deliveryPricing.freeDeliverySource;
+      freeDeliverySource = deliveryPricing.freeDeliverySource;
 
-    freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
+      freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
 
-    sellerSponsoredDeliveryPayout =
-      deliveryPricing.sellerSponsoredDeliveryPayout;
+      sellerSponsoredDeliveryPayout =
+        deliveryPricing.sellerSponsoredDeliveryPayout;
+    }
 
     const totalPrice = itemsTotal + deliveryChargeRaw + platformFeeAmount;
 
@@ -586,7 +599,7 @@ exports.placeOrder = async (req, res) => {
         deliveryCharges: deliveryChargeRaw,
         serviceScope: orderScope,
         deliveryDistanceKm,
-        platformFee: chargesData.Platform_Fee,
+        platformFee: platformFeeStored,
         deliveryBaseCharge,
         freeDeliveryApplied,
         freeDeliverySource,
@@ -743,7 +756,7 @@ exports.placeOrder = async (req, res) => {
         deliveryCharges: deliveryChargeRaw,
         serviceScope: orderScope,
         deliveryDistanceKm,
-        platformFee: chargesData.Platform_Fee,
+        platformFee: platformFeeStored,
         deliveryBaseCharge,
         freeDeliveryApplied,
         freeDeliverySource,
@@ -1294,9 +1307,10 @@ exports.getOrderDetails = async (req, res) => {
         return total + Number(item.price) * Number(item.quantity);
       }, 0);
 
-      const platformFee = Number(
-        ((subtotal * settings.Platform_Fee) / 100).toFixed(2),
-      );
+      // Global orders carry no platform fee
+      const platformFee = isGlobalOrderRow
+        ? 0
+        : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {
@@ -2120,9 +2134,11 @@ exports.orderStatus = async (req, res) => {
 exports.shipOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const courierName = String(req.body?.courierName || "").trim();
+    const platformName = String(req.body?.platform || "").trim();
+    // courierName falls back to the chosen platform name
+    const courierName = String(req.body?.courierName || platformName).trim();
     const trackingId = String(req.body?.trackingId || "").trim();
-    const trackingUrl = String(req.body?.trackingUrl || "").trim();
+    let trackingUrl = String(req.body?.trackingUrl || "").trim();
     const expectedDeliveryRaw = String(req.body?.expectedDeliveryDate || "").trim();
 
     if (!courierName || !trackingId || !expectedDeliveryRaw) {
@@ -2201,9 +2217,33 @@ exports.shipOrder = async (req, res) => {
       });
     }
 
+    // Optional platform: must be an active entry of settings.shippingPlatforms.
+    // Its tracking template builds the link when trackingUrl is not sent.
+    let platformSaved = "";
+    if (platformName) {
+      const platformSettings = await SettingAdmin.findOne()
+        .select("shippingPlatforms")
+        .lean();
+      const platform = findShippingPlatform(
+        platformSettings?.shippingPlatforms,
+        platformName,
+      );
+      if (!platform) {
+        return res.status(400).json({
+          status: false,
+          message: `Shipping platform "${platformName}" is not available`,
+        });
+      }
+      platformSaved = platform.name;
+      if (!trackingUrl && platform.trackingUrlTemplate) {
+        trackingUrl = buildTrackingUrl(platform.trackingUrlTemplate, trackingId);
+      }
+    }
+
     const shippedAt = new Date();
     const shipping = {
       courierName,
+      ...(platformSaved ? { platform: platformSaved } : {}),
       trackingId,
       shippedAt,
       expectedDeliveryDate,
@@ -2292,6 +2332,7 @@ exports.shipOrder = async (req, res) => {
         orderStatus: updatedOrder.orderStatus,
         serviceScope: updatedOrder.serviceScope,
         shipping: {
+          platform: updatedOrder.shipping.platform || null,
           courierName: updatedOrder.shipping.courierName,
           trackingId: updatedOrder.shipping.trackingId,
           trackingUrl: updatedOrder.shipping.trackingUrl || null,

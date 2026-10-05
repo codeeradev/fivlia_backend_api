@@ -69,6 +69,14 @@ const settingAdminSchema = new mongoose.Schema({
   globalFreeShippingLimit: { type: Number, default: 0 },
   globalDeliveryDaysMin: { type: Number, default: 3 },
   globalDeliveryDaysMax: { type: Number, default: 5 },
+  // Third party courier platforms used for global order tracking
+  shippingPlatforms: [
+    {
+      name: { type: String, trim: true },
+      trackingUrlTemplate: { type: String, trim: true, default: "" },
+      status: { type: Boolean, default: true },
+    },
+  ],
   homeScreen: {
     food: {
       primary_color: String,

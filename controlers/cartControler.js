@@ -484,24 +484,27 @@ exports.getCart = async (req, res) => {
           ? deliveryBaseCharge / (1 + deliveryGstPercent / 100)
           : 0;
 
-      const deliveryPricing = resolveSellerDeliveryPricing({
-        itemsTotal,
-        settings,
-        store,
-        freeDeliveryOffer: offerContext.freeDeliveryOffer,
-        deliveryChargeRaw: deliveryBaseCharge,
-        deliveryPayout,
-      });
+      // Global stores: the global delivery charge is final, no free-delivery rule applies.
+      if (!isGlobalStore) {
+        const deliveryPricing = resolveSellerDeliveryPricing({
+          itemsTotal,
+          settings,
+          store,
+          freeDeliveryOffer: offerContext.freeDeliveryOffer,
+          deliveryChargeRaw: deliveryBaseCharge,
+          deliveryPayout,
+        });
 
-      deliveryCharge = deliveryPricing.customerDeliveryCharge;
-      deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
-      freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
-      freeDeliverySource = deliveryPricing.freeDeliverySource;
-      freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
-      sellerSponsoredDeliveryPayout =
-        deliveryPricing.sellerSponsoredDeliveryPayout;
-      sellerFreeDeliveryEnabled = deliveryPricing.sellerFreeDeliveryEnabled;
-      sellerFreeDeliveryLimit = deliveryPricing.sellerFreeDeliveryLimit;
+        deliveryCharge = deliveryPricing.customerDeliveryCharge;
+        deliveryBaseCharge = deliveryPricing.deliveryBaseCharge;
+        freeDeliveryApplied = deliveryPricing.freeDeliveryApplied;
+        freeDeliverySource = deliveryPricing.freeDeliverySource;
+        freeDeliveryThreshold = deliveryPricing.freeDeliveryThreshold;
+        sellerSponsoredDeliveryPayout =
+          deliveryPricing.sellerSponsoredDeliveryPayout;
+        sellerFreeDeliveryEnabled = deliveryPricing.sellerFreeDeliveryEnabled;
+        sellerFreeDeliveryLimit = deliveryPricing.sellerFreeDeliveryLimit;
+      }
     }
 
     return res.status(200).json({
@@ -562,6 +565,8 @@ exports.getCart = async (req, res) => {
       estimatedDeliveryText: isGlobalStore
         ? formatGlobalDeliveryText(settings)
         : null,
+      // Global carts: no platform fee (the app should not add one)
+      platformFeePercent: isGlobalStore ? 0 : Number(settings?.Platform_Fee || 0),
       deliveryCharge,
       deliveryBaseCharge,
       deliveryChargeMode,
