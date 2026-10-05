@@ -14,6 +14,41 @@ const toPositiveNumber = (value) => {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 };
 
+// Keeps the user's saved location (user.location) in sync with an address, so
+// location based APIs (getMainCategory, banners, products ...) follow the address.
+// It never throws and never changes the response of the calling API.
+const syncUserLocationFromAddress = async (userId, latitude, longitude) => {
+  try {
+    if (!userId) return;
+    if (
+      latitude === undefined || latitude === null || latitude === "" ||
+      longitude === undefined || longitude === null || longitude === ""
+    ) {
+      return;
+    }
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (
+      !Number.isFinite(lat) || !Number.isFinite(lng) ||
+      lat < -90 || lat > 90 || lng < -180 || lng > 180
+    ) {
+      return;
+    }
+
+    const user = await User.findById(userId).select("mobileNumber").lean();
+    if (!user) return;
+    // same demo-account skip as updateLocation
+    if (user.mobileNumber === "+919999999999") return;
+
+    // dotted $set keeps location.city / location.zone untouched
+    await User.findByIdAndUpdate(userId, {
+      $set: { "location.latitude": lat, "location.longitude": lng },
+    });
+  } catch (err) {
+    console.error("syncUserLocationFromAddress error:", err.message);
+  }
+};
+
 const getZoneStoreCountMap = async (zoneDocs) => {
   const zoneIds = zoneDocs.flatMap((doc) =>
     (doc.zones || []).map((zone) => zone?._id).filter(Boolean),
@@ -560,6 +595,9 @@ exports.addAddress = async (req, res) => {
       landmark,
     });
 
+    // address saved -> move the user's saved location to this address
+    await syncUserLocationFromAddress(user._id, latitude, longitude);
+
     return res.status(200).json({
       status: true,
       message: "Address added successfully",
@@ -660,6 +698,23 @@ exports.EditAddress = async (req, res) => {
       landmark,
     });
 
+    // if the edited address is the default one, keep the user's location in sync
+    // (owner and coordinates are read from the database, not from the request body)
+    if (edit) {
+      try {
+        const updatedAddress = await Address.findById(id).lean();
+        if (updatedAddress && updatedAddress.default === true) {
+          await syncUserLocationFromAddress(
+            updatedAddress.userId,
+            updatedAddress.latitude,
+            updatedAddress.longitude,
+          );
+        }
+      } catch (syncErr) {
+        console.error("EditAddress location sync error:", syncErr.message);
+      }
+    }
+
     return res.status(200).json({ message: "Address Updated Successfuly" });
   } catch (error) {
     return res.status(500).json({ message: "Server error" });
@@ -702,6 +757,13 @@ exports.setDefault = async (req, res) => {
         .status(404)
         .json({ status: false, message: "Address not found" });
     }
+
+    // selected address becomes the user's current location
+    await syncUserLocationFromAddress(
+      userId,
+      setDefault.latitude,
+      setDefault.longitude,
+    );
 
     res.status(200).json({
       status: true,

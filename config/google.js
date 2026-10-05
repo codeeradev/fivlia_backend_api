@@ -298,6 +298,7 @@ async function getStoresWithinRadius(userLat, userLng) {
       hasLocalStores: false,
       hasGlobalStores: false,
       serviceMode: "none",
+      insideZone: matchedZones.length > 0,
       matchedStores: [],
     };
   }
@@ -338,6 +339,7 @@ async function getStoresWithinRadius(userLat, userLng) {
         hasLocalStores: false,
         hasGlobalStores: false,
         serviceMode: "none",
+        insideZone: matchedZones.length > 0,
         matchedStores: [],
       };
     }
@@ -347,6 +349,7 @@ async function getStoresWithinRadius(userLat, userLng) {
       hasLocalStores: false,
       hasGlobalStores: false,
       serviceMode: "none",
+      insideZone: matchedZones.length > 0,
       matchedStores: [],
     };
   }
@@ -376,6 +379,7 @@ async function getStoresWithinRadius(userLat, userLng) {
     hasLocalStores,
     hasGlobalStores,
     serviceMode,
+    insideZone: matchedZones.length > 0,
     matchedStores,
   };
 }
@@ -438,5 +442,5 @@ module.exports = {
   isWithinZone,
   getZoneWindowConfig,
   getCurrentZoneWindowMode,
-  getActiveZoneRange,
+  getActiveZoneRange
 };

@@ -43,19 +43,39 @@ async function resolveGlobalOnlyScope(req) {
   };
 
   try {
-    const user = await resolveUser(req);
-    if (!user) return debug("no valid token -> filter skipped");
+    // Priority 1: coordinates sent in the request (?latitude=..&longitude=.. or ?lat=..&lng=..)
+    //             -> the location currently selected in the app / being tested in Postman
+    // Priority 2: the location saved on the user (POST /location)
+    let lat = parseFloat(req.query?.latitude ?? req.query?.lat);
+    let lng = parseFloat(req.query?.longitude ?? req.query?.lng ?? req.query?.long);
+    let source = "query";
 
-    const lat = user.location?.latitude;
-    const lng = user.location?.longitude;
-    if (!lat || !lng) return debug("user has no saved location -> filter skipped");
+    if (isNaN(lat) || isNaN(lng)) {
+      const user = await resolveUser(req);
+      if (!user) return debug("no valid token and no lat/lng in query -> filter skipped");
+      lat = parseFloat(user.location?.latitude);
+      lng = parseFloat(user.location?.longitude);
+      source = "saved user location";
+      if (isNaN(lat) || isNaN(lng)) {
+        return debug("user has no saved location -> filter skipped");
+      }
+    }
 
     // lazy require: avoids circular-dependency problems at load time
     const { getStoresWithinRadius } = require("../config/google");
     const result = await getStoresWithinRadius(lat, lng);
+    const where = `${source} (${lat}, ${lng})`;
 
+    // insideZone = the point is covered by an active city zone (set by getStoresWithinRadius).
+    // Inside a zone -> normal behaviour, ALL categories. Outside every zone -> only the
+    // categories of the open global stores. (serviceMode alone is not enough: an in-zone user
+    // with no open local store also gets "global_only".)
+    const insideZone = result.insideZone ?? result.serviceMode !== "global_only";
+    if (insideZone) {
+      return debug(`${where}: inside a zone (serviceMode=${result.serviceMode}) -> all categories`);
+    }
     if (result.serviceMode !== "global_only") {
-      return debug(`serviceMode=${result.serviceMode} -> filter only applies to global_only`);
+      return debug(`${where}: outside zone but no open global store (serviceMode=${result.serviceMode}) -> filter skipped`);
     }
 
     const globalStores = (result.matchedStores || []).filter(
@@ -69,7 +89,7 @@ async function resolveGlobalOnlyScope(req) {
     }
     ids.delete("");
 
-    req.globalScopeDebug = `global_only: ${globalStores.length} global store(s), ${ids.size} categor(ies)`;
+    req.globalScopeDebug = `${where}: global_only: ${globalStores.length} global store(s), ${ids.size} categor(ies)`;
     return {
       mainCategoryIds: [...ids],
       storeIds: globalStores.map((s) => String(s._id)),

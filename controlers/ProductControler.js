@@ -1289,10 +1289,10 @@ exports.getFeatureProduct = async (req, res) => {
       Cart.find({ userId }).lean(),
     ]);
 
-    const allowedStores = Array.isArray(stores?.matchedStores)
+    const matchedStores = Array.isArray(stores?.matchedStores)
       ? stores.matchedStores
       : [];
-    if (!allowedStores.length) {
+    if (!matchedStores.length) {
       return res.status(200).json({
         message: "No feature products found for your location.",
         products: [],
@@ -1300,187 +1300,213 @@ exports.getFeatureProduct = async (req, res) => {
       });
     }
 
-    const allowedStoreIds = allowedStores.map((store) => store._id.toString());
-
-    // ✅ Collect all category IDs
-    const allCategoryIds = new Set();
-    let storeCategoryIds = allowedStores.flatMap((store) =>
-      Array.isArray(store.Category)
-        ? store.Category.map((id) => id?.toString())
-        : store.Category
-          ? [store.Category.toString()]
-          : [],
+    // ✅ Store groups in priority order:
+    //    1) open local (zone) stores of the user's zone
+    //    2) global store(s) -> used when the user is outside every zone,
+    //       when no local store is open, or when the local stores have no
+    //       featured product in stock (fallback)
+    const localStores = matchedStores.filter(
+      (store) => store.serviceScope !== "global",
     );
+    const globalStores = matchedStores.filter(
+      (store) => store.serviceScope === "global",
+    );
+    const storeGroups = [];
+    if (localStores.length) storeGroups.push(localStores);
+    if (globalStores.length) storeGroups.push(globalStores);
 
-    if (storeCategoryIds.length < 1) {
-      allowedStores.forEach((store) => {
-        store.sellerCategories?.forEach((category) => {
-          if (category?.categoryId) allCategoryIds.add(category.categoryId);
-          category.subCategories?.forEach((sub) => {
-            if (sub?.subCategoryId) allCategoryIds.add(sub.subCategoryId);
-            sub.subSubCategories?.forEach((subsub) => {
-              if (subsub?.subSubCategoryId)
-                allCategoryIds.add(subsub.subSubCategoryId);
-            });
-          });
-        });
-      });
-    } else {
-      const uniqueCategoryIds = [...new Set(storeCategoryIds)];
-      const categories = await Category.find({
-        _id: { $in: uniqueCategoryIds },
-      }).lean();
-      for (const cat of categories) {
-        allCategoryIds.add(cat._id.toString());
-        (cat.subcat || []).forEach((sub) => {
-          if (sub?._id) allCategoryIds.add(sub._id.toString());
-          (sub.subsubcat || []).forEach((subsub) => {
-            if (subsub?._id) allCategoryIds.add(subsub._id.toString());
-          });
-        });
-      }
-    }
-
-    const categoryArray = [...allCategoryIds];
-
-    // ✅ Fetch stock for allowed stores
-    const stockDocs = await Stock.find({
-      storeId: { $in: allowedStoreIds },
-    }).lean();
-
-    const stockMap = {};
-    const stockDetailMap = {};
-    for (const doc of stockDocs) {
-      for (const item of doc.stock || []) {
-        const key = `${item.productId}_${item.variantId}_${doc.storeId}`;
-        stockMap[key] = item.quantity;
-        stockDetailMap[key] = item;
-      }
-    }
-
-    // ✅ Fetch featured products
-    const query = {
-      feature_product: true,
-      $or: [
-        { "category._id": { $in: categoryArray } },
-        { "subCategory._id": { $in: categoryArray } },
-        { "subSubCategory._id": { $in: categoryArray } },
-      ],
-    };
-
-    // ✅ Veg filter (DB level)
-    if (isVegMode) {
-      query.isVeg = 1;
-    }
-
-    // ✅ Product type filter (DB level)
-    if (productType) {
-      query.productType = productType;
-    }
-
-    const products = await Products.find(query).lean();
-    // ✅ Store lookup map
-    const storeMap = {};
-    allowedStores.forEach((store) => {
-      storeMap[store._id.toString()] = store;
-    });
-
-    // ✅ Cart lookup map
+    // ✅ Cart lookup map (same for every store group)
     const cartMap = {};
     cartDocs.forEach((item) => {
       const key = `${item.productId}_${item.varientId}`;
       cartMap[key] = item.quantity;
     });
 
-    const enrichedProducts = [];
+    // ✅ Builds the featured product list for one group of stores
+    const buildFeaturedProducts = async (allowedStores) => {
+      const allowedStoreIds = allowedStores.map((store) => store._id.toString());
 
-    for (const product of products) {
-      if (!Array.isArray(product.variants) || !product.variants.length)
-        continue;
+      // ✅ Collect all category IDs
+      // (store.Category AND store.sellerCategories are both used)
+      const allCategoryIds = new Set();
+      const storeCategoryIds = allowedStores.flatMap((store) =>
+        Array.isArray(store.Category)
+          ? store.Category.map((id) => id?.toString())
+          : store.Category
+            ? [store.Category.toString()]
+            : [],
+      );
 
-      const variantOptions = [];
-
-      product.variants.forEach((variant) => {
-        allowedStoreIds.forEach((storeId) => {
-          const key = `${product._id}_${variant._id}_${storeId}`;
-          const stockEntry = stockDetailMap[key];
-          const store = storeMap[storeId];
-          if (!store || !stockEntry) return;
-
-          variantOptions.push({
-            productId: product._id,
-            variantId: variant._id,
-            storeId: store._id,
-            storeName: store.soldBy?.storeName || store.storeName,
-            official: store.soldBy?.official || 0,
-            deliveryMode: store.soldBy?.deliveryMode || "local",
-            rating: 5,
-            distance: store.distance || 999999,
-            price: stockEntry.price ?? variant.sell_price ?? 0,
-            mrp: stockEntry.mrp ?? variant.mrp ?? 0,
-            quantity: stockEntry.quantity,
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          if (category?.categoryId)
+            allCategoryIds.add(category.categoryId.toString());
+          category.subCategories?.forEach((sub) => {
+            if (sub?.subCategoryId)
+              allCategoryIds.add(sub.subCategoryId.toString());
+            sub.subSubCategories?.forEach((subsub) => {
+              if (subsub?.subSubCategoryId)
+                allCategoryIds.add(subsub.subSubCategoryId.toString());
+            });
           });
         });
       });
 
-      if (!variantOptions.length) continue;
+      if (storeCategoryIds.length > 0) {
+        const uniqueCategoryIds = [...new Set(storeCategoryIds)];
+        const categories = await Category.find({
+          _id: { $in: uniqueCategoryIds },
+        }).lean();
+        for (const cat of categories) {
+          allCategoryIds.add(cat._id.toString());
+          (cat.subcat || []).forEach((sub) => {
+            if (sub?._id) allCategoryIds.add(sub._id.toString());
+            (sub.subsubcat || []).forEach((subsub) => {
+              if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+            });
+          });
+        }
+      }
 
-      // ✅ Sort variants
-      variantOptions.sort((a, b) => {
-        if (a.official !== b.official) return b.official - a.official;
-        if (a.rating !== b.rating) return b.rating - a.rating;
-        if (a.price !== b.price) return a.price - b.price;
-        return a.distance - b.distance;
+      const categoryArray = [...allCategoryIds];
+
+      // ✅ Fetch stock for allowed stores
+      const stockDocs = await Stock.find({
+        storeId: { $in: allowedStoreIds },
+      }).lean();
+
+      const stockMap = {};
+      const stockDetailMap = {};
+      for (const doc of stockDocs) {
+        for (const item of doc.stock || []) {
+          const key = `${item.productId}_${item.variantId}_${doc.storeId}`;
+          stockMap[key] = item.quantity;
+          stockDetailMap[key] = item;
+        }
+      }
+
+      // ✅ Fetch featured products
+      const query = {
+        feature_product: true,
+        $or: [
+          { "category._id": { $in: categoryArray } },
+          { "subCategory._id": { $in: categoryArray } },
+          { "subSubCategory._id": { $in: categoryArray } },
+        ],
+      };
+
+      // ✅ Veg filter (DB level)
+      if (isVegMode) {
+        query.isVeg = 1;
+      }
+
+      // ✅ Product type filter (DB level)
+      if (productType) {
+        query.productType = productType;
+      }
+
+      const products = await Products.find(query).lean();
+      // ✅ Store lookup map
+      const storeMap = {};
+      allowedStores.forEach((store) => {
+        storeMap[store._id.toString()] = store;
       });
 
-      const bestVariant = variantOptions[0];
+      const enrichedProducts = [];
 
-      const enrichedProduct = {
-        ...product,
-        storeId: bestVariant.storeId,
-        storeName: bestVariant.storeName,
-        inventory: product.variants.map((variant) => {
+      for (const product of products) {
+        if (!Array.isArray(product.variants) || !product.variants.length)
+          continue;
+
+        const variantOptions = [];
+
+        product.variants.forEach((variant) => {
+          allowedStoreIds.forEach((storeId) => {
+            const key = `${product._id}_${variant._id}_${storeId}`;
+            const stockEntry = stockDetailMap[key];
+            const store = storeMap[storeId];
+            if (!store || !stockEntry) return;
+
+            variantOptions.push({
+              productId: product._id,
+              variantId: variant._id,
+              storeId: store._id,
+              storeName: store.soldBy?.storeName || store.storeName,
+              official: store.soldBy?.official || 0,
+              deliveryMode: store.soldBy?.deliveryMode || "local",
+              rating: 5,
+              distance: store.distance || 999999,
+              price: stockEntry.price ?? variant.sell_price ?? 0,
+              mrp: stockEntry.mrp ?? variant.mrp ?? 0,
+              quantity: stockEntry.quantity,
+            });
+          });
+        });
+
+        if (!variantOptions.length) continue;
+
+        // ✅ Sort variants
+        variantOptions.sort((a, b) => {
+          if (a.official !== b.official) return b.official - a.official;
+          if (a.rating !== b.rating) return b.rating - a.rating;
+          if (a.price !== b.price) return a.price - b.price;
+          return a.distance - b.distance;
+        });
+
+        const bestVariant = variantOptions[0];
+
+        const enrichedProduct = {
+          ...product,
+          storeId: bestVariant.storeId,
+          storeName: bestVariant.storeName,
+          inventory: product.variants.map((variant) => {
+            const match = variantOptions.find(
+              (opt) => opt.variantId.toString() === variant._id.toString(),
+            );
+            return {
+              variantId: variant._id,
+              quantity: match ? match.quantity : 0,
+            };
+          }),
+          inCart: { status: false, qty: 0, variantIds: [] },
+        };
+
+        // ✅ Override variant prices
+        product.variants.forEach((variant) => {
           const match = variantOptions.find(
             (opt) => opt.variantId.toString() === variant._id.toString(),
           );
-          return {
-            variantId: variant._id,
-            quantity: match ? match.quantity : 0,
-          };
-        }),
-        inCart: { status: false, qty: 0, variantIds: [] },
-      };
+          if (match) {
+            variant.sell_price = match.price;
+            variant.mrp = match.mrp;
+          }
+        });
 
-      // ✅ Override variant prices
-      product.variants.forEach((variant) => {
-        const match = variantOptions.find(
-          (opt) => opt.variantId.toString() === variant._id.toString(),
-        );
-        if (match) {
-          variant.sell_price = match.price;
-          variant.mrp = match.mrp;
-        }
-      });
+        // ✅ Add cart info
+        product.variants.forEach((variant) => {
+          const cartQty = cartMap[`${product._id}_${variant._id}`] || 0;
+          if (cartQty > 0) {
+            enrichedProduct.inCart.status = true;
+            enrichedProduct.inCart.qty += cartQty;
+            enrichedProduct.inCart.variantIds.push(variant._id);
+          }
+        });
 
-      // ✅ Add cart info
-      product.variants.forEach((variant) => {
-        const cartQty = cartMap[`${product._id}_${variant._id}`] || 0;
-        if (cartQty > 0) {
-          enrichedProduct.inCart.status = true;
-          enrichedProduct.inCart.qty += cartQty;
-          enrichedProduct.inCart.variantIds.push(variant._id);
-        }
-      });
+        enrichedProducts.push(enrichedProduct);
+      }
 
-      enrichedProducts.push(enrichedProduct);
+      return filterProductsByRequestedType(enrichedProducts, req);
+    };
+
+    // ✅ Try the stores in priority order; the first group that has
+    //    featured products in stock wins (otherwise fall back to the next one)
+    let filteredProducts = [];
+    for (const group of storeGroups) {
+      filteredProducts = await buildFeaturedProducts(group);
+      if (filteredProducts.length) break;
     }
 
     // ✅ Pagination
-    const filteredProducts = filterProductsByRequestedType(
-      enrichedProducts,
-      req,
-    );
-
     const paginatedProducts = filteredProducts.slice(
       skip,
       skip + Number(limit),
