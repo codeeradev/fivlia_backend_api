@@ -1,6 +1,7 @@
 // NEW FILE: controlers/returnControler.js
 // POST /order/return/:orderId   (customer / mobile app, user token)
 // Content-Type: multipart/form-data  (or JSON when there are no photos)
+// :orderId  accepts the order _id OR the display id (e.g. OID202)
 //   reason  (required)   3-300 characters
 //   note    (optional)   up to 500 characters
 //   items   (optional)   JSON array string: [{"productId","varientId","quantity"}]
@@ -70,11 +71,13 @@ exports.requestReturn = async (req, res) => {
       return reject(400, "items must be a valid JSON array");
     }
 
-    if (!mongoose.Types.ObjectId.isValid(orderId)) {
-      return reject(404, "Order not found");
-    }
+    // The app may send either the Mongo _id (6ac4e27a...) or the display id (OID202)
+    const idParam = String(orderId || "").trim();
+    const filter = mongoose.Types.ObjectId.isValid(idParam)
+      ? { _id: idParam, userId: req.user._id }
+      : { orderId: idParam, userId: req.user._id };
 
-    const order = await Order.findOne({ _id: orderId, userId: req.user._id }).lean();
+    const order = await Order.findOne(filter).lean();
     if (!order) {
       return reject(404, "Order not found");
     }
