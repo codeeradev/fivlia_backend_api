@@ -1,17 +1,43 @@
 // NEW FILE: controlers/returnControler.js
 // POST /order/return/:orderId   (customer / mobile app, user token)
-// Body: { reason (required), note?, items?: [{ productId, varientId?, quantity? }] }
-// No "items" = return everything that is still returnable.
+// Content-Type: multipart/form-data  (or JSON when there are no photos)
+//   reason  (required)   3-300 characters
+//   note    (optional)   up to 500 characters
+//   items   (optional)   JSON array string: [{"productId","varientId","quantity"}]
+//                        no items = everything still returnable
+//   images  (optional)   up to RETURN_MAX_IMAGES photos (form field "images", repeat the field)
 
 const mongoose = require("mongoose");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const s3 = require("../config/aws");
 const { Order } = require("../modals/order");
 const {
+  RETURN_MAX_IMAGES,
+  RETURN_IMAGES_REQUIRED,
   itemKey,
   remainingQtyMap,
   getReturnEligibility,
 } = require("../utils/returnPolicy");
 
+// Photos are uploaded before validation runs, so remove them again when the request is rejected
+const removeUploaded = async (files) => {
+  await Promise.all(
+    (files || []).map((f) =>
+      s3
+        .send(new DeleteObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: f.key }))
+        .catch((e) => console.warn("Return image cleanup failed:", f.key, e.message)),
+    ),
+  );
+};
+
 exports.requestReturn = async (req, res) => {
+  const uploaded = Array.isArray(req.files) ? req.files : [];
+
+  const reject = async (code, message, extra = {}) => {
+    await removeUploaded(uploaded);
+    return res.status(code).json({ status: false, message, ...extra });
+  };
+
   try {
     const { orderId } = req.params;
     const body = req.body || {};
@@ -19,69 +45,72 @@ exports.requestReturn = async (req, res) => {
     const note = String(body.note || "").trim();
 
     if (reason.length < 3 || reason.length > 300) {
-      return res.status(400).json({
-        status: false,
-        message: "Return reason is required (3 to 300 characters)",
-      });
+      return reject(400, "Return reason is required (3 to 300 characters)");
     }
     if (note.length > 500) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Note is too long (max 500 characters)" });
+      return reject(400, "Note is too long (max 500 characters)");
     }
+    if (RETURN_IMAGES_REQUIRED && !uploaded.length) {
+      return reject(400, "Please attach at least one photo of the product");
+    }
+    if (uploaded.length > RETURN_MAX_IMAGES) {
+      return reject(400, `You can upload up to ${RETURN_MAX_IMAGES} images`);
+    }
+
+    // items arrives as a JSON string in multipart requests
+    let itemsIn = body.items;
+    if (typeof itemsIn === "string" && itemsIn.trim()) {
+      try {
+        itemsIn = JSON.parse(itemsIn);
+      } catch (e) {
+        return reject(400, "items must be a valid JSON array");
+      }
+    }
+    if (itemsIn !== undefined && itemsIn !== "" && !Array.isArray(itemsIn)) {
+      return reject(400, "items must be a valid JSON array");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
-      return res.status(404).json({ status: false, message: "Order not found" });
+      return reject(404, "Order not found");
     }
 
     const order = await Order.findOne({ _id: orderId, userId: req.user._id }).lean();
     if (!order) {
-      return res.status(404).json({ status: false, message: "Order not found" });
+      return reject(404, "Order not found");
     }
 
     const eligibility = getReturnEligibility(order);
     if (!eligibility.canRequestReturn) {
-      return res
-        .status(400)
-        .json({ status: false, message: eligibility.reason, returnInfo: eligibility });
+      return reject(400, eligibility.reason, { returnInfo: eligibility });
     }
 
     const remaining = remainingQtyMap(order);
     const wanted = [];
 
-    if (Array.isArray(body.items) && body.items.length) {
+    if (Array.isArray(itemsIn) && itemsIn.length) {
       const seen = new Set();
-      for (const row of body.items) {
+      for (const row of itemsIn) {
         const orderItem = order.items.find(
           (it) =>
             String(it.productId) === String(row?.productId) &&
             (!row?.varientId || String(it.varientId) === String(row.varientId)),
         );
         if (!orderItem) {
-          return res.status(400).json({
-            status: false,
-            message: "An item in the request is not part of this order",
-          });
+          return reject(400, "An item in the request is not part of this order");
         }
         const realKey = itemKey(orderItem.productId, orderItem.varientId);
         if (seen.has(realKey)) {
-          return res
-            .status(400)
-            .json({ status: false, message: "Same item sent twice" });
+          return reject(400, "Same item sent twice");
         }
         seen.add(realKey);
 
         const left = remaining.get(realKey) || 0;
         const qty = row?.quantity === undefined ? left : Number(row.quantity);
         if (!Number.isInteger(qty) || qty < 1) {
-          return res
-            .status(400)
-            .json({ status: false, message: "Item quantity must be a whole number, 1 or more" });
+          return reject(400, "Item quantity must be a whole number, 1 or more");
         }
         if (qty > left) {
-          return res.status(400).json({
-            status: false,
-            message: `Only ${left} unit(s) of ${orderItem.name} can still be returned`,
-          });
+          return reject(400, `Only ${left} unit(s) of ${orderItem.name} can still be returned`);
         }
         wanted.push({ orderItem, qty });
       }
@@ -97,9 +126,7 @@ exports.requestReturn = async (req, res) => {
     }
 
     if (!wanted.length) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Nothing to return" });
+      return reject(400, "Nothing to return");
     }
 
     const returnRequest = {
@@ -107,6 +134,7 @@ exports.requestReturn = async (req, res) => {
       status: "requested",
       reason,
       note,
+      images: uploaded.map((f) => `/${f.key}`),
       requestedAt: new Date(),
       items: wanted.map(({ orderItem, qty }) => ({
         productId: orderItem.productId,
@@ -126,9 +154,7 @@ exports.requestReturn = async (req, res) => {
     ).lean();
 
     if (!updated) {
-      return res
-        .status(409)
-        .json({ status: false, message: "Order changed, please try again" });
+      return reject(409, "Order changed, please try again");
     }
 
     return res.status(200).json({
@@ -139,6 +165,7 @@ exports.requestReturn = async (req, res) => {
     });
   } catch (error) {
     console.error("requestReturn error:", error.message);
+    await removeUploaded(uploaded);
     return res.status(500).json({ status: false, message: "Server error" });
   }
 };

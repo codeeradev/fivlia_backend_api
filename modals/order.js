@@ -95,6 +95,7 @@ const orderSchema = new mongoose.Schema(
         },
         reason: String,
         note: String,
+        images: [String], // customer photos, paths like /ReturnImages/xxx.jpg
         requestedAt: Date,
         items: [
           {

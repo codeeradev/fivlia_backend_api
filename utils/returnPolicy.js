@@ -4,6 +4,9 @@
 
 const RETURN_WINDOW_DAYS = 10; // days after delivery
 const RETURN_ALLOWED_SCOPES = ["global"]; // add "city" here to allow local orders too
+const RETURN_MAX_IMAGES = 5; // photos per return request
+const RETURN_IMAGE_MAX_MB = 5; // size limit per photo
+const RETURN_IMAGES_REQUIRED = false; // true = customer must attach at least 1 photo
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -89,6 +92,9 @@ const getReturnEligibility = (order, now = new Date()) => {
 module.exports = {
   RETURN_WINDOW_DAYS,
   RETURN_ALLOWED_SCOPES,
+  RETURN_MAX_IMAGES,
+  RETURN_IMAGE_MAX_MB,
+  RETURN_IMAGES_REQUIRED,
   itemKey,
   remainingQtyMap,
   getReturnEligibility,
