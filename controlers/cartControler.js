@@ -159,19 +159,25 @@ exports.addCart = async (req, res) => {
     );
 
     let paymentOption = false;
+    const isGlobalCartStore = await Store.exists({
+      _id: storeId,
+      serviceScope: "global",
+    });
     if (matchedZone) {
       paymentOption = matchedZone.cashOnDelivery === true;
-    } else {
+    } else if (!isGlobalCartStore) {
       // Global (All India) stores can serve customers outside every active zone
-      const isGlobalStore = await Store.exists({
-        _id: storeId,
-        serviceScope: "global",
-      });
-      if (!isGlobalStore) {
-        return res
-          .status(400)
-          .json({ message: "No active zone found for your location." });
-      }
+      return res
+        .status(400)
+        .json({ message: "No active zone found for your location." });
+    }
+    if (isGlobalCartStore) {
+      // Global store COD is controlled only by the admin global setting
+      const globalCodSetting = await SettingAdmin.findOne(
+        {},
+        { globalCodAllowed: 1 },
+      ).lean();
+      paymentOption = isGlobalCodAllowed(globalCodSetting);
     }
 
     // Single-store cart policy

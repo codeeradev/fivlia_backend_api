@@ -257,6 +257,10 @@ exports.placeOrder = async (req, res) => {
         {},
         { globalCodAllowed: 1 },
       ).lean();
+      console.log(
+        "[placeOrder] global COD check -> globalCodAllowed =",
+        globalCodSetting?.globalCodAllowed,
+      );
       if (!isGlobalCodAllowed(globalCodSetting)) {
         return res.status(400).json({
           message: "Cash on delivery is not available for this store.",
