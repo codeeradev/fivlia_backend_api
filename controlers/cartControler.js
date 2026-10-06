@@ -570,6 +570,9 @@ exports.getCart = async (req, res) => {
       paymentOption: isGlobalStore
         ? isGlobalCodAllowed(settings)
         : cashOnDelivery,
+        paymentOption1: isGlobalStore
+        ? isGlobalCodAllowed(settings)
+        : cashOnDelivery,
       StoreID: storeId,
       deliveryMode: isGlobalStore ? "global" : "local",
       estimatedDeliveryText: isGlobalStore
