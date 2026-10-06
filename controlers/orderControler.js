@@ -38,6 +38,7 @@ const {
   isGlobalStore,
   getOrderScope,
   computeGlobalShippingCharge,
+  isGlobalCodAllowed,
 } = require("../utils/globalDelivery");
 const {
   getAppliedOfferContext,
@@ -243,8 +244,8 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
-    // Global (All India) store: online payment only. Checked first so no
-    // order id is consumed for a request that will be rejected.
+    // Global (All India) store: COD only when the admin enabled it. Checked
+    // first so no order id is consumed for a request that will be rejected.
     const storeScopeDoc = await Store.findById(storeId, {
       serviceScope: 1,
     }).lean();
@@ -252,9 +253,15 @@ exports.placeOrder = async (req, res) => {
     const orderScope = getOrderScope(storeScopeDoc);
 
     if (isGlobalOrder && paymentMode === true) {
-      return res.status(400).json({
-        message: "Cash on delivery is not available for this store.",
-      });
+      const globalCodSetting = await SettingAdmin.findOne(
+        {},
+        { globalCodAllowed: 1 },
+      ).lean();
+      if (!isGlobalCodAllowed(globalCodSetting)) {
+        return res.status(400).json({
+          message: "Cash on delivery is not available for this store.",
+        });
+      }
     }
 
     const cartItems = await Cart.find({ _id: { $in: cartIds } });

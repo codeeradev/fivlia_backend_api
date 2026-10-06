@@ -18,6 +18,7 @@ const {
 const {
   computeGlobalShippingCharge,
   formatGlobalDeliveryText,
+  isGlobalCodAllowed,
 } = require("../utils/globalDelivery");
 const {
   filterProductsByRequestedType,
@@ -558,8 +559,11 @@ exports.getCart = async (req, res) => {
           (freeProductItem?.freeProductSavings || 0),
         finalSubtotal: offerContext.cartDiscount.finalSubtotal,
       },
-      // Global orders are online payment only
-      paymentOption: isGlobalStore ? false : cashOnDelivery,
+      // Global orders: COD only when the admin enabled "globalCodAllowed"
+      // (no zone check - global stores serve all of India)
+      paymentOption: isGlobalStore
+        ? isGlobalCodAllowed(settings)
+        : cashOnDelivery,
       StoreID: storeId,
       deliveryMode: isGlobalStore ? "global" : "local",
       estimatedDeliveryText: isGlobalStore

@@ -27,8 +27,12 @@ const getGlobalSettings = (settings = {}) => {
     freeShippingLimit: Math.max(0, toNumber(settings?.globalFreeShippingLimit, 0)),
     daysMin: min,
     daysMax: Math.max(min, maxRaw),
+    codAllowed: settings?.globalCodAllowed === true,
   };
 };
+
+// Admin toggle: may customers pay Cash on Delivery on Global (All India) orders?
+const isGlobalCodAllowed = (settings = {}) => settings?.globalCodAllowed === true;
 
 // Flat shipping. This is the FINAL global delivery charge (admin setting
 // "globalShippingCharge"): it never depends on the cart value and no free-shipping
@@ -59,18 +63,23 @@ const buildGlobalEstimateEntry = (store, settings = {}) => ({
 // ---------------------------------------------------------------------------
 // Admin settings: validation + defaults for the 4 global settings
 // ---------------------------------------------------------------------------
-const GLOBAL_SETTING_KEYS = [
+const GLOBAL_NUMBER_KEYS = [
   "globalShippingCharge",
   "globalFreeShippingLimit",
   "globalDeliveryDaysMin",
   "globalDeliveryDaysMax",
 ];
 
+const GLOBAL_BOOLEAN_KEYS = ["globalCodAllowed"];
+
+const GLOBAL_SETTING_KEYS = [...GLOBAL_NUMBER_KEYS, ...GLOBAL_BOOLEAN_KEYS];
+
 const GLOBAL_SETTING_DEFAULTS = {
   globalShippingCharge: 0,
   globalFreeShippingLimit: 0,
   globalDeliveryDaysMin: 3,
   globalDeliveryDaysMax: 5,
+  globalCodAllowed: false,
 };
 
 const isBlank = (value) =>
@@ -86,7 +95,16 @@ const isBlank = (value) =>
 const validateGlobalSettings = (input = {}, current = {}) => {
   const values = {};
 
-  for (const key of GLOBAL_SETTING_KEYS) {
+  for (const key of GLOBAL_BOOLEAN_KEYS) {
+    const raw = input?.[key];
+    if (isBlank(raw)) continue;
+
+    if (raw === true || raw === "true") values[key] = true;
+    else if (raw === false || raw === "false") values[key] = false;
+    else return { error: `${key} must be true or false` };
+  }
+
+  for (const key of GLOBAL_NUMBER_KEYS) {
     const raw = input?.[key];
     if (isBlank(raw)) continue;
 
@@ -157,6 +175,7 @@ module.exports = {
   getDeliveryMode,
   getOrderScope,
   getGlobalSettings,
+  isGlobalCodAllowed,
   computeGlobalShippingCharge,
-  formatGlobalDeliveryText,
+  formatGlobalDeliveryText
 };

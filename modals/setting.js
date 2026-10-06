@@ -69,6 +69,8 @@ const settingAdminSchema = new mongoose.Schema({
   globalFreeShippingLimit: { type: Number, default: 0 },
   globalDeliveryDaysMin: { type: Number, default: 3 },
   globalDeliveryDaysMax: { type: Number, default: 5 },
+  // Cash on Delivery for Global (All India) store orders (admin toggle)
+  globalCodAllowed: { type: Boolean, default: false },
   // Third party courier platforms used for global order tracking
   shippingPlatforms: [
     {
