@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const Store = require("../modals/store");
 const seller = require("../modals/sellerModals/seller");
 const Stock = require("../modals/StoreStock");
@@ -89,9 +90,13 @@ exports.storeLogin = async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    // Token is needed for authenticated seller routes (ship order / tracking)
+    const token = jwt.sign({ _id: store._id }, process.env.jwtSecretKey);
+
     return res.status(200).json({
       message: "Login successful",
       storeId: store._id,
+      token,
     });
   } catch (error) {
     console.error("Login Error:", error);
@@ -392,7 +397,7 @@ exports.storeEdit = async (req, res) => {
       if (typeId === "69cf8a31ad92aee54ecb1e72") {
         updateObj.sellFood = true;
       }
-      else{
+      else {
         updateObj.sellFood = false;
       }
     }
@@ -726,8 +731,8 @@ exports.getStoreByCategory = async (req, res) => {
       ...(all === "true"
         ? {}
         : {
-            "sellerCategories.subCategories.subCategoryId": categoryId,
-          }),
+          "sellerCategories.subCategories.subCategoryId": categoryId,
+        }),
     })
       .select("_id storeName image fivliaAssured")
       .lean();

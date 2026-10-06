@@ -85,6 +85,29 @@ const orderSchema = new mongoose.Schema(
       expectedDeliveryDate: Date,
     },
     ready_in_min:Number,
+    // Item return requests raised by the customer (mobile app)
+    returnRequests: [
+      {
+        status: {
+          type: String,
+          enum: ["requested", "approved", "rejected", "picked", "refunded"],
+          default: "requested",
+        },
+        reason: String,
+        note: String,
+        requestedAt: Date,
+        items: [
+          {
+            productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+            varientId: { type: mongoose.Schema.Types.ObjectId },
+            name: String,
+            image: String,
+            price: Number,
+            quantity: Number,
+          },
+        ],
+      },
+    ],
   },
   { timestamps: true },
 );

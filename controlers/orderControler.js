@@ -33,6 +33,7 @@ const {
   findShippingPlatform,
   buildTrackingUrl,
 } = require("../utils/shippingPlatforms");
+const { getReturnEligibility } = require("../utils/returnPolicy");
 const {
   isGlobalStore,
   getOrderScope,
@@ -1353,6 +1354,9 @@ exports.getOrderDetails = async (req, res) => {
           isGlobalOrderRow && order.shipping?.courierName
             ? order.shipping
             : null,
+        // Mobile: show the "Return" button when returnInfo.canRequestReturn is true
+        returnInfo: getReturnEligibility(order),
+        returnRequests: order.returnRequests || [],
         createdAt: order.createdAt,
       });
     }
