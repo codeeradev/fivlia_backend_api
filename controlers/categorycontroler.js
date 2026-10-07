@@ -1044,11 +1044,18 @@ exports.getBrand = async (req, res) => {
         "brand_Name._id": new mongoose.Types.ObjectId(id),
       };
       
-      if (globalScope) {
+      if (globalScope && globalScope.mainCategoryIds && globalScope.allCategoryIds) {
+        const mainCatIds = (globalScope.mainCategoryIds || []).map(cid => 
+          typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
+        );
+        const allCatIds = (globalScope.allCategoryIds || []).map(cid => 
+          typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
+        );
+        
         productQuery.$or = [
-          { "category._id": { $in: globalScope.mainCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
-          { "subCategory._id": { $in: globalScope.allCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
-          { "subSubCategory._id": { $in: globalScope.allCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
+          { "category._id": { $in: mainCatIds } },
+          { "subCategory._id": { $in: allCatIds } },
+          { "subSubCategory._id": { $in: allCatIds } },
         ];
       }
       
@@ -1077,8 +1084,11 @@ exports.getBrand = async (req, res) => {
       };
       
       // Apply global scope: only show stock from global stores
-      if (globalScope && globalScope.globalStoreIds && globalScope.globalStoreIds.length > 0) {
-        stockQuery.storeId = { $in: globalScope.globalStoreIds.map(sid => new mongoose.Types.ObjectId(sid)) };
+      if (globalScope && globalScope.globalStoreIds && Array.isArray(globalScope.globalStoreIds) && globalScope.globalStoreIds.length > 0) {
+        const globalStoreObjIds = globalScope.globalStoreIds.map(sid => 
+          typeof sid === 'string' ? new mongoose.Types.ObjectId(sid) : sid
+        );
+        stockQuery.storeId = { $in: globalStoreObjIds };
       }
       
       const stockDocs = await Stock.find(stockQuery).lean();
