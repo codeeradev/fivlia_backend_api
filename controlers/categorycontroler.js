@@ -56,36 +56,30 @@ const determineStoreScope = async (req) => {
       
       const globalStoreIds = globalStores.map(s => s._id.toString());
       
-      // Get product IDs that have stock in global stores
-      const stockInGlobalStores = await Stock.find({
-        storeId: { $in: globalStoreIds }
-      }).lean();
-      
-      const productIdsInStock = new Set();
-      stockInGlobalStores.forEach(stockDoc => {
-        (stockDoc.stock || []).forEach(item => {
-          if (item.productId) {
-            productIdsInStock.add(item.productId);
-          }
-        });
-      });
-      
-      // Get products and their categories
-      const globalProducts = await Products.find({
-        _id: { $in: Array.from(productIdsInStock) }
-      }).lean();
-      
-      const categoryIds = new Set();
-      globalProducts.forEach(p => {
-        if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
-        if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
-        if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
-      });
+      // For global: Get ALL categories from global stores (not just products with stock)
+      const allCategoryIds = new Set();
+      for (const store of globalStores) {
+        const categoryIds = Array.isArray(store.Category) ? store.Category : [store.Category];
+        
+        for (const catId of categoryIds) {
+          const category = await Category.findById(catId).lean();
+          if (!category) continue;
+          
+          allCategoryIds.add(category._id.toString());
+          
+          (category.subcat || []).forEach((sub) => {
+            allCategoryIds.add(sub._id.toString());
+            (sub.subsubcat || []).forEach((subsub) => {
+              allCategoryIds.add(subsub._id.toString());
+            });
+          });
+        }
+      }
       
       return {
         scopeType: 'global',
         storeIds: globalStoreIds,
-        categoryIds: Array.from(categoryIds)
+        categoryIds: Array.from(allCategoryIds)
       };
     }
 
@@ -141,36 +135,30 @@ const determineStoreScope = async (req) => {
     
     const globalStoreIds = globalStores.map(s => s._id.toString());
     
-    // Get product IDs that have stock in global stores
-    const stockInGlobalStores = await Stock.find({
-      storeId: { $in: globalStoreIds }
-    }).lean();
-    
-    const productIdsInStock = new Set();
-    stockInGlobalStores.forEach(stockDoc => {
-      (stockDoc.stock || []).forEach(item => {
-        if (item.productId) {
-          productIdsInStock.add(item.productId);
-        }
-      });
-    });
-    
-    // Get products and their categories
-    const globalProducts = await Products.find({
-      _id: { $in: Array.from(productIdsInStock) }
-    }).lean();
-    
-    const categoryIds = new Set();
-    globalProducts.forEach(p => {
-      if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
-      if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
-      if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
-    });
+    // For global: Get ALL categories from global stores (not just products with stock)
+    const allCategoryIds = new Set();
+    for (const store of globalStores) {
+      const categoryIds = Array.isArray(store.Category) ? store.Category : [store.Category];
+      
+      for (const catId of categoryIds) {
+        const category = await Category.findById(catId).lean();
+        if (!category) continue;
+        
+        allCategoryIds.add(category._id.toString());
+        
+        (category.subcat || []).forEach((sub) => {
+          allCategoryIds.add(sub._id.toString());
+          (sub.subsubcat || []).forEach((subsub) => {
+            allCategoryIds.add(subsub._id.toString());
+          });
+        });
+      }
+    }
     
     return {
       scopeType: 'global',
       storeIds: globalStoreIds,
-      categoryIds: Array.from(categoryIds)
+      categoryIds: Array.from(allCategoryIds)
     };
     
   } catch (error) {
