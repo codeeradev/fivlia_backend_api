@@ -1182,6 +1182,8 @@ exports.getBrand = async (req, res) => {
     // Determine store scope (local vs global)
     const storeScope = await determineStoreScope(req);
     
+    console.log('Store Scope:', JSON.stringify(storeScope, null, 2));
+    
     // 🔍 If specific brand ID
     if (id) {
       const b = await brand.findById(id).lean();
@@ -1195,7 +1197,10 @@ exports.getBrand = async (req, res) => {
         "brand_Name._id": new mongoose.Types.ObjectId(id),
       };
       
-      // Apply category scope filtering
+      console.log('Initial product query:', JSON.stringify(productQuery, null, 2));
+      
+      // Apply category scope filtering ONLY if we have categories
+      // If no categories in scope yet (edge case), don't filter by category - just filter by stock later
       if (storeScope.categoryIds && storeScope.categoryIds.length > 0) {
         const categoryObjIds = storeScope.categoryIds.map(cid => 
           typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
@@ -1206,25 +1211,20 @@ exports.getBrand = async (req, res) => {
           { "subCategory.0._id": { $in: categoryObjIds } },
           { "subSubCategory.0._id": { $in: categoryObjIds } },
         ];
-      } else {
-        // No categories in scope - return empty result
-        return res.json({
-          ...b,
-          products: [],
-          total: 0,
-          page: Number(page),
-          limit: Number(limit) || "",
-          totalPages: 0,
-        });
+        
+        console.log('Product query with categories:', JSON.stringify(productQuery, null, 2));
       }
       
       const totalProducts = await productsCollection.countDocuments(productQuery);
+      console.log('Total products found:', totalProducts);
 
       const products = await productsCollection
         .find(productQuery)
         .skip(skip)
         .limit(Number(limit))
         .toArray();
+        
+      console.log('Products retrieved:', products.length);
 
       // Collect all variant/product combinations
       const productVariantPairs = [];
@@ -1250,7 +1250,11 @@ exports.getBrand = async (req, res) => {
         stockQuery.storeId = { $in: storeObjIds };
       }
       
+      console.log('Stock query:', JSON.stringify(stockQuery, null, 2));
+      
       const stockDocs = await Stock.find(stockQuery).lean();
+      
+      console.log('Stock docs found:', stockDocs.length);
 
       const storeIds = [
         ...new Set(stockDocs.map((d) => d.storeId?.toString()).filter(Boolean)),
