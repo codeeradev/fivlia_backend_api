@@ -1182,8 +1182,6 @@ exports.getBrand = async (req, res) => {
     // Determine store scope (local vs global)
     const storeScope = await determineStoreScope(req);
     
-    console.log('Store Scope:', JSON.stringify(storeScope, null, 2));
-    
     // 🔍 If specific brand ID
     if (id) {
       const b = await brand.findById(id).lean();
@@ -1197,8 +1195,6 @@ exports.getBrand = async (req, res) => {
         "brand_Name._id": new mongoose.Types.ObjectId(id),
       };
       
-      console.log('Initial product query:', JSON.stringify(productQuery, null, 2));
-      
       // Apply category scope filtering ONLY if we have categories
       // If no categories in scope yet (edge case), don't filter by category - just filter by stock later
       if (storeScope.categoryIds && storeScope.categoryIds.length > 0) {
@@ -1211,20 +1207,15 @@ exports.getBrand = async (req, res) => {
           { "subCategory.0._id": { $in: categoryObjIds } },
           { "subSubCategory.0._id": { $in: categoryObjIds } },
         ];
-        
-        console.log('Product query with categories:', JSON.stringify(productQuery, null, 2));
       }
       
       const totalProducts = await productsCollection.countDocuments(productQuery);
-      console.log('Total products found:', totalProducts);
 
       const products = await productsCollection
         .find(productQuery)
         .skip(skip)
         .limit(Number(limit))
         .toArray();
-        
-      console.log('Products retrieved:', products.length);
 
       // Collect all variant/product combinations
       const productVariantPairs = [];
@@ -1250,11 +1241,7 @@ exports.getBrand = async (req, res) => {
         stockQuery.storeId = { $in: storeObjIds };
       }
       
-      console.log('Stock query:', JSON.stringify(stockQuery, null, 2));
-      
       const stockDocs = await Stock.find(stockQuery).lean();
-      
-      console.log('Stock docs found:', stockDocs.length);
 
       const storeIds = [
         ...new Set(stockDocs.map((d) => d.storeId?.toString()).filter(Boolean)),
@@ -1309,27 +1296,53 @@ exports.getBrand = async (req, res) => {
 
       const productsWithStock = attachInventory(products);
 
-      productsWithStock.forEach((product) => {
-        if (Array.isArray(product.inventory) && product.inventory.length > 0) {
-          const firstInv = product.inventory.find(
-            (i) => i.storeId && i.storeName,
-          );
-
-          product.storeId = firstInv ? firstInv.storeId : "";
-          product.storeName = firstInv ? firstInv.storeName : "";
-        } else {
-          product.storeId = "";
-          product.storeName = "";
-        }
-      });
+      // Filter logic based on scope type
+      let finalProducts;
+      
+      if (storeScope.scopeType === 'local') {
+        // LOCAL: Only show products with stock in local stores
+        finalProducts = productsWithStock.filter((product) => {
+          if (Array.isArray(product.inventory) && product.inventory.length > 0) {
+            // Check if ANY variant has stock in local stores
+            const hasStockInScope = product.inventory.some(
+              (inv) => inv.storeId && inv.storeName && inv.quantity > 0
+            );
+            
+            if (hasStockInScope) {
+              const firstInv = product.inventory.find(
+                (i) => i.storeId && i.storeName,
+              );
+              product.storeId = firstInv ? firstInv.storeId : "";
+              product.storeName = firstInv ? firstInv.storeName : "";
+              return true;
+            }
+          }
+          return false;
+        });
+      } else {
+        // GLOBAL: Show all products, stock doesn't matter
+        productsWithStock.forEach((product) => {
+          if (Array.isArray(product.inventory) && product.inventory.length > 0) {
+            const firstInv = product.inventory.find(
+              (i) => i.storeId && i.storeName,
+            );
+            product.storeId = firstInv ? firstInv.storeId : "";
+            product.storeName = firstInv ? firstInv.storeName : "";
+          } else {
+            product.storeId = "";
+            product.storeName = "";
+          }
+        });
+        finalProducts = productsWithStock;
+      }
 
       return res.json({
         ...b,
-        products: productsWithStock,
-        total: totalProducts,
+        products: finalProducts,
+        total: finalProducts.length,
         page: Number(page),
         limit: Number(limit) || "",
-        totalPages: Math.ceil(totalProducts / limit) || "",
+        totalPages: Math.ceil(finalProducts.length / limit) || "",
       });
     }
 
