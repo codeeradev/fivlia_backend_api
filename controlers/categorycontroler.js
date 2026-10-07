@@ -28,6 +28,120 @@ const {
   getGlobalBrandIds,
 } = require("../utils/locationCategories");
 
+// Helper function to determine store scope (local vs global)
+const determineStoreScope = async (req) => {
+  try {
+    // Get user location
+    let userLat, userLng;
+    
+    // Check for lat/lng in query params first
+    if (req.query.lat && req.query.lng) {
+      userLat = parseFloat(req.query.lat);
+      userLng = parseFloat(req.query.lng);
+    } else if (req.user) {
+      // Fallback to user's saved location
+      const user = await User.findById(req.user).lean();
+      if (user?.location?.latitude && user?.location?.longitude) {
+        userLat = user.location.latitude;
+        userLng = user.location.longitude;
+      }
+    }
+
+    // No location available - default to global
+    if (!userLat || !userLng) {
+      const globalStores = await Store.find({ 
+        serviceScope: 'global',
+        status: true 
+      }).lean();
+      
+      const globalStoreIds = globalStores.map(s => s._id.toString());
+      
+      // Get categories from global stores
+      const globalProducts = await Products.find({
+        storeId: { $in: globalStoreIds }
+      }).lean();
+      
+      const categoryIds = new Set();
+      globalProducts.forEach(p => {
+        if (p.category?._id) categoryIds.add(p.category._id.toString());
+        if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
+        if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+      });
+      
+      return {
+        scopeType: 'global',
+        storeIds: globalStoreIds,
+        categoryIds: Array.from(categoryIds)
+      };
+    }
+
+    // Check for local active stores
+    const storeResult = await getStoresWithinRadius(userLat, userLng);
+    
+    const activeLocalStores = (storeResult?.matchedStores || []).filter(
+      store => store.status === true
+    );
+
+    // If active local stores found, use local scope
+    if (activeLocalStores.length > 0) {
+      const localStoreIds = activeLocalStores.map(s => s._id.toString());
+      
+      // Get categories from local stores
+      const localProducts = await Products.find({
+        storeId: { $in: localStoreIds }
+      }).lean();
+      
+      const categoryIds = new Set();
+      localProducts.forEach(p => {
+        if (p.category?._id) categoryIds.add(p.category._id.toString());
+        if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
+        if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+      });
+      
+      return {
+        scopeType: 'local',
+        storeIds: localStoreIds,
+        categoryIds: Array.from(categoryIds)
+      };
+    }
+
+    // No active local stores - fallback to global
+    const globalStores = await Store.find({ 
+      serviceScope: 'global',
+      status: true 
+    }).lean();
+    
+    const globalStoreIds = globalStores.map(s => s._id.toString());
+    
+    // Get categories from global stores
+    const globalProducts = await Products.find({
+      storeId: { $in: globalStoreIds }
+    }).lean();
+    
+    const categoryIds = new Set();
+    globalProducts.forEach(p => {
+      if (p.category?._id) categoryIds.add(p.category._id.toString());
+      if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
+      if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+    });
+    
+    return {
+      scopeType: 'global',
+      storeIds: globalStoreIds,
+      categoryIds: Array.from(categoryIds)
+    };
+    
+  } catch (error) {
+    console.error('Error in determineStoreScope:', error);
+    // On error, return empty scope (will show no data rather than crash)
+    return {
+      scopeType: 'error',
+      storeIds: [],
+      categoryIds: []
+    };
+  }
+};
+
 exports.update = async (req, res) => {
   try {
     const { name, description, subcat } = req.body;
@@ -1022,41 +1136,44 @@ exports.getBrand = async (req, res) => {
   try {
     const { id, page = 1, limit, admin } = req.query;
     const skip = (page - 1) * limit;
+    
+    // Determine store scope (local vs global)
+    const storeScope = await determineStoreScope(req);
+    
     // 🔍 If specific brand ID
     if (id) {
       const b = await brand.findById(id).lean();
       if (!b) return res.status(404).json({ message: "Brand not found" });
 
-      // Global-only user: check if this brand is allowed
-      const globalScope = await resolveGlobalOnlyScope(req);
-      if (globalScope) {
-        const globalBrandIds = await getGlobalBrandIds(globalScope);
-        if (!globalBrandIds.includes(id)) {
-          return res.status(404).json({ message: "Brand not found" });
-        }
-      }
-
-      // 🔥 Fetch only products of that brand
+      // 🔥 Fetch only products of that brand within the determined scope
       const productsCollection = mongoose.connection.db.collection("products");
       
-      // Build product query with global scope filter if needed
+      // Build product query with scope filter
       const productQuery = {
         "brand_Name._id": new mongoose.Types.ObjectId(id),
       };
       
-      if (globalScope && globalScope.mainCategoryIds && globalScope.allCategoryIds) {
-        const mainCatIds = (globalScope.mainCategoryIds || []).map(cid => 
-          typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
-        );
-        const allCatIds = (globalScope.allCategoryIds || []).map(cid => 
+      // Apply category scope filtering
+      if (storeScope.categoryIds && storeScope.categoryIds.length > 0) {
+        const categoryObjIds = storeScope.categoryIds.map(cid => 
           typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
         );
         
         productQuery.$or = [
-          { "category._id": { $in: mainCatIds } },
-          { "subCategory._id": { $in: allCatIds } },
-          { "subSubCategory._id": { $in: allCatIds } },
+          { "category._id": { $in: categoryObjIds } },
+          { "subCategory._id": { $in: categoryObjIds } },
+          { "subSubCategory._id": { $in: categoryObjIds } },
         ];
+      } else {
+        // No categories in scope - return empty result
+        return res.json({
+          ...b,
+          products: [],
+          total: 0,
+          page: Number(page),
+          limit: Number(limit) || "",
+          totalPages: 0,
+        });
       }
       
       const totalProducts = await productsCollection.countDocuments(productQuery);
@@ -1078,17 +1195,17 @@ exports.getBrand = async (req, res) => {
         }
       }
 
-      // 🔥 Build query for only required stock entries
+      // 🔥 Build query for stock entries from scope stores only
       const stockQuery = {
         "stock.productId": { $in: productVariantPairs.map((p) => p.productId) },
       };
       
-      // Apply global scope: only show stock from global stores
-      if (globalScope && globalScope.globalStoreIds && Array.isArray(globalScope.globalStoreIds) && globalScope.globalStoreIds.length > 0) {
-        const globalStoreObjIds = globalScope.globalStoreIds.map(sid => 
+      // Apply store scope filter
+      if (storeScope.storeIds && storeScope.storeIds.length > 0) {
+        const storeObjIds = storeScope.storeIds.map(sid => 
           typeof sid === 'string' ? new mongoose.Types.ObjectId(sid) : sid
         );
-        stockQuery.storeId = { $in: globalStoreObjIds };
+        stockQuery.storeId = { $in: storeObjIds };
       }
       
       const stockDocs = await Stock.find(stockQuery).lean();
@@ -1170,21 +1287,47 @@ exports.getBrand = async (req, res) => {
       });
     }
 
+    // 🔁 For all brands - apply scope filtering
     const brandFilter = {};
 
     if (req.typeId && admin !== true) {
       brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
     }
 
-    // Global-only user: only brands that have products in the global stores' categories
-    const globalScope = await resolveGlobalOnlyScope(req);
-    if (globalScope) {
-      const globalBrandIds = await getGlobalBrandIds(globalScope);
-      brandFilter._id = {
-        $in: globalBrandIds.map((id) => new mongoose.Types.ObjectId(id)),
-      };
+    // Get brands that have products in the scope categories
+    let visibleBrandIds = [];
+    if (storeScope.categoryIds && storeScope.categoryIds.length > 0) {
+      const categoryObjIds = storeScope.categoryIds.map(cid => 
+        typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
+      );
+      
+      const productsInScope = await Products.find({
+        $or: [
+          { "category._id": { $in: categoryObjIds } },
+          { "subCategory._id": { $in: categoryObjIds } },
+          { "subSubCategory._id": { $in: categoryObjIds } },
+        ]
+      }).select('brand_Name._id').lean();
+      
+      visibleBrandIds = [...new Set(
+        productsInScope
+          .map(p => p.brand_Name?._id?.toString())
+          .filter(Boolean)
+      )];
+      
+      if (visibleBrandIds.length > 0) {
+        brandFilter._id = { 
+          $in: visibleBrandIds.map(id => new mongoose.Types.ObjectId(id)) 
+        };
+      } else {
+        // No brands in scope - return empty
+        return res.json({
+          featuredBrands: [],
+          allBrands: [],
+        });
+      }
     }
-    // 🔁 For all brands (no products or stock)
+
     const brands = await brand.find(brandFilter).sort({ createdAt: -1 }).lean();
 
     const allBrands = [];
