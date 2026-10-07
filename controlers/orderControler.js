@@ -1321,7 +1321,7 @@ exports.getOrderDetails = async (req, res) => {
 
       // Global orders carry no platform fee
       const platformFee = isGlobalOrderRow
-        ? 0
+        ? Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2))
         : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
 
       const itemsWithDetails = await Promise.all(
