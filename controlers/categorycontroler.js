@@ -56,16 +56,30 @@ const determineStoreScope = async (req) => {
       
       const globalStoreIds = globalStores.map(s => s._id.toString());
       
-      // Get categories from global stores
-      const globalProducts = await Products.find({
+      // Get product IDs that have stock in global stores
+      const stockInGlobalStores = await Stock.find({
         storeId: { $in: globalStoreIds }
+      }).lean();
+      
+      const productIdsInStock = new Set();
+      stockInGlobalStores.forEach(stockDoc => {
+        (stockDoc.stock || []).forEach(item => {
+          if (item.productId) {
+            productIdsInStock.add(item.productId);
+          }
+        });
+      });
+      
+      // Get products and their categories
+      const globalProducts = await Products.find({
+        _id: { $in: Array.from(productIdsInStock) }
       }).lean();
       
       const categoryIds = new Set();
       globalProducts.forEach(p => {
-        if (p.category?._id) categoryIds.add(p.category._id.toString());
-        if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
-        if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+        if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
+        if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
+        if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
       });
       
       return {
@@ -86,16 +100,30 @@ const determineStoreScope = async (req) => {
     if (activeLocalStores.length > 0) {
       const localStoreIds = activeLocalStores.map(s => s._id.toString());
       
-      // Get categories from local stores
-      const localProducts = await Products.find({
+      // Get product IDs that have stock in local stores
+      const stockInLocalStores = await Stock.find({
         storeId: { $in: localStoreIds }
+      }).lean();
+      
+      const productIdsInStock = new Set();
+      stockInLocalStores.forEach(stockDoc => {
+        (stockDoc.stock || []).forEach(item => {
+          if (item.productId) {
+            productIdsInStock.add(item.productId);
+          }
+        });
+      });
+      
+      // Get products and their categories
+      const localProducts = await Products.find({
+        _id: { $in: Array.from(productIdsInStock) }
       }).lean();
       
       const categoryIds = new Set();
       localProducts.forEach(p => {
-        if (p.category?._id) categoryIds.add(p.category._id.toString());
-        if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
-        if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+        if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
+        if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
+        if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
       });
       
       return {
@@ -113,16 +141,30 @@ const determineStoreScope = async (req) => {
     
     const globalStoreIds = globalStores.map(s => s._id.toString());
     
-    // Get categories from global stores
-    const globalProducts = await Products.find({
+    // Get product IDs that have stock in global stores
+    const stockInGlobalStores = await Stock.find({
       storeId: { $in: globalStoreIds }
+    }).lean();
+    
+    const productIdsInStock = new Set();
+    stockInGlobalStores.forEach(stockDoc => {
+      (stockDoc.stock || []).forEach(item => {
+        if (item.productId) {
+          productIdsInStock.add(item.productId);
+        }
+      });
+    });
+    
+    // Get products and their categories
+    const globalProducts = await Products.find({
+      _id: { $in: Array.from(productIdsInStock) }
     }).lean();
     
     const categoryIds = new Set();
     globalProducts.forEach(p => {
-      if (p.category?._id) categoryIds.add(p.category._id.toString());
-      if (p.subCategory?._id) categoryIds.add(p.subCategory._id.toString());
-      if (p.subSubCategory?._id) categoryIds.add(p.subSubCategory._id.toString());
+      if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
+      if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
+      if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
     });
     
     return {
@@ -1160,9 +1202,9 @@ exports.getBrand = async (req, res) => {
         );
         
         productQuery.$or = [
-          { "category._id": { $in: categoryObjIds } },
-          { "subCategory._id": { $in: categoryObjIds } },
-          { "subSubCategory._id": { $in: categoryObjIds } },
+          { "category.0._id": { $in: categoryObjIds } },
+          { "subCategory.0._id": { $in: categoryObjIds } },
+          { "subSubCategory.0._id": { $in: categoryObjIds } },
         ];
       } else {
         // No categories in scope - return empty result
@@ -1303,9 +1345,9 @@ exports.getBrand = async (req, res) => {
       
       const productsInScope = await Products.find({
         $or: [
-          { "category._id": { $in: categoryObjIds } },
-          { "subCategory._id": { $in: categoryObjIds } },
-          { "subSubCategory._id": { $in: categoryObjIds } },
+          { "category.0._id": { $in: categoryObjIds } },
+          { "subCategory.0._id": { $in: categoryObjIds } },
+          { "subSubCategory.0._id": { $in: categoryObjIds } },
         ]
       }).select('brand_Name._id').lean();
       
