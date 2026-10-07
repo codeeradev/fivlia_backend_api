@@ -611,7 +611,7 @@ exports.placeOrder = async (req, res) => {
         deliveryCharges: deliveryChargeRaw,
         serviceScope: orderScope,
         deliveryDistanceKm,
-        platformFee: platformFeeAmounts,
+        platformFee: platformFeeAmount,
         deliveryBaseCharge,
         freeDeliveryApplied,
         freeDeliverySource,
