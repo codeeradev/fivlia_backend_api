@@ -359,7 +359,7 @@ exports.placeOrder = async (req, res) => {
 
     const itemsTotal = offerContext.cartDiscount.finalSubtotal;
     // Global (All India) orders are delivered by a third party: no platform fee
-    const platformFeeStored = isGlobalOrder ? 0 : chargesData.Platform_Fee;
+    const platformFeeStored = isGlobalOrder ? chargesData.Platform_Fee : chargesData.Platform_Fee;
     const platformFeeRate = (platformFeeStored || 0) / 100;
     const platformFeeAmount = itemsTotal * platformFeeRate;
 
