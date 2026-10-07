@@ -1027,14 +1027,35 @@ exports.getBrand = async (req, res) => {
       const b = await brand.findById(id).lean();
       if (!b) return res.status(404).json({ message: "Brand not found" });
 
+      // Global-only user: check if this brand is allowed
+      const globalScope = await resolveGlobalOnlyScope(req);
+      if (globalScope) {
+        const globalBrandIds = await getGlobalBrandIds(globalScope);
+        if (!globalBrandIds.includes(id)) {
+          return res.status(404).json({ message: "Brand not found" });
+        }
+      }
+
       // 🔥 Fetch only products of that brand
       const productsCollection = mongoose.connection.db.collection("products");
-      const totalProducts = await productsCollection.countDocuments({
+      
+      // Build product query with global scope filter if needed
+      const productQuery = {
         "brand_Name._id": new mongoose.Types.ObjectId(id),
-      });
+      };
+      
+      if (globalScope) {
+        productQuery.$or = [
+          { "category._id": { $in: globalScope.mainCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
+          { "subCategory._id": { $in: globalScope.allCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
+          { "subSubCategory._id": { $in: globalScope.allCategoryIds.map(cid => new mongoose.Types.ObjectId(cid)) } },
+        ];
+      }
+      
+      const totalProducts = await productsCollection.countDocuments(productQuery);
 
       const products = await productsCollection
-        .find({ "brand_Name._id": new mongoose.Types.ObjectId(id) })
+        .find(productQuery)
         .skip(skip)
         .limit(Number(limit))
         .toArray();
@@ -1051,9 +1072,16 @@ exports.getBrand = async (req, res) => {
       }
 
       // 🔥 Build query for only required stock entries
-      const stockDocs = await Stock.find({
+      const stockQuery = {
         "stock.productId": { $in: productVariantPairs.map((p) => p.productId) },
-      }).lean();
+      };
+      
+      // Apply global scope: only show stock from global stores
+      if (globalScope && globalScope.globalStoreIds && globalScope.globalStoreIds.length > 0) {
+        stockQuery.storeId = { $in: globalScope.globalStoreIds.map(sid => new mongoose.Types.ObjectId(sid)) };
+      }
+      
+      const stockDocs = await Stock.find(stockQuery).lean();
 
       const storeIds = [
         ...new Set(stockDocs.map((d) => d.storeId?.toString()).filter(Boolean)),
