@@ -34,6 +34,7 @@ const {
   resolveVariantSimple,
 } = require("../utils/ProductBulkUploadFunctions");
 const { filterProductsByRequestedType } = require("../utils/productTypeFilter");
+const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -1470,6 +1471,15 @@ exports.getFeatureProduct = async (req, res) => {
           }),
           inCart: { status: false, qty: 0, variantIds: [] },
         };
+
+        // ✅ Global store products: return is allowed only within the return
+        //    window (utils/returnPolicy.js). Zone/local products are untouched.
+        if (storeMap[String(bestVariant.storeId)]?.serviceScope === "global") {
+          enrichedProduct.returnProduct = {
+            ...(product.returnProduct || {}),
+            title: `${RETURN_WINDOW_DAYS} Days Return`,
+          };
+        }
 
         // ✅ Override variant prices
         product.variants.forEach((variant) => {
