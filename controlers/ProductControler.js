@@ -700,6 +700,14 @@ exports.getProduct = async (req, res) => {
         storeName: best ? best.storeName : null,
       };
 
+      // ✅ Global store product → 10 Days Return (zone products untouched)
+      if (best && storeMapById[String(best.storeId)]?.serviceScope === "global") {
+        finalProduct.returnProduct = {
+          ...(product.returnProduct || {}),
+          title: `${RETURN_WINDOW_DAYS} Days Return`,
+        };
+      }
+
       // ✅ Build inventory (zero if no variantOptions matched)
       finalProduct.inventory = product.variants.map((variant) => {
         const match = variantOptions.find(
@@ -961,6 +969,14 @@ exports.bestSelling = async (req, res) => {
         storeId: bestVariant.storeId,
         storeName: bestVariant.storeName,
       };
+
+      // ✅ Global store product → 10 Days Return (zone products untouched)
+      if (storeMap[String(bestVariant.storeId)]?.serviceScope === "global") {
+        enrichedProduct.returnProduct = {
+          ...(product.returnProduct || {}),
+          title: `${RETURN_WINDOW_DAYS} Days Return`,
+        };
+      }
 
       // Inventory mapping
       enrichedProduct.inventory = product.variants.map((variant) => {
@@ -1227,6 +1243,14 @@ exports.searchProduct = async (req, res) => {
       if (bestStore) {
         product.storeId = bestStore._id;
         product.storeName = bestStore.soldBy?.storeName || bestStore.storeName;
+
+        // ✅ Global store product → 10 Days Return (zone products untouched)
+        if (bestStore.serviceScope === "global") {
+          product.returnProduct = {
+            ...(product.returnProduct || {}),
+            title: `${RETURN_WINDOW_DAYS} Days Return`,
+          };
+        }
       } else {
         product.storeName = {};
       }
@@ -2301,6 +2325,7 @@ exports.getRelatedProducts = async (req, res) => {
       relProduct.inCart = { status: false, qty: 0, variantIds: [] };
       relProduct.soldBy = {};
       let hasStock = false;
+      let relStore = null;
       if (Array.isArray(relProduct.variants)) {
         for (const variant of relProduct.variants) {
           const key = `${relProduct._id}_${variant._id}`;
@@ -2330,6 +2355,7 @@ exports.getRelatedProducts = async (req, res) => {
             );
             if (store) {
               relProduct.soldBy = store.soldBy;
+              relStore = store;
             }
           }
         }
@@ -2338,6 +2364,12 @@ exports.getRelatedProducts = async (req, res) => {
       // ✅ If product had no stock → soldBy stays empty
       if (!hasStock) {
         relProduct.soldBy = {};
+      } else if (relStore?.serviceScope === "global") {
+        // ✅ Global store product → 10 Days Return (zone products untouched)
+        relProduct.returnProduct = {
+          ...(relProduct.returnProduct || {}),
+          title: `${RETURN_WINDOW_DAYS} Days Return`,
+        };
       }
     }
 
@@ -2848,6 +2880,17 @@ exports.getSingleProduct = async (req, res) => {
         };
       }),
     };
+
+    // ✅ Global store product → 10 Days Return (zone products untouched)
+    if (
+      bestOption &&
+      storeMap[String(bestOption.storeId)]?.serviceScope === "global"
+    ) {
+      enrichedProduct.returnProduct = {
+        ...(product.returnProduct || {}),
+        title: `${RETURN_WINDOW_DAYS} Days Return`,
+      };
+    }
 
     // ✅ Step 8: Cart status
     const cart = await Cart.findOne({ userId, productId: product._id }).lean();
