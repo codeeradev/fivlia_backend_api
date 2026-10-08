@@ -139,6 +139,7 @@ exports.requestReturn = async (req, res) => {
       note,
       images: uploaded.map((f) => `/${f.key}`),
       requestedAt: new Date(),
+      history: [{ status: "requested", by: "customer", note: reason, at: new Date() }],
       items: wanted.map(({ orderItem, qty }) => ({
         productId: orderItem.productId,
         varientId: orderItem.varientId,

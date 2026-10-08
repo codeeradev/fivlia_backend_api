@@ -1427,6 +1427,33 @@ exports.orderStatus = async (req, res) => {
 
     const orderDoc = await Order.findById(id).lean();
 
+    // Status Management scope check. Only blocks when the title is configured in
+    // Status Management AND none of its entries apply to this order's type
+    // (zone-based vs global). Unconfigured/built-in titles are never blocked.
+    if (orderDoc && status) {
+      const orderScopeType =
+        orderDoc.serviceScope === "global" ? "global" : "city";
+      const configured = await deliveryStatus
+        .find({ statusTitle: status })
+        .select("serviceScope")
+        .lean();
+      if (configured.length) {
+        const applies = configured.some(
+          (c) =>
+            !c.serviceScope ||
+            c.serviceScope === "both" ||
+            c.serviceScope === orderScopeType,
+        );
+        if (!applies) {
+          return res.status(400).json({
+            message: `Status "${status}" is not available for ${
+              orderScopeType === "global" ? "global" : "zone-based"
+            } orders`,
+          });
+        }
+      }
+    }
+
     // "Shipped" exists only for global orders (courier delivery)
     if (normalizedStatus === "shipped") {
       if (orderDoc && orderDoc.serviceScope !== "global") {
@@ -2086,7 +2113,12 @@ exports.orderStatus = async (req, res) => {
     }
 
     const user = await User.findById(updatedOrder.userId).lean();
-    const statusInfo = await Status.findOne({ statusTitle: status });
+    const statusInfo = await Status.findOne({
+      statusTitle: status,
+      $or: statusScopeMatch(
+        updatedOrder.serviceScope === "global" ? "global" : "city",
+      ),
+    });
 
     const store = await Store.findById(updatedOrder.storeId).lean();
     if (user?.fcmToken && user.fcmToken !== "null" && statusInfo?.statusTitle) {
@@ -2362,9 +2394,28 @@ exports.shipOrder = async (req, res) => {
   }
 };
 
+const STATUS_SCOPES = ["both", "city", "global"];
+// undefined/empty -> "both" (default); invalid -> null
+const normalizeStatusScope = (value) => {
+  if (value === undefined || value === null || value === "") return "both";
+  const v = String(value).trim().toLowerCase();
+  return STATUS_SCOPES.includes(v) ? v : null;
+};
+// Mongo match: statuses usable for an order scope. Legacy docs (no field) count as "both".
+const statusScopeMatch = (scope) => [
+  { serviceScope: "both" },
+  { serviceScope: scope },
+  { serviceScope: { $exists: false } },
+  { serviceScope: null },
+];
+
 exports.deliveryStatus = async (req, res) => {
   try {
     const { statusTitle, status } = req.body;
+    const serviceScope = normalizeStatusScope(req.body.serviceScope);
+    if (!serviceScope) {
+      return res.status(400).json({ message: "Invalid serviceScope" });
+    }
 
     const lastStatus = await deliveryStatus.findOne().sort({ statusCode: -1 });
 
@@ -2379,6 +2430,7 @@ exports.deliveryStatus = async (req, res) => {
       statusTitle,
       status,
       image,
+      serviceScope,
     });
     return res.status(200).json({ message: "New Status Created", newStatus });
   } catch (error) {
@@ -2393,14 +2445,27 @@ exports.updatedeliveryStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { statusCode, statusTitle, status } = req.body;
+    const update = {};
+    if (statusCode !== undefined) update.statusCode = statusCode;
+    if (statusTitle !== undefined) update.statusTitle = statusTitle;
+    if (status !== undefined) update.status = status;
+    if (req.body.serviceScope !== undefined) {
+      const serviceScope = normalizeStatusScope(req.body.serviceScope);
+      if (!serviceScope) {
+        return res.status(400).json({ message: "Invalid serviceScope" });
+      }
+      update.serviceScope = serviceScope;
+    }
+    // Only replace the image when a new one is uploaded (a toggle must not wipe it)
     const rawImagePath = req.files?.image?.[0]?.key || "";
-    const image = rawImagePath ? `/${rawImagePath}` : "";
-    const newStatus = await deliveryStatus.findByIdAndUpdate(id, {
-      statusCode,
-      statusTitle,
-      image,
-      status,
+    if (rawImagePath) update.image = `/${rawImagePath}`;
+
+    const newStatus = await deliveryStatus.findByIdAndUpdate(id, update, {
+      new: true,
     });
+    if (!newStatus) {
+      return res.status(404).json({ message: "Status not found" });
+    }
     return res.status(200).json({ message: "Status Updated", newStatus });
   } catch (error) {
     console.error("Get orders error:", error.message);
@@ -2412,7 +2477,14 @@ exports.updatedeliveryStatus = async (req, res) => {
 
 exports.getdeliveryStatus = async (req, res) => {
   try {
-    const Status = await deliveryStatus.find();
+    // Optional ?scope=city|global -> only statuses usable for that order type.
+    // No param -> everything (admin management page, existing clients).
+    const scope = String(req.query.scope || "").trim().toLowerCase();
+    const filter = {};
+    if (scope === "city" || scope === "global") {
+      filter.$or = statusScopeMatch(scope);
+    }
+    const Status = await deliveryStatus.find(filter);
     return res.status(200).json({ message: "Delivery Status", Status });
   } catch (error) {
     console.error("Get orders error:", error.message);

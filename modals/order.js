@@ -107,6 +107,23 @@ const orderSchema = new mongoose.Schema(
             quantity: Number,
           },
         ],
+        // ---- set by admin / store while processing the return ----
+        rejectReason: String,
+        pickup: { courierName: String, trackingId: String, pickedAt: Date },
+        refund: {
+          amount: Number,
+          reference: String, // gateway refund id / UTR / note
+          refundedAt: Date,
+        },
+        // every status change, oldest first
+        history: [
+          {
+            status: String,
+            by: String, // "admin" | "store" | "customer"
+            note: String,
+            at: { type: Date, default: Date.now },
+          },
+        ],
       },
     ],
   },

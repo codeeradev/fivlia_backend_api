@@ -5,5 +5,6 @@ const deliveryStatusSchema = new mongoose.Schema({
    image:String,
    statusTitle:String,
    status:Boolean,
+   serviceScope:{type:String,enum:['both','city','global'],default:'both'},
 },{timestamps:true})
 module.exports=mongoose.model('deliveryStatus',deliveryStatusSchema)
