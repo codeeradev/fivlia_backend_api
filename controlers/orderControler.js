@@ -1469,7 +1469,49 @@ exports.orderStatus = async (req, res) => {
           message: "Only global orders can be marked as Shipped",
         });
       }
+      // Global orders need courier + tracking id so the customer can track
+      // them: ship via PUT /seller/order/ship/:orderId.
+      if (orderDoc && !orderDoc.shipping?.trackingId) {
+        return res.status(400).json({
+          message:
+            "Select a shipping platform and add the tracking ID to ship this order",
+          requiresShippingDetails: true,
+        });
+      }
       updateData.orderStatus = "Shipped";
+    }
+
+    // Global order at "In Processing": optionally store the chosen courier.
+    // The tracking id is added later, when the order is marked Shipped.
+    const courierPlatformIn = String(req.body?.platform || "").trim();
+    const courierNameIn = String(req.body?.courierName || "").trim();
+    if (
+      (courierPlatformIn || courierNameIn) &&
+      orderDoc?.serviceScope === "global" &&
+      normalizedStatus !== "shipped" &&
+      normalizedStatus !== "delivered"
+    ) {
+      let courierName = courierNameIn;
+      if (courierPlatformIn) {
+        const courierSettings = await SettingAdmin.findOne()
+          .select("shippingPlatforms")
+          .lean();
+        const platform = findShippingPlatform(
+          courierSettings?.shippingPlatforms,
+          courierPlatformIn,
+        );
+        if (!platform) {
+          return res.status(400).json({
+            message: `Shipping platform "${courierPlatformIn}" is not available`,
+          });
+        }
+        updateData["shipping.platform"] = platform.name;
+        courierName = courierName || platform.name;
+      } else {
+        // free-text courier: clear any previously chosen platform
+        updateData["shipping.platform"] = "";
+      }
+      updateData["shipping.courierName"] = courierName;
     }
 
     if (driverId) {
@@ -2265,7 +2307,16 @@ exports.shipOrder = async (req, res) => {
     }
 
     const currentStatus = normalizeOrderStatus(order.orderStatus);
-    if (!["accepted", "ready", "ready to pickup"].includes(currentStatus)) {
+    if (
+      ![
+        "accepted",
+        "in processing",
+        "inprocessing",
+        "processing",
+        "ready",
+        "ready to pickup",
+      ].includes(currentStatus)
+    ) {
       return res.status(400).json({
         status: false,
         message: "Order must be accepted before it can be shipped",
