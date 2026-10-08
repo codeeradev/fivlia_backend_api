@@ -8,8 +8,9 @@ const Store = require("../modals/store");
 const haversine = require("haversine-distance");
 const mongoose = require("mongoose");
 const {
-  buildCartWarning,
   hasZoneToGlobalCartConflict,
+  isCartClearConfirmed,
+  cartWarningBody,
 } = require("../utils/cartAddressWarning");
 const { Cart } = require("../modals/cart");
 
@@ -325,6 +326,20 @@ exports.updateLocation = async (req, res) => {
         .json({ message: "Location updated successfully!" });
     }
 
+    // cart from a local store + location outside every zone: ask first,
+    // change nothing until the app re-sends with confirmCartClear=true
+    const cartConflict = await hasZoneToGlobalCartConflict(
+      id,
+      latitude,
+      longitude,
+    );
+    if (cartConflict && !isCartClearConfirmed(req)) {
+      return res.status(200).json({
+        message: cartWarningBody().message,
+        cartWarning: cartWarningBody(),
+      });
+    }
+
     const updatedUser = await User.findByIdAndUpdate(
       id,
       {
@@ -372,9 +387,12 @@ exports.updateLocation = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    if (cartConflict) await Cart.deleteMany({ userId: id });
+
     return res.status(200).json({
       message: "Location updated successfully!",
       location: updatedUser.location,
+      cartWarning: { show: false },
     });
   } catch (error) {
     console.error("❌ Location update error:", error);
@@ -582,6 +600,21 @@ exports.addAddress = async (req, res) => {
       });
     }
 
+    // cart from a local store + address outside every zone: ask the user first.
+    // Nothing is saved until the app re-sends with confirmCartClear=true.
+    const cartConflict = await hasZoneToGlobalCartConflict(
+      user._id,
+      latitude,
+      longitude,
+    );
+    if (cartConflict && !isCartClearConfirmed(req)) {
+      return res.status(200).json({
+        status: false,
+        message: cartWarningBody().message,
+        cartWarning: cartWarningBody(),
+      });
+    }
+
     const newAddress = await Address.create({
       userId: user._id,
       fullName,
@@ -603,15 +636,15 @@ exports.addAddress = async (req, res) => {
     // address saved -> move the user's saved location to this address
     await syncUserLocationFromAddress(user._id, latitude, longitude);
 
-    // cart built in a zone but address is now outside every zone -> app shows popup
-    const cartWarning = await buildCartWarning(user._id, latitude, longitude);
+    // user confirmed the popup -> empty the cart
+    if (cartConflict) await Cart.deleteMany({ userId: user._id });
 
     return res.status(200).json({
       status: true,
       message: "Address added successfully",
       serviceMode: serviceMode || "local",
       newAddress,
-      cartWarning,
+      cartWarning: { show: false },
     });
   } catch (error) {
     console.error("❌ Error adding address:", error);
@@ -753,6 +786,29 @@ exports.setDefault = async (req, res) => {
     const { id: userId } = req.user; // Get user ID from auth middleware
     const { addressId } = req.body;
 
+    // cart from a local store + selected address outside every zone: ask first,
+    // change nothing until the app re-sends with confirmCartClear=true
+    let cartConflict = false;
+    try {
+      const target = await Address.findById(addressId).lean();
+      if (target) {
+        cartConflict = await hasZoneToGlobalCartConflict(
+          userId,
+          target.latitude,
+          target.longitude,
+        );
+      }
+    } catch (e) {
+      cartConflict = false;
+    }
+    if (cartConflict && !isCartClearConfirmed(req)) {
+      return res.status(200).json({
+        status: false,
+        message: cartWarningBody().message,
+        cartWarning: cartWarningBody(),
+      });
+    }
+
     await Address.updateMany({ userId }, { $set: { default: false } });
 
     const setDefault = await Address.findByIdAndUpdate(
@@ -774,17 +830,13 @@ exports.setDefault = async (req, res) => {
       setDefault.longitude,
     );
 
-    const cartWarning = await buildCartWarning(
-      userId,
-      setDefault.latitude,
-      setDefault.longitude,
-    );
+    if (cartConflict) await Cart.deleteMany({ userId });
 
     res.status(200).json({
       status: true,
       message: "Default address updated",
       address: setDefault,
-      cartWarning,
+      cartWarning: { show: false },
     });
   } catch (error) {
     console.error("Error setting default address:", error);

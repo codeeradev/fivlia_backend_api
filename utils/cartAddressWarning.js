@@ -65,7 +65,21 @@ const buildCartWarning = async (userId, latitude, longitude) => {
     : { show: false };
 };
 
+// App re-sends the same request with confirmCartClear=true after the user taps OK
+const isCartClearConfirmed = (req) => {
+  const v = req?.body?.confirmCartClear;
+  return v === true || v === "true";
+};
+
+const cartWarningBody = () => ({
+  show: true,
+  type: "zone_to_global",
+  message: CART_ADDRESS_WARNING_MESSAGE,
+});
+
 module.exports = {
+  isCartClearConfirmed,
+  cartWarningBody,
   hasZoneToGlobalCartConflict,
   buildCartWarning,
   CART_ADDRESS_WARNING_MESSAGE,
