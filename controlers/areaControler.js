@@ -7,6 +7,11 @@ const StoreStock = require("../modals/StoreStock");
 const Store = require("../modals/store");
 const haversine = require("haversine-distance");
 const mongoose = require("mongoose");
+const {
+  buildCartWarning,
+  hasZoneToGlobalCartConflict,
+} = require("../utils/cartAddressWarning");
+const { Cart } = require("../modals/cart");
 
 const toPositiveNumber = (value) => {
   if (value === undefined || value === null || value === "") return null;
@@ -598,11 +603,15 @@ exports.addAddress = async (req, res) => {
     // address saved -> move the user's saved location to this address
     await syncUserLocationFromAddress(user._id, latitude, longitude);
 
+    // cart built in a zone but address is now outside every zone -> app shows popup
+    const cartWarning = await buildCartWarning(user._id, latitude, longitude);
+
     return res.status(200).json({
       status: true,
       message: "Address added successfully",
       serviceMode: serviceMode || "local",
       newAddress,
+      cartWarning,
     });
   } catch (error) {
     console.error("❌ Error adding address:", error);
@@ -765,13 +774,56 @@ exports.setDefault = async (req, res) => {
       setDefault.longitude,
     );
 
+    const cartWarning = await buildCartWarning(
+      userId,
+      setDefault.latitude,
+      setDefault.longitude,
+    );
+
     res.status(200).json({
       status: true,
       message: "Default address updated",
       address: setDefault,
+      cartWarning,
     });
   } catch (error) {
     console.error("Error setting default address:", error);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Called by the app when the user taps OK on the cart warning popup.
+// Re-checks the conflict against the user's current location before emptying the
+// cart, so it can never wipe a cart that is still valid.
+exports.clearCartOnAddressChange = async (req, res) => {
+  try {
+    const { id: userId } = req.user;
+    const user = await User.findById(userId).select("location").lean();
+    if (!user) {
+      return res.status(404).json({ status: false, message: "User not found" });
+    }
+
+    const conflict = await hasZoneToGlobalCartConflict(
+      userId,
+      user.location?.latitude,
+      user.location?.longitude,
+    );
+    if (!conflict) {
+      return res.status(200).json({
+        status: true,
+        cleared: false,
+        message: "Cart is deliverable to your address, nothing was removed.",
+      });
+    }
+
+    await Cart.deleteMany({ userId });
+    return res.status(200).json({
+      status: true,
+      cleared: true,
+      message: "Cart cleared",
+    });
+  } catch (error) {
+    console.error("clearCartOnAddressChange error:", error);
+    return res.status(500).json({ status: false, message: "Server error" });
   }
 };

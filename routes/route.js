@@ -306,6 +306,7 @@ const {
   EditAddress,
   deleteAddress,
   setDefault,
+  clearCartOnAddressChange,
 } = require("../controlers/areaControler");
 
 const { getPlaceSuggestions } = require("../utils/olaAutocomplete.js");
@@ -559,6 +560,7 @@ router.post("/addUser", upload, addUser);
 router.patch("/edit/:id", upload, update);
 router.patch("/updateAt/:id", updateAt);
 router.put("/setDefault", verifyToken, setDefault);
+router.delete("/clearCartOnAddressChange", verifyToken, clearCartOnAddressChange);
 router.put("/updateCityStatus/:id", updateCityStatus);
 router.patch("/admin/banner/:id/status", upload, updateBannerStatus);
 router.put("/updateZoneStatus/:id", updateZoneStatus);
