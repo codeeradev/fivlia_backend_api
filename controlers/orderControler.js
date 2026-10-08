@@ -33,7 +33,10 @@ const {
   findShippingPlatform,
   buildTrackingUrl,
 } = require("../utils/shippingPlatforms");
-const { getReturnEligibility } = require("../utils/returnPolicy");
+const {
+  getReturnEligibility,
+  getReturnDisplayStatus,
+} = require("../utils/returnPolicy");
 const {
   isGlobalStore,
   getOrderScope,
@@ -1345,11 +1348,16 @@ exports.getOrderDetails = async (req, res) => {
           };
         }),
       );
+      const returnState = getReturnDisplayStatus(order);
       // 4. Push combined data
       results.push({
         id: order._id,
         orderId: order.orderId,
         orderStatus: order.orderStatus,
+        // Mobile: show displayStatus (e.g. "Returned") instead of orderStatus
+        displayStatus: returnState.displayStatus,
+        returnStatus: returnState.returnStatus,
+        isPartialReturn: returnState.isPartialReturn,
         serviceScope: order.serviceScope || "city",
         totalPrice: order.totalPrice,
         cashOnDelivery: order.cashOnDelivery,

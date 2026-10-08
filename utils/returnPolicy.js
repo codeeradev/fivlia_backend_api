@@ -89,7 +89,41 @@ const getReturnEligibility = (order, now = new Date()) => {
   return { ...withWindow, canRequestReturn: true };
 };
 
+// Return flow never changes order.orderStatus (it stays "Delivered"), so the app
+// needs a derived label. Rejected requests are ignored (order is still delivered).
+const RETURN_STATUS_LABELS = {
+  requested: "Return Requested",
+  approved: "Return Approved",
+  picked: "Return Picked Up",
+  refunded: "Returned",
+};
+
+const getReturnDisplayStatus = (order) => {
+  const base = String(order?.orderStatus || "");
+  const all = order?.returnRequests || [];
+  const active = all.filter((r) => r?.status && r.status !== "rejected");
+  const none = {
+    displayStatus: base,
+    returnStatus: all.length ? "rejected" : "",
+    isPartialReturn: false,
+  };
+  if (!active.length || base.trim().toLowerCase() !== "delivered") return none;
+
+  // latest request wins (requestedAt, else array order)
+  const latest = active.reduce((a, b) =>
+    new Date(b.requestedAt || 0) >= new Date(a.requestedAt || 0) ? b : a,
+  );
+  const isPartialReturn = [...remainingQtyMap(order).values()].some((q) => q > 0);
+  const displayStatus =
+    latest.status === "refunded" && isPartialReturn
+      ? "Partially Returned"
+      : RETURN_STATUS_LABELS[latest.status] || base;
+
+  return { displayStatus, returnStatus: latest.status, isPartialReturn };
+};
+
 module.exports = {
+  getReturnDisplayStatus,
   RETURN_WINDOW_DAYS,
   RETURN_ALLOWED_SCOPES,
   RETURN_MAX_IMAGES,
