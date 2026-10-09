@@ -700,13 +700,23 @@ exports.getProduct = async (req, res) => {
         storeName: best ? best.storeName : null,
       };
 
-      // ✅ Global store product → 10 Days Return (zone products untouched)
-      if (best && storeMapById[String(best.storeId)]?.serviceScope === "global") {
-        finalProduct.returnProduct = {
-          ...(product.returnProduct || {}),
-          title: `${RETURN_WINDOW_DAYS} Days Return`,
-        };
-      }
+      // ✅ Return label is decided by the store that serves the product,
+      //    NOT by the value saved on the product:
+      //      global store          → "10 Days Return"
+      //      zone / local store    → "No Return"
+      //    No stock anywhere (no store) → follow the user's mode:
+      //      user has an open zone store → "No Return", otherwise → "10 Days Return"
+      const servingStore = best ? storeMapById[String(best.storeId)] : null;
+      const isGlobalProduct = servingStore
+        ? servingStore.serviceScope === "global"
+        : !stores?.hasLocalStores;
+
+      finalProduct.returnProduct = isGlobalProduct
+        ? {
+            ...(product.returnProduct || {}),
+            title: `${RETURN_WINDOW_DAYS} Days Return`,
+          }
+        : { title: "No Return" };
 
       // ✅ Build inventory (zero if no variantOptions matched)
       finalProduct.inventory = product.variants.map((variant) => {
