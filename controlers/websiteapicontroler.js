@@ -40,6 +40,7 @@ const {
 } = require("../utils/storeOffer");
 const { Order, TempOrder } = require("../modals/order");
 const foodTypeModel = require("../modals/foodType");
+const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
 exports.forwebbestselling = async (req, res) => {
   try {
@@ -1690,6 +1691,13 @@ exports.getAllSellerProducts = async (req, res) => {
       a.productName.trim().localeCompare(b.productName.trim()),
     );
 
+    // ✅ Return label is decided by the seller store, NOT by the value saved on the product:
+    //    global store → "10 Days Return", zone / local ("city") store → "No Return"
+    const sellerScopeDoc = await Store.findById(id)
+      .select("serviceScope")
+      .lean();
+    const isGlobalSeller = sellerScopeDoc?.serviceScope === "global";
+
     const productsWithStock = await Promise.all(
       sellerProducts.map(async (prod) => {
         // Find all stock entries for this product
@@ -1765,6 +1773,12 @@ exports.getAllSellerProducts = async (req, res) => {
           status: productStockEntries.some((s) => s.status) ?? false,
           storeId: seller._id,
           storeName: seller.storeName,
+          returnProduct: isGlobalSeller
+            ? {
+                ...(prod.returnProduct || {}),
+                title: `${RETURN_WINDOW_DAYS} Days Return`,
+              }
+            : { title: "No Return" },
         };
       }),
     );
