@@ -26,6 +26,7 @@ const { buildOfferPreviewText } = require("../utils/storeOffer");
 const {
   resolveGlobalOnlyScope,
   getGlobalBrandIds,
+  resolveUser,
 } = require("../utils/locationCategories");
 const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
@@ -35,13 +36,17 @@ const determineStoreScope = async (req) => {
     // Get user location
     let userLat, userLng;
     
-    // Check for lat/lng in query params first
-    if (req.query.lat && req.query.lng) {
-      userLat = parseFloat(req.query.lat);
-      userLng = parseFloat(req.query.lng);
-    } else if (req.user) {
-      // Fallback to user's saved location
-      const user = await User.findById(req.user).lean();
+    // Check for lat/lng in query params first (lat/lng or latitude/longitude)
+    const qLat = parseFloat(req.query.lat ?? req.query.latitude);
+    const qLng = parseFloat(req.query.lng ?? req.query.longitude);
+    if (!isNaN(qLat) && !isNaN(qLng)) {
+      userLat = qLat;
+      userLng = qLng;
+    } else {
+      // Fallback to the user's saved location.
+      // /getBrand has no verifyToken, so req.user is never set here:
+      // resolveUser() decodes the Bearer token itself (same as getMainCategory).
+      const user = await resolveUser(req);
       if (user?.location?.latitude && user?.location?.longitude) {
         userLat = user.location.latitude;
         userLng = user.location.longitude;
@@ -87,8 +92,11 @@ const determineStoreScope = async (req) => {
     // Check for local active stores
     const storeResult = await getStoresWithinRadius(userLat, userLng);
     
+    // matchedStores = zone stores + ALL open global stores (global stores are
+    // always eligible). "Local" must mean zone stores only - otherwise a global
+    // store's stock leaks into the zone user's list and gets "10 Days Return".
     const activeLocalStores = (storeResult?.matchedStores || []).filter(
-      store => store.status === true
+      store => store.status === true && store.serviceScope !== 'global'
     );
 
     // If active local stores found, use local scope
@@ -1327,18 +1335,20 @@ exports.getBrand = async (req, res) => {
         finalProducts = productsWithStock;
       }
 
-      // ✅ Global store product → 10 Days Return (zone products untouched)
+      // ✅ Return label is decided by the store, NOT by the value saved on the product:
+      //    global store product → "10 Days Return"
+      //    zone / local store product → "No Return"
       finalProducts.forEach((product) => {
         const isGlobalProduct =
           storeScope.scopeType === "global" ||
           storeScopeMap[String(product.storeId)] === "global";
 
-        if (isGlobalProduct) {
-          product.returnProduct = {
-            ...(product.returnProduct || {}),
-            title: `${RETURN_WINDOW_DAYS} Days Return`,
-          };
-        }
+        product.returnProduct = isGlobalProduct
+          ? {
+              ...(product.returnProduct || {}),
+              title: `${RETURN_WINDOW_DAYS} Days Return`,
+            }
+          : { title: "No Return" };
       });
 
       return res.json({

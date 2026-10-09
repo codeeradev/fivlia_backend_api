@@ -116,4 +116,4 @@ async function getGlobalBrandIds(scope) {
   return brandIds.map(String);
 }
 
-module.exports = { resolveGlobalOnlyScope, getGlobalBrandIds };
+module.exports = { resolveGlobalOnlyScope, getGlobalBrandIds, resolveUser };
