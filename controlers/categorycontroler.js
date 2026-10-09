@@ -27,6 +27,7 @@ const {
   resolveGlobalOnlyScope,
   getGlobalBrandIds,
 } = require("../utils/locationCategories");
+const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
 // Helper function to determine store scope (local vs global)
 const determineStoreScope = async (req) => {
@@ -1237,12 +1238,14 @@ exports.getBrand = async (req, res) => {
 
       const stores = await Store.find(
         { _id: { $in: storeIds } },
-        { storeName: 1 },
+        { storeName: 1, serviceScope: 1 },
       ).lean();
 
       const storeMap = {};
+      const storeScopeMap = {};
       stores.forEach((s) => {
         storeMap[s._id.toString()] = s.storeName;
+        storeScopeMap[s._id.toString()] = s.serviceScope;
       });
 
       // Build stockMap
@@ -1323,6 +1326,20 @@ exports.getBrand = async (req, res) => {
         });
         finalProducts = productsWithStock;
       }
+
+      // ✅ Global store product → 10 Days Return (zone products untouched)
+      finalProducts.forEach((product) => {
+        const isGlobalProduct =
+          storeScope.scopeType === "global" ||
+          storeScopeMap[String(product.storeId)] === "global";
+
+        if (isGlobalProduct) {
+          product.returnProduct = {
+            ...(product.returnProduct || {}),
+            title: `${RETURN_WINDOW_DAYS} Days Return`,
+          };
+        }
+      });
 
       return res.json({
         ...b,
