@@ -1592,9 +1592,17 @@ exports.getAllSellerProducts = async (req, res) => {
     // 🔥 FETCH & VALIDATE ACTIVE OFFER
     let activeOffer = await getActiveStoreOffer(id);
 
+    // Global (All India) store → also list products that are out of stock.
+    //    Zone / local ("city") store → unchanged: only products with stock.
+    //    Same value also decides the return label further below.
+    const sellerScopeDoc = await Store.findById(id)
+      .select("serviceScope")
+      .lean();
+    const isGlobalSeller = sellerScopeDoc?.serviceScope === "global";
+
     const stockEntries = stockData
       .flatMap((doc) => doc.stock || [])
-      .filter((s) => s.quantity > 0);
+      .filter((s) => isGlobalSeller || s.quantity > 0);
 
     if (!stockData || stockData.length === 0) {
       return res
@@ -1693,11 +1701,7 @@ exports.getAllSellerProducts = async (req, res) => {
 
     // ✅ Return label is decided by the seller store, NOT by the value saved on the product:
     //    global store → "10 Days Return", zone / local ("city") store → "No Return"
-    const sellerScopeDoc = await Store.findById(id)
-      .select("serviceScope")
-      .lean();
-    const isGlobalSeller = sellerScopeDoc?.serviceScope === "global";
-
+    //    (isGlobalSeller is read at the top of this function)
     const productsWithStock = await Promise.all(
       sellerProducts.map(async (prod) => {
         // Find all stock entries for this product

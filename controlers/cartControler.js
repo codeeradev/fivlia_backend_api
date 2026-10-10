@@ -858,6 +858,10 @@ exports.recommedProduct = async (req, res) => {
         { "category._id": { $in: allowedCategoryIds } },
       ],
     };
+    // Global (All India) seller → also recommend out-of-stock products.
+    //    Zone / local seller → unchanged: only products with stock > 0.
+    const isGlobalSeller = seller.serviceScope === "global";
+
     // 5️⃣ Aggregate recommended products with stock info
     const recommendedProducts = await Products.aggregate([
       { $match: matchQuery },
@@ -872,7 +876,10 @@ exports.recommedProduct = async (req, res) => {
               $match: {
                 $expr: {
                   $and: [
-                    { $gt: ["$stock.quantity", 0] }, // only include stock > 0
+                    // zone seller: only stock > 0 | global seller: any quantity
+                    isGlobalSeller
+                      ? { $gte: ["$stock.quantity", 0] }
+                      : { $gt: ["$stock.quantity", 0] },
                     {
                       $or: [
                         {
@@ -919,7 +926,8 @@ exports.recommedProduct = async (req, res) => {
           storeName: seller.storeName,
         },
       },
-      { $match: { maxQuantity: { $gt: 0 } } }, // filter products with no stock
+      // zone seller: drop products with no stock | global seller: keep them
+      ...(isGlobalSeller ? [] : [{ $match: { maxQuantity: { $gt: 0 } } }]),
       { $sort: { maxQuantity: -1 } },
       { $limit: 20 },
       { $project: { maxQuantity: 0 } }, // remove temporary field

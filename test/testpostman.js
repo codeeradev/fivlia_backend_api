@@ -55,3 +55,8 @@ email: globalstore@test.com
 pass: Test@1234
 
 --------------   PROBLEM   -------------------
+
+
+Now all set, i need to update the all products api is not show the products for the global store if 
+product are out of stock, 
+do not make change for local zone based store products, it is similar there is no chnage it is live cosde
