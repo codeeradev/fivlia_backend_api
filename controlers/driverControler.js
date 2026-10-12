@@ -298,6 +298,12 @@ exports.driverOrderStatus = async (req, res) => {
   try {
     const { orderStatus, orderId, otp } = req.body;
 
+    if (!orderId || !orderStatus) {
+      return res
+        .status(400)
+        .json({ message: "orderId and orderStatus are required" });
+    }
+
     let isDelivered = false;
 
     // ===> On The Way block
@@ -320,13 +326,34 @@ exports.driverOrderStatus = async (req, res) => {
 
       const message = `Dear Customer. Your Fivlia Delivery OTP code is ${generatedOtp}. Valid for 5 minutes. Do not share with others Fivlia - Delivery in Minutes!`;
 
-      await sendMessages(mobileNumber, message, "1707176060670565835");
-
+      // Save the OTP BEFORE sending the SMS. Before: if the SMS provider failed
+      // (local machine, IP not whitelisted, no active provider ...) sendMessages threw,
+      // the OTP was never stored, the order status was never updated and the API
+      // answered a blind 500 "An error occurred".
       await OtpModel.findOneAndUpdate(
         { mobileNumber, orderId },
         { otp: generatedOtp, expiresAt: Date.now() + 3 * 24 * 60 * 60 * 1000 },
         { upsert: true, new: true },
       );
+
+      let smsSent = false;
+      let smsError = null;
+      try {
+        const smsResult = await sendMessages(
+          mobileNumber,
+          message,
+          "1707176060670565835",
+        );
+        // sendMessages returns { success:false } (e.g. BulkSMSPlans code != 200) instead of throwing
+        smsSent = smsResult?.success !== false;
+        if (!smsSent) {
+          smsError = `SMS provider rejected the request: ${JSON.stringify(smsResult?.raw)}`;
+        }
+        console.log("[driverOrderStatus] SMS result:", JSON.stringify(smsResult));
+      } catch (smsErr) {
+        smsError = smsErr.message;
+        console.error("[driverOrderStatus] OTP SMS failed:", smsErr.message);
+      }
 
       const statusUpdate = await Order.findOneAndUpdate(
         { orderId },
@@ -352,7 +379,11 @@ exports.driverOrderStatus = async (req, res) => {
       // activeIntervals.set(orderId, intervalId);
 
       return res.status(200).json({
-        message: `OTP sent to ${mobileNumber}`,
+        message: smsSent
+          ? `OTP sent to ${mobileNumber}`
+          : `OTP generated but SMS could not be sent to ${mobileNumber}`,
+        smsSent,
+        ...(smsError && { smsError }),
         otp: generatedOtp,
         isDelivered,
         statusUpdate,
@@ -370,7 +401,6 @@ exports.driverOrderStatus = async (req, res) => {
       } else {
         console.log(`Processing delivery logic for order ${orderId}...`);
         isDelivered = true;
-        let feeInvoiceId = await FeeInvoiceId(true);
         const otpRecord = await OtpModel.findOne({ orderId, otp });
         if (!otpRecord) {
           return res.status(400).json({ message: "Invalid OTP" });
@@ -378,13 +408,16 @@ exports.driverOrderStatus = async (req, res) => {
         if (otpRecord.expiresAt < Date.now()) {
           return res.status(400).json({ message: "OTP expired" });
         }
+        // Generate the invoice number only AFTER the OTP is valid. Before, every wrong /
+        // expired OTP attempt consumed a fee-invoice number (gaps in the sequence).
+        let feeInvoiceId = await FeeInvoiceId(true);
 
         const order = await Order.findOne({ orderId })
           .populate("userId")
           .lean();
-        const user = order.userId;
 
         if (!order) return res.status(404).json({ message: "Order not found" });
+        const user = order.userId;
 
         const storeBefore = await Store.findById(order.storeId).lean();
         const store = storeBefore; // just renaming for clarity
@@ -510,13 +543,15 @@ exports.driverOrderStatus = async (req, res) => {
           );
         }
 
-        await Transaction.create({
-          driverId: updatedDriver._id,
-          type: "credit",
-          amount: payout,
-          orderId: order._id,
-          description: `Payout for Order #${order.orderId}`,
-        });
+        if (updatedDriver) {
+          await Transaction.create({
+            driverId: updatedDriver._id,
+            type: "credit",
+            amount: payout,
+            orderId: order._id,
+            description: `Payout for Order #${order.orderId}`,
+          });
+        }
 
         const lastAmount = await admin_transaction
           .findById("68ea20d2c05a14a96c12788d")

@@ -811,7 +811,7 @@ exports.recommedProduct = async (req, res) => {
     let allowedCategoryIds = [];
     if (seller.sellerCategories?.length) {
       const sellerCategoryIds = seller.sellerCategories
-        .map((cat) => cat.categoryId.toString())
+        .map((cat) => cat.categoryId?.toString())
         .filter(Boolean);
 
       const filteredCartCategories = cartProducts
@@ -933,8 +933,41 @@ exports.recommedProduct = async (req, res) => {
       { $project: { maxQuantity: 0 } }, // remove temporary field
     ]);
 
+    // 6) PRICE FIX: addCart saves the STORE price (stock.price / stock.mrp), but this
+    //    API used to return the raw catalogue product, so variants[].sell_price was the
+    //    catalogue price -> the app showed a different price than the cart.
+    //    Same rule as addCart: stock price/mrp first, catalogue variant as fallback,
+    //    price rounded. (Same override the other product-listing APIs already do.)
+    const withStorePrice = recommendedProducts.map((product) => {
+      const inventory = Array.isArray(product.inventory) ? product.inventory : [];
+
+      const variants = (product.variants || []).map((variant) => {
+        const stockEntry = inventory.find(
+          (i) => i.variantId?.toString() === variant._id?.toString(),
+        );
+        if (!stockEntry) return variant;
+
+        // addCart falls back to the catalogue variant if stock price OR mrp is missing
+        const useStock = !!stockEntry.price && !!stockEntry.mrp;
+        const sell = useStock ? stockEntry.price : variant.sell_price;
+        return {
+          ...variant,
+          sell_price: sell == null ? variant.sell_price : Math.round(Number(sell)),
+          mrp: useStock ? stockEntry.mrp : variant.mrp,
+        };
+      });
+
+      // top-level product price follows the first variant (what the card shows)
+      const first = variants[0];
+      return {
+        ...product,
+        variants,
+        ...(first && { sell_price: first.sell_price, mrp: first.mrp }),
+      };
+    });
+
     const filteredRecommendedProducts = filterProductsByRequestedType(
-      recommendedProducts,
+      withStorePrice,
       req,
     );
 

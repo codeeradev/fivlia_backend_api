@@ -402,10 +402,10 @@ async function getBannersWithinRadius(userLat, userLng, banners = []) {
   ]);
   const nowInZoneTimezone = getNowInTimezone(zoneWindowConfig?.timezone);
 
-  return banners.filter((banner) => {
-    // Global banners are shown to every user, even outside all zones
-    if (banner.isGlobal === true) return true;
+  const globalBanners = banners.filter((banner) => banner.isGlobal === true);
 
+  const localBanners = banners.filter((banner) => {
+    if (banner.isGlobal === true) return false;
     if (!Array.isArray(banner.city)) return false;
 
     return banner.city.some((cityObj) => {
@@ -424,6 +424,11 @@ async function getBannersWithinRadius(userLat, userLng, banners = []) {
       return Boolean(validZone);
     });
   });
+
+  // Local and global (All India) banners must never be shown together:
+  // if any local banner matches the user's zone, show only local ones,
+  // otherwise fall back to the global (All India) banners.
+  return localBanners.length > 0 ? localBanners : globalBanners;
 }
 
 function findAvailableDriversNearUser(userLat, userLng, driverLat, driverLng) {
