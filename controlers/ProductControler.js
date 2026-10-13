@@ -658,7 +658,7 @@ exports.getProduct = async (req, res) => {
       if (!Array.isArray(product.variants) || !product.variants.length)
         continue;
 
-      const variantOptions = [];
+      let variantOptions = [];
 
       for (const variant of product.variants) {
         const productStocks =
@@ -682,6 +682,30 @@ exports.getProduct = async (req, res) => {
             quantity: stock.quantity,
           });
         }
+      }
+
+      // A global-store option is valid only when it has stock. This must happen
+      // before selecting the serving store; otherwise a cheaper global item
+      // with quantity 0 can be selected over an available option.
+      const hasGlobalOption = variantOptions.some(
+        (option) =>
+          storeMapById[option.storeId.toString()]?.serviceScope === "global",
+      );
+      variantOptions = variantOptions.filter((option) => {
+        const optionStore = storeMapById[option.storeId.toString()];
+        return (
+          optionStore?.serviceScope !== "global" || Number(option.quantity) > 0
+        );
+      });
+
+      // In a global-only area, products without an in-stock global variant
+      // must not be included at all. The same applies to products that only
+      // had out-of-stock global options in a mixed area.
+      if (
+        !variantOptions.length &&
+        (stores?.serviceMode === "global_only" || hasGlobalOption)
+      ) {
+        continue;
       }
 
       // ✅ Sort & select best option
