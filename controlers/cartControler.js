@@ -229,20 +229,28 @@ exports.addCart = async (req, res) => {
     let price = stockEntry?.price;
     let mrp = stockEntry?.mrp;
 
-    // Fallback to product.variants if price or mrp is missing
-    if (!price || !mrp) {
-      const matchedVariant = product.variants?.find(
-        (v) => v._id?.toString() === varientId?.toString(),
-      );
+    // Resolve each value independently. A missing stock MRP must not replace a
+    // valid store-specific price with the catalogue variant price.
+    const matchedVariant = product.variants?.find(
+      (v) => v._id?.toString() === varientId?.toString(),
+    );
+    const hasValidMoneyValue = (value) =>
+      value !== null &&
+      value !== undefined &&
+      value !== "" &&
+      Number.isFinite(Number(value));
 
-      if (matchedVariant) {
-        price = matchedVariant.sell_price;
-        mrp = matchedVariant.mrp;
-      }
+    if (!hasValidMoneyValue(price)) {
+      price = matchedVariant?.sell_price;
     }
 
-    // Final fallback to avoid undefined values (optional)
-    if (price == null || mrp == null) {
+    if (!hasValidMoneyValue(mrp)) {
+      mrp = matchedVariant?.mrp;
+    }
+
+    // Reject the item only when neither the store stock nor the catalogue
+    // variant can provide a valid price/MRP.
+    if (!hasValidMoneyValue(price) || !hasValidMoneyValue(mrp)) {
       return res.status(400).json({
         message: "Price/MRP could not be determined for the selected variant.",
       });
@@ -250,7 +258,7 @@ exports.addCart = async (req, res) => {
 
     const finalPrice = Math.round(Number(price));
 
-    if (finalPrice == null) {
+    if (!Number.isFinite(finalPrice)) {
       return res.status(400).json({
         message: "Price could not be determined for the selected variant.",
       });
