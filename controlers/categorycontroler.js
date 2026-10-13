@@ -1261,11 +1261,23 @@ exports.getBrand = async (req, res) => {
       for (const doc of stockDocs) {
         for (const item of doc.stock || []) {
           const key = `${item.productId}_${item.variantId}`;
-          stockMap[key] = {
+          const stockOption = {
             quantity: item.quantity,
             storeId: doc.storeId,
             storeName: storeMap[doc.storeId?.toString()] || "",
           };
+
+          // A global scope can include more than one store. Keep an in-stock
+          // option instead of allowing a later zero-stock entry to overwrite it.
+          const existingStock = stockMap[key];
+          if (
+            !existingStock ||
+            (storeScope.scopeType === "global" &&
+              Number(stockOption.quantity) > 0 &&
+              Number(existingStock.quantity) <= 0)
+          ) {
+            stockMap[key] = stockOption;
+          }
         }
       }
 
@@ -1319,20 +1331,21 @@ exports.getBrand = async (req, res) => {
           return false;
         });
       } else {
-        // GLOBAL: Show all products, stock doesn't matter
-        productsWithStock.forEach((product) => {
-          if (Array.isArray(product.inventory) && product.inventory.length > 0) {
-            const firstInv = product.inventory.find(
-              (i) => i.storeId && i.storeName,
-            );
-            product.storeId = firstInv ? firstInv.storeId : "";
-            product.storeName = firstInv ? firstInv.storeName : "";
-          } else {
-            product.storeId = "";
-            product.storeName = "";
-          }
+        // GLOBAL: Return only products with an in-stock global variant.
+        finalProducts = productsWithStock.filter((product) => {
+          const inStockInventory = product.inventory?.find(
+            (inventory) =>
+              inventory.storeId &&
+              inventory.storeName &&
+              Number(inventory.quantity) > 0,
+          );
+
+          if (!inStockInventory) return false;
+
+          product.storeId = inStockInventory.storeId;
+          product.storeName = inStockInventory.storeName;
+          return true;
         });
-        finalProducts = productsWithStock;
       }
 
       // ✅ Return label is decided by the store, NOT by the value saved on the product:

@@ -1400,6 +1400,9 @@ exports.getFeatureProduct = async (req, res) => {
     // ✅ Builds the featured product list for one group of stores
     const buildFeaturedProducts = async (allowedStores) => {
       const allowedStoreIds = allowedStores.map((store) => store._id.toString());
+      const isGlobalStoreGroup = allowedStores.every(
+        (store) => store.serviceScope === "global",
+      );
 
       // ✅ Collect all category IDs
       // (store.Category AND store.sellerCategories are both used)
@@ -1493,7 +1496,7 @@ exports.getFeatureProduct = async (req, res) => {
         if (!Array.isArray(product.variants) || !product.variants.length)
           continue;
 
-        const variantOptions = [];
+        let variantOptions = [];
 
         product.variants.forEach((variant) => {
           allowedStoreIds.forEach((storeId) => {
@@ -1517,6 +1520,14 @@ exports.getFeatureProduct = async (req, res) => {
             });
           });
         });
+
+        // Global featured products must have stock. Remove zero-quantity global
+        // options before choosing the store and omit the product if none remain.
+        if (isGlobalStoreGroup) {
+          variantOptions = variantOptions.filter(
+            (option) => Number(option.quantity) > 0,
+          );
+        }
 
         if (!variantOptions.length) continue;
 
