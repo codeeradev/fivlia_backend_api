@@ -753,7 +753,23 @@ exports.getProduct = async (req, res) => {
       enrichedProducts.push(finalProduct);
     }
 
-    enrichedProducts.sort((a, b) => {
+    // Global-store products must be purchasable before they are shown. In a
+    // global-only area, remove every product with no in-stock variant.
+    const visibleProducts = enrichedProducts.filter((product) => {
+      const hasInStockVariant = product.inventory?.some(
+        (item) => Number(item.quantity) > 0,
+      );
+      const servingStore = product.storeId
+        ? storeMapById[product.storeId.toString()]
+        : null;
+      const isGlobalProduct = servingStore?.serviceScope === "global";
+
+      return stores?.serviceMode === "global_only"
+        ? hasInStockVariant
+        : !isGlobalProduct || hasInStockVariant;
+    });
+
+    visibleProducts.sort((a, b) => {
       const aQty = a.inventory?.some((i) => i.quantity > 0) ? 1 : 0;
       const bQty = b.inventory?.some((i) => i.quantity > 0) ? 1 : 0;
       return bQty - aQty;
@@ -761,7 +777,7 @@ exports.getProduct = async (req, res) => {
 
     // ✅ Pagination
     const filteredProducts = filterProductsByRequestedType(
-      enrichedProducts,
+      visibleProducts,
       req,
     );
 
