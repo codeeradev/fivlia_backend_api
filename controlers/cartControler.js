@@ -866,9 +866,9 @@ exports.recommedProduct = async (req, res) => {
         { "category._id": { $in: allowedCategoryIds } },
       ],
     };
-    // Global (All India) seller → also recommend out-of-stock products.
-    //    Zone / local seller → unchanged: only products with stock > 0.
-    const isGlobalSeller = seller.serviceScope === "global";
+    // Only products with stock > 0 are recommended. This now applies to the
+    // Global (All India) seller too (out-of-stock global products are hidden);
+    // the zone / local seller behaviour is exactly the same as before.
 
     // 5️⃣ Aggregate recommended products with stock info
     const recommendedProducts = await Products.aggregate([
@@ -884,10 +884,8 @@ exports.recommedProduct = async (req, res) => {
               $match: {
                 $expr: {
                   $and: [
-                    // zone seller: only stock > 0 | global seller: any quantity
-                    isGlobalSeller
-                      ? { $gte: ["$stock.quantity", 0] }
-                      : { $gt: ["$stock.quantity", 0] },
+                    // only stock > 0 (zone / local and global sellers)
+                    { $gt: ["$stock.quantity", 0] },
                     {
                       $or: [
                         {
@@ -934,8 +932,8 @@ exports.recommedProduct = async (req, res) => {
           storeName: seller.storeName,
         },
       },
-      // zone seller: drop products with no stock | global seller: keep them
-      ...(isGlobalSeller ? [] : [{ $match: { maxQuantity: { $gt: 0 } } }]),
+      // drop products with no stock (zone / local and global sellers)
+      { $match: { maxQuantity: { $gt: 0 } } },
       { $sort: { maxQuantity: -1 } },
       { $limit: 20 },
       { $project: { maxQuantity: 0 } }, // remove temporary field
@@ -955,13 +953,19 @@ exports.recommedProduct = async (req, res) => {
         );
         if (!stockEntry) return variant;
 
-        // addCart falls back to the catalogue variant if stock price OR mrp is missing
-        const useStock = !!stockEntry.price && !!stockEntry.mrp;
-        const sell = useStock ? stockEntry.price : variant.sell_price;
+        // Same rule as addCart: price and MRP are resolved independently.
+        // A missing stock MRP must not replace a valid store price with the
+        // catalogue price (this caused cart ₹1750 vs recommended ₹1700).
+        const hasMoney = (v) =>
+          v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
+        const sell = hasMoney(stockEntry.price)
+          ? stockEntry.price
+          : variant.sell_price;
+        const mrp = hasMoney(stockEntry.mrp) ? stockEntry.mrp : variant.mrp;
         return {
           ...variant,
           sell_price: sell == null ? variant.sell_price : Math.round(Number(sell)),
-          mrp: useStock ? stockEntry.mrp : variant.mrp,
+          mrp,
         };
       });
 

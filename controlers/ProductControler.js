@@ -35,6 +35,12 @@ const {
 } = require("../utils/ProductBulkUploadFunctions");
 const { filterProductsByRequestedType } = require("../utils/productTypeFilter");
 const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
+const {
+  isInStock,
+  getGlobalStoreIdSet,
+  dropOutOfStockGlobalOptions,
+} = require("../utils/globalStock");
+const { isGlobalStore } = require("../utils/globalDelivery");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -937,9 +943,16 @@ exports.bestSelling = async (req, res) => {
     });
 
     // ✅ Only include products that have stock
+    // GLOBAL only: in a global-only area keep just the products that are in stock
     const stockProductIds = new Set(
       stockDocs.flatMap((doc) =>
-        (doc.stock || []).map((item) => item.productId.toString()),
+        (doc.stock || [])
+          .filter(
+            (item) =>
+              stores?.serviceMode !== "global_only" ||
+              isInStock(item.quantity),
+          )
+          .map((item) => item.productId.toString()),
       ),
     );
 
@@ -978,7 +991,7 @@ exports.bestSelling = async (req, res) => {
       if (!Array.isArray(product.variants) || !product.variants.length)
         continue;
 
-      const variantOptions = [];
+      let variantOptions = [];
 
       product.variants.forEach((variant) => {
         allowedStoreIds.forEach((storeId) => {
@@ -1002,6 +1015,9 @@ exports.bestSelling = async (req, res) => {
           });
         });
       });
+
+      // GLOBAL only: a global-store option is valid only when it has stock.
+      variantOptions = dropOutOfStockGlobalOptions(variantOptions, storeMap);
 
       if (!variantOptions.length) continue;
 
@@ -1262,6 +1278,17 @@ exports.searchProduct = async (req, res) => {
           const stockEntry = stockDetailMap[key];
           const store = storeMap[storeId];
 
+          // GLOBAL only: skip a global store that has no stock for this variant
+          if (
+            store &&
+            stockEntry &&
+            isGlobalStore(store) &&
+            !isInStock(stockEntry.quantity)
+          ) {
+            product._hasOutOfStockGlobalEntry = true;
+            return;
+          }
+
           if (store && stockEntry) {
             variant.sell_price = stockEntry.price ?? variant.sell_price ?? 0;
             variant.mrp = stockEntry.mrp ?? variant.mrp ?? 0;
@@ -1324,7 +1351,21 @@ exports.searchProduct = async (req, res) => {
       seller.averageRating = Number(avg.toFixed(1));
     });
 
-    const filteredProducts = filterProductsByRequestedType(products, req);
+    // GLOBAL only: hide a product that has no purchasable (in-stock) store
+    // when it belongs to the global system.
+    const visibleProducts = products.filter((product) => {
+      const hide =
+        !product.storeId &&
+        (stores?.serviceMode === "global_only" ||
+          product._hasOutOfStockGlobalEntry);
+      delete product._hasOutOfStockGlobalEntry;
+      return !hide;
+    });
+
+    const filteredProducts = filterProductsByRequestedType(
+      visibleProducts,
+      req,
+    );
 
     return res.status(200).json({
       message: "Search results fetched successfully.",
@@ -2315,9 +2356,31 @@ exports.getRelatedProducts = async (req, res) => {
       storeId: { $in: allowedStoreIds },
     }).lean();
     const stockMap = {};
+    // GLOBAL only: ids of global stores + products that have a global entry
+    const globalStoreIds = getGlobalStoreIdSet(allowedStores);
+    const globalInStockProductIds = new Set();
+    const globalAnyEntryProductIds = new Set();
     for (const doc of stockDocs) {
+      const isGlobalDoc = globalStoreIds.has(String(doc.storeId));
       for (const item of doc.stock || []) {
         const key = `${item.productId}_${item.variantId}`;
+        if (isGlobalDoc) {
+          globalAnyEntryProductIds.add(String(item.productId));
+          if (isInStock(item.quantity)) {
+            globalInStockProductIds.add(String(item.productId));
+          }
+          // Several global stores can hold the same variant: a later
+          // zero-stock entry must not overwrite an in-stock one.
+          const prev = stockMap[key];
+          if (
+            prev &&
+            globalStoreIds.has(String(prev.storeId)) &&
+            isInStock(prev.quantity) &&
+            !isInStock(item.quantity)
+          ) {
+            continue;
+          }
+        }
         stockMap[key] = {
           quantity: item.quantity || 0,
           price: item.price ?? null,
@@ -2347,6 +2410,15 @@ exports.getRelatedProducts = async (req, res) => {
     // ✅ Veg filter
     if (isVegMode) {
       query.isVeg = 1;
+    }
+
+    // GLOBAL only: in a global-only area, pick candidates only from products
+    // that are in stock in a global store.
+    if (stores?.serviceMode === "global_only") {
+      query._id = {
+        $ne: productId,
+        $in: [...globalInStockProductIds],
+      };
     }
 
     const candidates = await Products.find(query).limit(20).lean();
@@ -2422,6 +2494,17 @@ exports.getRelatedProducts = async (req, res) => {
         }
       }
 
+      // GLOBAL only: hide a product that has no stock when it belongs to the
+      // global system (global-only area, or it is listed by a global store).
+      // Local / zone products keep the old behaviour.
+      if (
+        !hasStock &&
+        (stores?.serviceMode === "global_only" ||
+          globalAnyEntryProductIds.has(String(relProduct._id)))
+      ) {
+        relProduct._hideOutOfStockGlobal = true;
+      }
+
       // ✅ If product had no stock → soldBy stays empty
       if (!hasStock) {
         relProduct.soldBy = {};
@@ -2434,8 +2517,12 @@ exports.getRelatedProducts = async (req, res) => {
       }
     }
 
+    const visibleRelatedProducts = relatedProducts.filter(
+      (p) => !p._hideOutOfStockGlobal,
+    );
+
     const filteredRelatedProducts = filterProductsByRequestedType(
-      relatedProducts,
+      visibleRelatedProducts,
       req,
     );
 
