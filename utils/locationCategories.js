@@ -66,16 +66,15 @@ async function resolveGlobalOnlyScope(req) {
     const result = await getStoresWithinRadius(lat, lng);
     const where = `${source} (${lat}, ${lng})`;
 
-    // insideZone = the point is covered by an active city zone (set by getStoresWithinRadius).
-    // Inside a zone -> normal behaviour, ALL categories. Outside every zone -> only the
-    // categories of the open global stores. (serviceMode alone is not enough: an in-zone user
-    // with no open local store also gets "global_only".)
-    const insideZone = result.insideZone ?? result.serviceMode !== "global_only";
-    if (insideZone) {
-      return debug(`${where}: inside a zone (serviceMode=${result.serviceMode}) -> all categories`);
-    }
+    // serviceMode comes from getStoresWithinRadius, which already drops closed stores:
+    //   "local" / "mixed" -> at least one local (zone) store is open -> ALL categories (old behaviour)
+    //   "global_only"     -> only the global store(s) are available. This covers BOTH
+    //                        (a) the user is outside every zone, and
+    //                        (b) the user is inside a zone but every local store is closed
+    //                            (e.g. at night) -> show only the global store's categories.
+    //   "none"            -> nothing is open -> filter skipped (old behaviour)
     if (result.serviceMode !== "global_only") {
-      return debug(`${where}: outside zone but no open global store (serviceMode=${result.serviceMode}) -> filter skipped`);
+      return debug(`${where}: serviceMode=${result.serviceMode} -> all categories / filter skipped`);
     }
 
     const globalStores = (result.matchedStores || []).filter(
@@ -89,7 +88,7 @@ async function resolveGlobalOnlyScope(req) {
     }
     ids.delete("");
 
-    req.globalScopeDebug = `${where}: global_only: ${globalStores.length} global store(s), ${ids.size} categor(ies)`;
+    req.globalScopeDebug = `${where}: global_only (insideZone=${result.insideZone}): ${globalStores.length} global store(s), ${ids.size} categor(ies)`;
     return {
       mainCategoryIds: [...ids],
       storeIds: globalStores.map((s) => String(s._id)),
