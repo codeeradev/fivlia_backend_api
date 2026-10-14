@@ -41,13 +41,21 @@ const getDeliveryEstimate = async (req, res) => {
         .json({ status: false, message: "User location not set" });
     }
 
-    const { zoneAvailable, storesOpen, matchedStores } =
+    const { zoneAvailable, storesOpen, matchedStores, serviceMode, insideZone } =
       await getStoresWithinRadius(currentLat, currentLong);
+
+    // Same serviceMode that resolveGlobalOnlyScope uses for the category filter:
+    //   "local" | "mixed" -> local store serves the user  -> deliveryMode "local"
+    //   "global_only"     -> only global store is open    -> deliveryMode "global"
+    //   "none"            -> nothing open                 -> deliveryMode "none"
+    const meta = { serviceMode, insideZone };
 
     if (!zoneAvailable) {
       return res.json({
         status: false,
         result: 0,
+        deliveryMode: "none",
+        ...meta,
         message: "Service zone not available",
       });
     }
@@ -56,6 +64,8 @@ const getDeliveryEstimate = async (req, res) => {
       return res.json({
         status: false,
         result: 1,
+        deliveryMode: "none",
+        ...meta,
         message: "All Store Is Closed",
       });
     }
@@ -76,10 +86,17 @@ const getDeliveryEstimate = async (req, res) => {
           status: true,
           result: 2,
           deliveryMode: "global",
+          ...meta,
           filtered: [buildGlobalEstimateEntry(globalStore, globalSettings)],
         });
       }
-      return res.json({ status: false, result: 0, filtered: [] });
+      return res.json({
+        status: false,
+        result: 0,
+        deliveryMode: "none",
+        ...meta,
+        filtered: [],
+      });
     }
 
     // Find nearest store using haversine
@@ -181,7 +198,13 @@ const getDeliveryEstimate = async (req, res) => {
       },
     ];
 
-    res.json({ status: true, result: 2, deliveryMode: "local", filtered });
+    res.json({
+      status: true,
+      result: 2,
+      deliveryMode: "local",
+      ...meta,
+      filtered,
+    });
   } catch (err) {
     console.error("💥 Delivery Error:", err);
     res
