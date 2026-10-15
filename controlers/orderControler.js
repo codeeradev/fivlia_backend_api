@@ -3236,17 +3236,38 @@ exports.markAllRead = async (req, res) => {
   }
 };
 
+// Temp orders = abandoned / failed payments. They only ever grow, so this list is
+// bounded: newest first, default 200, override with ?limit= (max 1000) and/or
+// ?days= (only orders created in the last N days). Response shape is unchanged.
+const TEMP_ORDERS_DEFAULT_LIMIT = 200;
+const TEMP_ORDERS_MAX_LIMIT = 1000;
+
 exports.getTempOrders = async (req, res) => {
   try {
-    const tempOrders = await TempOrder.find({
-      paymentStatus: { $ne: "Successful" },
-    })
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isNaN(parsedLimit)
+      ? TEMP_ORDERS_DEFAULT_LIMIT
+      : Math.min(Math.max(parsedLimit, 1), TEMP_ORDERS_MAX_LIMIT);
+
+    const query = { paymentStatus: { $ne: "Successful" } };
+
+    const days = parseInt(req.query.days, 10);
+    if (days > 0) {
+      query.createdAt = { $gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000) };
+    }
+
+    const tempOrders = await TempOrder.find(query)
+      .select("-razorpayResponse") // large gateway payload, not used by the admin screen
       .populate("addressId")
-      .populate("storeId")
-      .sort({ createdAt: -1 });
+      .populate({ path: "storeId", select: "storeName" }) // screen only needs _id + storeName
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
 
     return res.status(200).json({
       success: true,
+      count: tempOrders.length,
+      limit,
       tempOrders,
     });
   } catch (error) {
