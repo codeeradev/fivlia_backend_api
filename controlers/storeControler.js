@@ -16,6 +16,7 @@ const { SettingAdmin } = require("../modals/setting");
 const { sendMessages } = require("../utils/sendMessages");
 const Rating = require("../modals/rating");
 const { isTruthyFlag, toNumber } = require("../utils/sellerDelivery");
+const { loadStoreCatalog, createTimer } = require("../utils/storeCatalog");
 // const sendVerificationEmail = require("../config/nodeMailer");
 
 const SERVICE_SCOPES = ["city", "global"];
@@ -535,87 +536,32 @@ exports.getStore = async (req, res) => {
       return res.status(200).json({ stores: allStores });
     }
 
+    const timer = createTimer("getStore");
+
     const store = await Store.findById(id).lean();
+    timer.mark("store");
     if (!store) {
       return res.status(404).json({ message: "Store not found" });
     }
 
-    const categoryIds = Array.isArray(store.Category)
-      ? store.Category
-      : [store.Category];
+    const { categories, products, stockEntries } = await loadStoreCatalog({
+      store,
+      storeId: id,
+      CategoryModel,
+      Products,
+      Stock,
+      timer,
+    });
 
-    const allCategoryTrees = [];
-    const allCategoryIds = [];
-
-    for (const catId of categoryIds) {
-      const category = await CategoryModel.findById(catId).lean();
-      if (!category) continue;
-
-      allCategoryTrees.push(category);
-      allCategoryIds.push(category._id.toString());
-
-      (category.subcat || []).forEach((sub) => {
-        allCategoryIds.push(sub._id.toString());
-        (sub.subsubcat || []).forEach((subsub) => {
-          allCategoryIds.push(subsub._id.toString());
-        });
-      });
-    }
-
-    const products = await Products.find({
-      $or: [
-        { "category._id": { $in: allCategoryIds } },
-        { subCategoryId: { $in: allCategoryIds } },
-        { subSubCategoryId: { $in: allCategoryIds } },
-      ],
-    }).lean();
-
-    // ✅ Fetch stock doc for this store
-    const storeStockDoc = await Stock.findOne({ storeId: id }).lean();
-    const stockEntries = storeStockDoc?.stock || [];
-
-    // 🔁 Build a quick lookup map
-    const stockMap = {};
-    for (const item of stockEntries) {
-      const key = `${item.productId}_${item.variantId}`;
-      stockMap[key] = item.quantity;
-    }
-
-    for (const product of products) {
-      product.inventory = [];
-
-      if (Array.isArray(product.variants)) {
-        for (const variant of product.variants) {
-          const key = `${product._id}_${variant._id}`;
-
-          const stockData = stockEntries.find(
-            (item) =>
-              item.productId.toString() === product._id.toString() &&
-              item.variantId.toString() === variant._id.toString(),
-          );
-
-          const quantity = stockData?.quantity || 0;
-
-          if (stockData?.price != null) {
-            variant.sell_price = stockData.price;
-          }
-
-          if (stockData?.mrp != null) {
-            variant.mrp = stockData.mrp;
-          }
-
-          // Still add quantity info to inventory
-          product.inventory.push({
-            variantId: variant._id,
-            quantity,
-          });
-        }
-      }
-    }
+    timer.done({
+      products: products.length,
+      categories: categories.length,
+      stockEntries: stockEntries.length,
+    });
 
     return res.status(200).json({
       store,
-      categories: allCategoryTrees,
+      categories,
       products,
     });
   } catch (err) {
