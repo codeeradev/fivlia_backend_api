@@ -1083,14 +1083,66 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
+// One query for every product used by a list of orders (instead of one full
+// Products.findById() per order item). Only the fields getOrders needs are loaded.
+const loadProductsForOrders = async (orders) => {
+  const ids = new Set();
+  for (const order of orders) {
+    for (const item of order.items || []) {
+      if (item?.productId) ids.add(String(item.productId));
+    }
+  }
+  if (ids.size === 0) return new Map();
+
+  const products = await Products.find({ _id: { $in: [...ids] } })
+    .select({
+      sku: 1,
+      "variants._id": 1,
+      "variants.variantValue": 1,
+      "variants.sell_price": 1,
+    })
+    .lean();
+  return new Map(products.map((p) => [String(p._id), p]));
+};
+
+// Same output as the old per-item lookup (including the "product not found" shape).
+const attachVariantInfo = (item, productMap) => {
+  const product = item?.productId ? productMap.get(String(item.productId)) : null;
+
+  if (!product) {
+    console.warn(`⚠️ Product not found for ID: ${item?.productId}`);
+    return {
+      ...item,
+      product: null,
+      variantName: null,
+      variantPrice: null,
+    };
+  }
+
+  const variant = product?.variants?.find(
+    (v) => v._id.toString() === item.varientId?.toString(),
+  );
+  return {
+    ...item,
+    sku: product.sku || null,
+    variantName: variant?.variantValue || null,
+    variantPrice: variant?.sell_price || null,
+  };
+};
+
 exports.getOrders = async (req, res) => {
   try {
     const { limit, page = 1, storeId } = req.query;
-    const skip = (page - 1) * limit;
     const query = storeId ? { storeId } : {};
 
-    const totalOrders = await Order.countDocuments();
-    const orders = await Order.find(query)
+    // Paging is applied only when the caller sends a numeric limit (same as before:
+    // no limit -> all orders). Admin / mobile callers that send limit+page are unchanged.
+    const limitNum = Number(limit);
+    const usePaging =
+      limit !== undefined && limit !== "" && Number.isFinite(limitNum);
+    const skip = usePaging ? (page - 1) * limitNum : 0;
+
+    let ordersQuery = Order.find(query)
       .populate({
         path: "addressId",
         select:
@@ -1100,81 +1152,65 @@ exports.getOrders = async (req, res) => {
         path: "storeId",
         select: "storeName",
       })
-      .skip(skip)
-      .limit(Number(limit))
-      .sort({ createdAt: -1 })
-      .lean();
+      .sort({ createdAt: -1 });
+    if (usePaging) ordersQuery = ordersQuery.skip(skip).limit(limitNum);
 
-    const ordersWithCity = await Promise.all(
-      orders.map(async (order) => {
-        // Extract city from address
-        let city = "Unknown";
-        if (order.addressId?.city) city = order.addressId.city;
+    // count (now with the same storeId filter) and the page are independent
+    const [totalOrders, orders] = await Promise.all([
+      Order.countDocuments(query),
+      ordersQuery.lean(),
+    ]);
 
-        // Format full address
-        const formattedAddress = order.addressId
+    // ONE products query for the whole list
+    const productMap = await loadProductsForOrders(orders);
+
+    const ordersWithCity = orders.map((order) => {
+      // Extract city from address
+      let city = "Unknown";
+      if (order.addressId?.city) city = order.addressId.city;
+
+      // Format full address
+      const formattedAddress = order.addressId
+        ? {
+            fullName: order.addressId.fullName || "N/A",
+            fullAddress:
+              [
+                order.addressId.address || "",
+                order.addressId.house_No || "",
+                order.addressId.floor ? `Floor ${order.addressId.floor}` : "",
+                order.addressId.landmark || "",
+                order.addressId.city || "",
+                order.addressId.state || "",
+                order.addressId.pincode || "",
+              ]
+                .filter(Boolean)
+                .join(", ") || "N/A",
+            moibleNumber: order.addressId.mobileNumber || "",
+          }
+        : { fullName: "N/A", fullAddress: "N/A" };
+
+      // Inject variant info inside items
+      const itemsWithVariant = (order.items || []).map((item) =>
+        attachVariantInfo(item, productMap),
+      );
+
+      return {
+        ...order,
+        items: itemsWithVariant,
+        addressId: formattedAddress,
+        storeId: order.storeId
           ? {
-              fullName: order.addressId.fullName || "N/A",
-              fullAddress:
-                [
-                  order.addressId.address || "",
-                  order.addressId.house_No || "",
-                  order.addressId.floor ? `Floor ${order.addressId.floor}` : "",
-                  order.addressId.landmark || "",
-                  order.addressId.city || "",
-                  order.addressId.state || "",
-                  order.addressId.pincode || "",
-                ]
-                  .filter(Boolean)
-                  .join(", ") || "N/A",
-              moibleNumber: order.addressId.mobileNumber || "",
+              _id: order.storeId._id || "N/A",
+              storeName: order.storeId.storeName || "N/A",
             }
-          : { fullName: "N/A", fullAddress: "N/A" };
+          : null,
+        city,
+        driverPhone: order.driver?.mobileNumber || null,
+        createdAt: toIST(order.createdAt),
+        updatedAt: toIST(order.updatedAt),
+      };
+    });
 
-        // Inject variant info inside items
-        const itemsWithVariant = await Promise.all(
-          order.items.map(async (item) => {
-            const product = await Products.findById(item.productId).lean();
-
-            if (!product) {
-              console.warn(`⚠️ Product not found for ID: ${item.productId}`);
-              return {
-                ...item,
-                product: null,
-                variantName: null,
-                variantPrice: null,
-              };
-            }
-
-            const variant = product?.variants?.find(
-              (v) => v._id.toString() === item.varientId?.toString(),
-            );
-            return {
-              ...item,
-              sku: product.sku || null,
-              variantName: variant?.variantValue || null,
-              variantPrice: variant?.sell_price || null,
-            };
-          }),
-        );
-
-        return {
-          ...order,
-          items: itemsWithVariant,
-          addressId: formattedAddress,
-          storeId: order.storeId
-            ? {
-                _id: order.storeId._id || "N/A",
-                storeName: order.storeId.storeName || "N/A",
-              }
-            : null,
-          city,
-          driverPhone: order.driver?.mobileNumber || null,
-          createdAt: toIST(order.createdAt),
-          updatedAt: toIST(order.updatedAt),
-        };
-      }),
-    );
     const count = totalOrders;
     return res.status(200).json({
       message: "Orders retrieved successfully",
