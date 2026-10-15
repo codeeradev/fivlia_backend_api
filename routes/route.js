@@ -6,6 +6,11 @@ const { requestReturn } = require("../controlers/returnControler");
 const { listReturnRequests, updateReturnStatus } = require("../controlers/returnAdminControler");
 const returnUpload = require("../midllerware/returnUpload");
 const router = express.Router();
+const {
+  getStoreCategories,
+  getStoreProducts,
+  getStoreStockSummary,
+} = require("../controlers/storeCatalogControler");
 const verifyToken = require("../midllerware/authToken");
 const sellerOrAdminAuth = require("../midllerware/sellerOrAdminAuth");
 const typeCategoryResolver = require("../midllerware/typeChecker.js");
@@ -515,6 +520,9 @@ router.get("/getSettings", getSettings);
 router.get("/settings", verifyToken, settings);
 router.get("/getAddress", verifyToken, getAddress);
 router.get("/getStore", getStore);
+router.get("/getStoreCategories", getStoreCategories);
+router.get("/getStoreProducts", getStoreProducts);
+router.get("/getStoreStockSummary", getStoreStockSummary);
 router.get("/relatedProduct/:productId", verifyToken, typeCategoryResolver, getRelatedProducts);
 router.get("/getFilter", getFilter);
 router.get("/getMainCategory", typeCategoryResolver, getMainCategory);
