@@ -1675,6 +1675,7 @@ exports.getFeatureProduct = async (req, res) => {
   }
 };
 
+// Code comment for optimization (Aman singh)
 // exports.getFeatureProduct = async (req, res) => {
 //   try {
 //     const userId = req.user._id; // Token logic untouched

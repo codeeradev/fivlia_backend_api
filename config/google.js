@@ -271,10 +271,15 @@ function isWithinZone(userLat, userLng, zone, zoneWindowConfig = null, nowMoment
   return distance <= activeRange;
 }
 
-async function getStoresWithinRadius(userLat, userLng) {
+// Note: Commented code for optimization (Aman singh)
+// async function getStoresWithinRadius(userLat, userLng) {
+//   const [allStores, cityZoneDocs, zoneWindowConfig] = await Promise.all([
+//     Store.find({ status: true }).lean(),
+//     ZoneData.find({}),
+async function getStoresWithinRadius(userLat, userLng, preloaded = {}) {
   const [allStores, cityZoneDocs, zoneWindowConfig] = await Promise.all([
-    Store.find({ status: true }).lean(),
-    ZoneData.find({}),
+    preloaded.allStores || Store.find({ status: true }).lean(),
+    preloaded.zoneDocs || ZoneData.find({}),
     getZoneWindowConfig(),
   ]);
 
@@ -395,11 +400,16 @@ function isWithinBanner(userLat, userLng, zone, zoneWindowConfig = null, nowMome
   return distance <= activeRange;
 }
 
-async function getBannersWithinRadius(userLat, userLng, banners = []) {
+// Note: Commented code for optimization (Aman singh)
+// async function getBannersWithinRadius(userLat, userLng, banners = []) {
+//   const [allZones, zoneWindowConfig] = await Promise.all([
+//     ZoneData.find({}),
+async function getBannersWithinRadius(userLat, userLng, banners = [], preloaded = {}) {
   const [allZones, zoneWindowConfig] = await Promise.all([
-    ZoneData.find({}),
+    preloaded.zoneDocs || ZoneData.find({}),
     getZoneWindowConfig(),
   ]);
+
   const nowInZoneTimezone = getNowInTimezone(zoneWindowConfig?.timezone);
 
   const globalBanners = banners.filter((banner) => banner.isGlobal === true);

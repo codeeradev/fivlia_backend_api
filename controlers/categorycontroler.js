@@ -392,14 +392,19 @@ exports.banner = async (req, res) => {
   }
 };
 
-exports.getBanner = async (req, res) => {
-  const totalStart = Date.now();
+// Drop-in replacement for exports.getBanner in controlers/categorycontroler.js
+// RESPONSE IS UNCHANGED (same banners, same order, same fields).
+// Requires the 2 small edits to config/google.js (see getBanner_google_edits.md).
+// Uses imports already at the top of that file:
+// mongoose, Banner, Store, brand, ZoneData, Coupon, getStoresWithinRadius,
+// getBannersWithinRadius, buildOfferPreviewText.
 
+exports.getBanner = async (req, res) => {
   try {
     const { type } = req.query;
-    const userId = req.user;
 
-    const user = await User.findById(userId).lean();
+    // OPT 1: verifyToken already loaded this user -> no second User.findById
+    const user = req.user;
 
     if (!user) {
       return res.status(400).json({ message: "User location not found" });
@@ -412,22 +417,8 @@ exports.getBanner = async (req, res) => {
     const userLat = user.location?.latitude;
     const userLng = user.location?.longitude;
 
-    const zoneDocs = await ZoneData.find({ status: true }, "zones").lean();
-
-    const activeZoneIds = [];
-    zoneDocs.forEach((doc) => {
-      (doc.zones || []).forEach((zone) => {
-        if (zone.status && zone._id) {
-          activeZoneIds.push(zone._id.toString());
-        }
-      });
-    });
-
-    const brandIds = req.typeId
-      ? (await brand.find({ typeId: req.typeId }).select("_id").lean()).map(
-          (b) => b._id,
-        )
-      : [];
+    // OPT 2: removed ZoneData.find({status:true}) + activeZoneIds
+    //        (it was built but never used anywhere)
 
     const categoryObjectIds = (req.categoryIds || []).map(
       (id) => new mongoose.Types.ObjectId(id),
@@ -439,43 +430,64 @@ exports.getBanner = async (req, res) => {
       []
     ).map((id) => new mongoose.Types.ObjectId(id));
 
-    const bannerScope = [];
+    // OPT 3: run the banner query chain and the store/zone loading AT THE SAME
+    //        TIME (they were running one after the other)
+    const loadBanners = async () => {
+      const brandIds = req.typeId
+        ? (await brand.find({ typeId: req.typeId }).select("_id").lean()).map(
+            (b) => b._id,
+          )
+        : [];
 
-    if (req.typeId) {
-      bannerScope.push(
-        {
-          type2: {
-            $in: ["Category", "SubCategory", "Sub Sub-Category"],
+      const bannerScope = [];
+
+      if (req.typeId) {
+        bannerScope.push(
+          {
+            type2: {
+              $in: ["Category", "SubCategory", "Sub Sub-Category"],
+            },
+            $or: [
+              { "mainCategory._id": { $in: categoryObjectIds } },
+              { "subCategory._id": { $in: allCategoryObjectIds } },
+              { "subSubCategory._id": { $in: allCategoryObjectIds } },
+            ],
           },
-          $or: [
-            { "mainCategory._id": { $in: categoryObjectIds } },
-            { "subCategory._id": { $in: allCategoryObjectIds } },
-            { "subSubCategory._id": { $in: allCategoryObjectIds } },
-          ],
-        },
-        {
-          type2: "Brand",
-          "brand._id": { $in: brandIds },
-        },
-        {
-          type2: "Store",
-        },
-        {
-          type2: "NO",
-        },
-      );
-    }
+          {
+            type2: "Brand",
+            "brand._id": { $in: brandIds },
+          },
+          {
+            type2: "Store",
+          },
+          {
+            type2: "NO",
+          },
+        );
+      }
 
-    const allBanners = await Banner.find({
-      status: { $ne: false },
-      ...(req.typeId && {
-        typeId: new mongoose.Types.ObjectId(req.typeId),
-      }),
-      ...(type && { type }),
-      ...(bannerScope.length && { $or: bannerScope }),
-    })
-      .sort({ createdAt: -1 })
-      .lean();
+      return Banner.find({
+        status: { $ne: false },
+        ...(req.typeId && {
+          typeId: new mongoose.Types.ObjectId(req.typeId),
+        }),
+        ...(type && { type }),
+        ...(bannerScope.length && { $or: bannerScope }),
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+    };
+
+    const [allBanners, preloaded] = await Promise.all([
+      loadBanners(),
+      // OPT 4: stores and zones are loaded ONCE here and shared with both
+      //        helper functions (before: zones were loaded 3 times).
+      //        ZoneData is NOT .lean() on purpose, so schema defaults
+      //        (e.g. zone.status = true) behave exactly as before.
+      hasLocation
+        ? Promise.all([Store.find({ status: true }).lean(), ZoneData.find({})])
+        : null,
+    ]);
 
     if (!hasLocation) {
       const globalOnly = allBanners
@@ -490,8 +502,12 @@ exports.getBanner = async (req, res) => {
     }
 
     const now = new Date();
+    const [allStores, zoneDocs] = preloaded;
 
-    const storeResult = await getStoresWithinRadius(userLat, userLng);
+    const storeResult = await getStoresWithinRadius(userLat, userLng, {
+      allStores,
+      zoneDocs,
+    });
 
     const activeStoreIds = new Set(
       storeResult.matchedStores
@@ -505,41 +521,42 @@ exports.getBanner = async (req, res) => {
       return banner.storeId && activeStoreIds.has(banner.storeId.toString());
     });
 
-    const matchedBanners = await getBannersWithinRadius(
-      userLat,
-      userLng,
-      filteredBanners,
-    );
+    const hasMatchedStores = Boolean(storeResult?.matchedStores?.length);
+
+    // OPT 5: zone matching for banners and the seller-coupon query are
+    //        independent -> run together instead of one after the other
+    const [matchedBanners, sellerCoupons] = await Promise.all([
+      getBannersWithinRadius(userLat, userLng, filteredBanners, { zoneDocs }),
+      hasMatchedStores
+        ? Coupon.aggregate([
+            {
+              $match: {
+                storeId: { $in: storeResult.matchedStores.map((s) => s._id) },
+                status: true,
+                approvalStatus: "approved",
+                fromTo: { $lte: now },
+                expireDate: { $gte: now },
+              },
+            },
+            { $sort: { createdAt: -1 } },
+            {
+              $group: {
+                _id: "$storeId",
+                coupon: { $first: "$$ROOT" },
+              },
+            },
+            {
+              $replaceRoot: {
+                newRoot: "$coupon",
+              },
+            },
+          ])
+        : [],
+    ]);
 
     let finalBanners = [...matchedBanners];
 
-    if (storeResult?.matchedStores?.length) {
-      const nearbyStoreIds = storeResult.matchedStores.map((s) => s._id);
-
-      const sellerCoupons = await Coupon.aggregate([
-        {
-          $match: {
-            storeId: { $in: nearbyStoreIds },
-            status: true,
-            approvalStatus: "approved",
-            fromTo: { $lte: now },
-            expireDate: { $gte: now },
-          },
-        },
-        { $sort: { createdAt: -1 } },
-        {
-          $group: {
-            _id: "$storeId",
-            coupon: { $first: "$$ROOT" },
-          },
-        },
-        {
-          $replaceRoot: {
-            newRoot: "$coupon",
-          },
-        },
-      ]);
-
+    if (hasMatchedStores) {
       const sellerOfferBanners = sellerCoupons.map((c) => ({
         _id: c._id,
         image: c.image,
@@ -574,8 +591,199 @@ exports.getBanner = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+    // The old code only logged here and never answered, so the app waited
+    // until timeout. This is the ONLY intentional behaviour change.
+    return res
+      .status(500)
+      .json({ message: "An error occurred!", error: error.message });
   }
 };
+
+// Code comment for optimization (Aman singh)
+// exports.getBanner = async (req, res) => {
+//   const totalStart = Date.now();
+
+//   try {
+//     const { type } = req.query;
+//     const userId = req.user;
+
+//     const user = await User.findById(userId).lean();
+
+//     if (!user) {
+//       return res.status(400).json({ message: "User location not found" });
+//     }
+
+//     // A user without a saved location can still see All India (global) banners
+//     const hasLocation = Boolean(
+//       user.location?.latitude && user.location?.longitude,
+//     );
+//     const userLat = user.location?.latitude;
+//     const userLng = user.location?.longitude;
+
+//     const zoneDocs = await ZoneData.find({ status: true }, "zones").lean();
+
+//     const activeZoneIds = [];
+//     zoneDocs.forEach((doc) => {
+//       (doc.zones || []).forEach((zone) => {
+//         if (zone.status && zone._id) {
+//           activeZoneIds.push(zone._id.toString());
+//         }
+//       });
+//     });
+
+//     const brandIds = req.typeId
+//       ? (await brand.find({ typeId: req.typeId }).select("_id").lean()).map(
+//           (b) => b._id,
+//         )
+//       : [];
+
+//     const categoryObjectIds = (req.categoryIds || []).map(
+//       (id) => new mongoose.Types.ObjectId(id),
+//     );
+
+//     const allCategoryObjectIds = (
+//       req.allCategoryIds ||
+//       req.categoryIds ||
+//       []
+//     ).map((id) => new mongoose.Types.ObjectId(id));
+
+//     const bannerScope = [];
+
+//     if (req.typeId) {
+//       bannerScope.push(
+//         {
+//           type2: {
+//             $in: ["Category", "SubCategory", "Sub Sub-Category"],
+//           },
+//           $or: [
+//             { "mainCategory._id": { $in: categoryObjectIds } },
+//             { "subCategory._id": { $in: allCategoryObjectIds } },
+//             { "subSubCategory._id": { $in: allCategoryObjectIds } },
+//           ],
+//         },
+//         {
+//           type2: "Brand",
+//           "brand._id": { $in: brandIds },
+//         },
+//         {
+//           type2: "Store",
+//         },
+//         {
+//           type2: "NO",
+//         },
+//       );
+//     }
+
+//     const allBanners = await Banner.find({
+//       status: { $ne: false },
+//       ...(req.typeId && {
+//         typeId: new mongoose.Types.ObjectId(req.typeId),
+//       }),
+//       ...(type && { type }),
+//       ...(bannerScope.length && { $or: bannerScope }),
+//     })
+//       .sort({ createdAt: -1 })
+//       .lean();
+
+//     if (!hasLocation) {
+//       const globalOnly = allBanners
+//         .filter((b) => b.isGlobal === true && b.type2 !== "Store")
+//         .map((b) => ({ ...b, source: "admin" }));
+
+//       return res.status(200).json({
+//         message: "Banners fetched successfully.",
+//         count: globalOnly.length,
+//         data: globalOnly,
+//       });
+//     }
+
+//     const now = new Date();
+
+//     const storeResult = await getStoresWithinRadius(userLat, userLng);
+
+//     const activeStoreIds = new Set(
+//       storeResult.matchedStores
+//         .filter((store) => store.status === true)
+//         .map((store) => store._id.toString()),
+//     );
+
+//     const filteredBanners = allBanners.filter((banner) => {
+//       if (banner.type2 !== "Store") return true;
+
+//       return banner.storeId && activeStoreIds.has(banner.storeId.toString());
+//     });
+
+//     const matchedBanners = await getBannersWithinRadius(
+//       userLat,
+//       userLng,
+//       filteredBanners,
+//     );
+
+//     let finalBanners = [...matchedBanners];
+
+//     if (storeResult?.matchedStores?.length) {
+//       const nearbyStoreIds = storeResult.matchedStores.map((s) => s._id);
+
+//       const sellerCoupons = await Coupon.aggregate([
+//         {
+//           $match: {
+//             storeId: { $in: nearbyStoreIds },
+//             status: true,
+//             approvalStatus: "approved",
+//             fromTo: { $lte: now },
+//             expireDate: { $gte: now },
+//           },
+//         },
+//         { $sort: { createdAt: -1 } },
+//         {
+//           $group: {
+//             _id: "$storeId",
+//             coupon: { $first: "$$ROOT" },
+//           },
+//         },
+//         {
+//           $replaceRoot: {
+//             newRoot: "$coupon",
+//           },
+//         },
+//       ]);
+
+//       const sellerOfferBanners = sellerCoupons.map((c) => ({
+//         _id: c._id,
+//         image: c.image,
+//         title: c.title,
+//         storeId: c.storeId,
+//         offer: Number(c.offer),
+//         offerType: c.offerType || "cart_discount",
+//         discountScope: c.discountScope || "entire_cart",
+//         previewText: buildOfferPreviewText(c),
+//         minimumOrderAmount: c.minimumOrderAmount ?? c.limit,
+//         limit: c.minimumOrderAmount ?? c.limit,
+//         freeProductId: c.freeProductId || null,
+//         freeProductQuantity: c.freeProductQuantity || 1,
+//         type: "offer",
+//         type2: "Store",
+//         source: "seller",
+//         createdAt: c.createdAt,
+//       }));
+
+//       finalBanners = finalBanners.map((b) => ({
+//         ...b,
+//         source: "admin",
+//       }));
+
+//       finalBanners = [...sellerOfferBanners, ...finalBanners];
+//     }
+
+//     return res.status(200).json({
+//       message: "Banners fetched successfully.",
+//       count: finalBanners.length,
+//       data: finalBanners,
+//     });
+//   } catch (error) {
+//     console.error(error);
+//   }
+// };
 
 exports.updateBannerStatus = async (req, res) => {
   try {
