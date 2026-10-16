@@ -1388,316 +1388,27 @@ exports.searchProduct = async (req, res) => {
 // (mongoose, Products, Stock, Cart, Category, getStoresWithinRadius,
 //  filterProductsByRequestedType, RETURN_WINDOW_DAYS).
 
-exports.getFeatureProduct = async (req, res) => {
-  try {
-    const userId = req.user._id; // Token logic untouched
-    const { page = 1, limit = 80, vegMode, productType } = req.query;
-
-    const skip = (page - 1) * limit;
-    const isVegMode = vegMode === "true";
-
-    // OPT 1: verifyToken already loaded this user -> no second User.findById
-    const user = req.user;
-    if (!user || !user.location?.latitude || !user.location?.longitude) {
-      return res.status(400).json({ message: "User location not found" });
-    }
-    const userLat = user.location.latitude;
-    const userLng = user.location.longitude;
-
-    // OPT 2: removed CityData.find / ZoneData.find (results were never used);
-    //        cart fetch only reads the 3 fields that are used
-    const [stores, cartDocs] = await Promise.all([
-      getStoresWithinRadius(userLat, userLng),
-      Cart.find({ userId }, "productId varientId quantity").lean(),
-    ]);
-
-    const matchedStores = Array.isArray(stores?.matchedStores)
-      ? stores.matchedStores
-      : [];
-    if (!matchedStores.length) {
-      return res.status(200).json({
-        message: "No feature products found for your location.",
-        products: [],
-        count: 0,
-      });
-    }
-
-    const localStores = matchedStores.filter(
-      (store) => store.serviceScope !== "global",
-    );
-    const globalStores = matchedStores.filter(
-      (store) => store.serviceScope === "global",
-    );
-    const storeGroups = [];
-    if (localStores.length) storeGroups.push(localStores);
-    if (globalStores.length) storeGroups.push(globalStores);
-
-    const cartMap = {};
-    cartDocs.forEach((item) => {
-      const key = `${item.productId}_${item.varientId}`;
-      cartMap[key] = item.quantity;
-    });
-
-    const buildFeaturedProducts = async (allowedStores) => {
-      const allowedStoreIds = allowedStores.map((store) => store._id.toString());
-      const isGlobalStoreGroup = allowedStores.every(
-        (store) => store.serviceScope === "global",
-      );
-
-      // ---- category ids (same logic as before) ----
-      const allCategoryIds = new Set();
-      const storeCategoryIds = allowedStores.flatMap((store) =>
-        Array.isArray(store.Category)
-          ? store.Category.map((id) => id?.toString())
-          : store.Category
-            ? [store.Category.toString()]
-            : [],
-      );
-
-      allowedStores.forEach((store) => {
-        store.sellerCategories?.forEach((category) => {
-          if (category?.categoryId)
-            allCategoryIds.add(category.categoryId.toString());
-          category.subCategories?.forEach((sub) => {
-            if (sub?.subCategoryId)
-              allCategoryIds.add(sub.subCategoryId.toString());
-            sub.subSubCategories?.forEach((subsub) => {
-              if (subsub?.subSubCategoryId)
-                allCategoryIds.add(subsub.subSubCategoryId.toString());
-            });
-          });
-        });
-      });
-
-      if (storeCategoryIds.length > 0) {
-        const uniqueCategoryIds = [...new Set(storeCategoryIds)];
-        // OPT 3: projection - only the ids are used, not the whole category docs
-        const categories = await Category.find(
-          { _id: { $in: uniqueCategoryIds } },
-          "_id subcat._id subcat.subsubcat._id",
-        ).lean();
-        for (const cat of categories) {
-          allCategoryIds.add(cat._id.toString());
-          (cat.subcat || []).forEach((sub) => {
-            if (sub?._id) allCategoryIds.add(sub._id.toString());
-            (sub.subsubcat || []).forEach((subsub) => {
-              if (subsub?._id) allCategoryIds.add(subsub._id.toString());
-            });
-          });
-        }
-      }
-
-      const categoryArray = [...allCategoryIds];
-
-      // ---- featured products: SAME query, no sort -> SAME order as before ----
-      const query = {
-        feature_product: true,
-        $or: [
-          { "category._id": { $in: categoryArray } },
-          { "subCategory._id": { $in: categoryArray } },
-          { "subSubCategory._id": { $in: categoryArray } },
-        ],
-      };
-      if (isVegMode) query.isVeg = 1;
-      if (productType) query.productType = productType;
-
-      const allProducts = await Products.find(query).lean();
-
-      // OPT 4: apply the typeId filter BEFORE the heavy work (same rule, same
-      // result: it only looks at product.typeId)
-      const products = filterProductsByRequestedType(allProducts, req);
-      if (!products.length) return [];
-
-      // OPT 5 (biggest): load stock ONLY for these products, inside MongoDB,
-      // instead of downloading every stock row of every store.
-      // (aggregate() does not auto-cast, so ids are converted to ObjectId)
-      const storeObjectIds = allowedStoreIds.map(
-        (id) => new mongoose.Types.ObjectId(id),
-      );
-      const productObjectIds = products.map((p) => p._id);
-      const stockRows = await Stock.aggregate([
-        { $match: { storeId: { $in: storeObjectIds } } },
-        { $unwind: "$stock" },
-        { $match: { "stock.productId": { $in: productObjectIds } } },
-        {
-          $project: {
-            _id: 0,
-            storeId: 1,
-            "stock.productId": 1,
-            "stock.variantId": 1,
-            "stock.quantity": 1,
-            "stock.price": 1,
-            "stock.mrp": 1,
-          },
-        },
-      ]);
-
-      // same key format and same "last one wins" rule as before
-      const stockDetailMap = new Map();
-      for (const row of stockRows) {
-        const item = row.stock;
-        stockDetailMap.set(
-          `${item.productId}_${item.variantId}_${row.storeId}`,
-          item,
-        );
-      }
-
-      const storeMap = {};
-      allowedStores.forEach((store) => {
-        storeMap[store._id.toString()] = store;
-      });
-
-      const enrichedProducts = [];
-
-      for (const product of products) {
-        if (!Array.isArray(product.variants) || !product.variants.length)
-          continue;
-
-        let variantOptions = [];
-
-        // same loop order as before (variant -> store) so ties sort the same
-        product.variants.forEach((variant) => {
-          allowedStoreIds.forEach((storeId) => {
-            const key = `${product._id}_${variant._id}_${storeId}`;
-            const stockEntry = stockDetailMap.get(key);
-            const store = storeMap[storeId];
-            if (!store || !stockEntry) return;
-
-            variantOptions.push({
-              variantId: variant._id,
-              storeId: store._id,
-              storeName: store.soldBy?.storeName || store.storeName,
-              official: store.soldBy?.official || 0,
-              rating: 5,
-              distance: store.distance || 999999,
-              price: stockEntry.price ?? variant.sell_price ?? 0,
-              mrp: stockEntry.mrp ?? variant.mrp ?? 0,
-              quantity: stockEntry.quantity,
-            });
-          });
-        });
-
-        if (isGlobalStoreGroup) {
-          variantOptions = variantOptions.filter(
-            (option) => Number(option.quantity) > 0,
-          );
-        }
-
-        if (!variantOptions.length) continue;
-
-        variantOptions.sort((a, b) => {
-          if (a.official !== b.official) return b.official - a.official;
-          if (a.rating !== b.rating) return b.rating - a.rating;
-          if (a.price !== b.price) return a.price - b.price;
-          return a.distance - b.distance;
-        });
-
-        const bestVariant = variantOptions[0];
-
-        // OPT 6: O(1) lookup instead of .find() inside .map()
-        // (first match in the sorted list, exactly what .find() returned)
-        const optionByVariant = new Map();
-        for (const opt of variantOptions) {
-          const k = opt.variantId.toString();
-          if (!optionByVariant.has(k)) optionByVariant.set(k, opt);
-        }
-
-        const enrichedProduct = {
-          ...product,
-          storeId: bestVariant.storeId,
-          storeName: bestVariant.storeName,
-          inventory: product.variants.map((variant) => {
-            const match = optionByVariant.get(variant._id.toString());
-            return {
-              variantId: variant._id,
-              quantity: match ? match.quantity : 0,
-            };
-          }),
-          inCart: { status: false, qty: 0, variantIds: [] },
-        };
-
-        if (storeMap[String(bestVariant.storeId)]?.serviceScope === "global") {
-          enrichedProduct.returnProduct = {
-            ...(product.returnProduct || {}),
-            title: `${RETURN_WINDOW_DAYS} Days Return`,
-          };
-        }
-
-        // override variant prices (same in-place update as before)
-        product.variants.forEach((variant) => {
-          const match = optionByVariant.get(variant._id.toString());
-          if (match) {
-            variant.sell_price = match.price;
-            variant.mrp = match.mrp;
-          }
-        });
-
-        // cart info
-        product.variants.forEach((variant) => {
-          const cartQty = cartMap[`${product._id}_${variant._id}`] || 0;
-          if (cartQty > 0) {
-            enrichedProduct.inCart.status = true;
-            enrichedProduct.inCart.qty += cartQty;
-            enrichedProduct.inCart.variantIds.push(variant._id);
-          }
-        });
-
-        enrichedProducts.push(enrichedProduct);
-      }
-
-      return enrichedProducts;
-    };
-
-    let filteredProducts = [];
-    for (const group of storeGroups) {
-      filteredProducts = await buildFeaturedProducts(group);
-      if (filteredProducts.length) break;
-    }
-
-    const paginatedProducts = filteredProducts.slice(
-      skip,
-      skip + Number(limit),
-    );
-
-    return res.status(200).json({
-      message: "Feature products fetched successfully.",
-      products: paginatedProducts,
-      count: filteredProducts.length,
-      totalPages: Math.ceil(filteredProducts.length / Number(limit)),
-      currentPage: Number(page),
-      limit: Number(limit),
-    });
-  } catch (error) {
-    console.error("❌ getFeatureProduct error:", error);
-    return res
-      .status(500)
-      .json({ message: "An error occurred!", error: error.message });
-  }
-};
-
-// Code comment for optimization (Aman singh)
 // exports.getFeatureProduct = async (req, res) => {
 //   try {
 //     const userId = req.user._id; // Token logic untouched
 //     const { page = 1, limit = 80, vegMode, productType } = req.query;
 
 //     const skip = (page - 1) * limit;
-
 //     const isVegMode = vegMode === "true";
-//     // ✅ Get user location
-//     const user = await User.findById(userId).lean();
+
+//     // OPT 1: verifyToken already loaded this user -> no second User.findById
+//     const user = req.user;
 //     if (!user || !user.location?.latitude || !user.location?.longitude) {
 //       return res.status(400).json({ message: "User location not found" });
 //     }
 //     const userLat = user.location.latitude;
 //     const userLng = user.location.longitude;
 
-//     // ✅ Fetch active cities, zones, nearby stores, and cart
-//     const [activeCities, zoneDocs, stores, cartDocs] = await Promise.all([
-//       CityData.find({ status: true }, "city").lean(),
-//       ZoneData.find({}, "zones").lean(),
+//     // OPT 2: removed CityData.find / ZoneData.find (results were never used);
+//     //        cart fetch only reads the 3 fields that are used
+//     const [stores, cartDocs] = await Promise.all([
 //       getStoresWithinRadius(userLat, userLng),
-//       Cart.find({ userId }).lean(),
+//       Cart.find({ userId }, "productId varientId quantity").lean(),
 //     ]);
 
 //     const matchedStores = Array.isArray(stores?.matchedStores)
@@ -1711,11 +1422,6 @@ exports.getFeatureProduct = async (req, res) => {
 //       });
 //     }
 
-//     // ✅ Store groups in priority order:
-//     //    1) open local (zone) stores of the user's zone
-//     //    2) global store(s) -> used when the user is outside every zone,
-//     //       when no local store is open, or when the local stores have no
-//     //       featured product in stock (fallback)
 //     const localStores = matchedStores.filter(
 //       (store) => store.serviceScope !== "global",
 //     );
@@ -1726,22 +1432,19 @@ exports.getFeatureProduct = async (req, res) => {
 //     if (localStores.length) storeGroups.push(localStores);
 //     if (globalStores.length) storeGroups.push(globalStores);
 
-//     // ✅ Cart lookup map (same for every store group)
 //     const cartMap = {};
 //     cartDocs.forEach((item) => {
 //       const key = `${item.productId}_${item.varientId}`;
 //       cartMap[key] = item.quantity;
 //     });
 
-//     // ✅ Builds the featured product list for one group of stores
 //     const buildFeaturedProducts = async (allowedStores) => {
 //       const allowedStoreIds = allowedStores.map((store) => store._id.toString());
 //       const isGlobalStoreGroup = allowedStores.every(
 //         (store) => store.serviceScope === "global",
 //       );
 
-//       // ✅ Collect all category IDs
-//       // (store.Category AND store.sellerCategories are both used)
+//       // ---- category ids (same logic as before) ----
 //       const allCategoryIds = new Set();
 //       const storeCategoryIds = allowedStores.flatMap((store) =>
 //         Array.isArray(store.Category)
@@ -1768,9 +1471,11 @@ exports.getFeatureProduct = async (req, res) => {
 
 //       if (storeCategoryIds.length > 0) {
 //         const uniqueCategoryIds = [...new Set(storeCategoryIds)];
-//         const categories = await Category.find({
-//           _id: { $in: uniqueCategoryIds },
-//         }).lean();
+//         // OPT 3: projection - only the ids are used, not the whole category docs
+//         const categories = await Category.find(
+//           { _id: { $in: uniqueCategoryIds } },
+//           "_id subcat._id subcat.subsubcat._id",
+//         ).lean();
 //         for (const cat of categories) {
 //           allCategoryIds.add(cat._id.toString());
 //           (cat.subcat || []).forEach((sub) => {
@@ -1784,22 +1489,7 @@ exports.getFeatureProduct = async (req, res) => {
 
 //       const categoryArray = [...allCategoryIds];
 
-//       // ✅ Fetch stock for allowed stores
-//       const stockDocs = await Stock.find({
-//         storeId: { $in: allowedStoreIds },
-//       }).lean();
-
-//       const stockMap = {};
-//       const stockDetailMap = {};
-//       for (const doc of stockDocs) {
-//         for (const item of doc.stock || []) {
-//           const key = `${item.productId}_${item.variantId}_${doc.storeId}`;
-//           stockMap[key] = item.quantity;
-//           stockDetailMap[key] = item;
-//         }
-//       }
-
-//       // ✅ Fetch featured products
+//       // ---- featured products: SAME query, no sort -> SAME order as before ----
 //       const query = {
 //         feature_product: true,
 //         $or: [
@@ -1808,19 +1498,50 @@ exports.getFeatureProduct = async (req, res) => {
 //           { "subSubCategory._id": { $in: categoryArray } },
 //         ],
 //       };
+//       if (isVegMode) query.isVeg = 1;
+//       if (productType) query.productType = productType;
 
-//       // ✅ Veg filter (DB level)
-//       if (isVegMode) {
-//         query.isVeg = 1;
+//       const allProducts = await Products.find(query).lean();
+
+//       // OPT 4: apply the typeId filter BEFORE the heavy work (same rule, same
+//       // result: it only looks at product.typeId)
+//       const products = filterProductsByRequestedType(allProducts, req);
+//       if (!products.length) return [];
+
+//       // OPT 5 (biggest): load stock ONLY for these products, inside MongoDB,
+//       // instead of downloading every stock row of every store.
+//       // (aggregate() does not auto-cast, so ids are converted to ObjectId)
+//       const storeObjectIds = allowedStoreIds.map(
+//         (id) => new mongoose.Types.ObjectId(id),
+//       );
+//       const productObjectIds = products.map((p) => p._id);
+//       const stockRows = await Stock.aggregate([
+//         { $match: { storeId: { $in: storeObjectIds } } },
+//         { $unwind: "$stock" },
+//         { $match: { "stock.productId": { $in: productObjectIds } } },
+//         {
+//           $project: {
+//             _id: 0,
+//             storeId: 1,
+//             "stock.productId": 1,
+//             "stock.variantId": 1,
+//             "stock.quantity": 1,
+//             "stock.price": 1,
+//             "stock.mrp": 1,
+//           },
+//         },
+//       ]);
+
+//       // same key format and same "last one wins" rule as before
+//       const stockDetailMap = new Map();
+//       for (const row of stockRows) {
+//         const item = row.stock;
+//         stockDetailMap.set(
+//           `${item.productId}_${item.variantId}_${row.storeId}`,
+//           item,
+//         );
 //       }
 
-//       // ✅ Product type filter (DB level)
-//       if (productType) {
-//         query.productType = productType;
-//       }
-
-//       const products = await Products.find(query).lean();
-//       // ✅ Store lookup map
 //       const storeMap = {};
 //       allowedStores.forEach((store) => {
 //         storeMap[store._id.toString()] = store;
@@ -1834,20 +1555,19 @@ exports.getFeatureProduct = async (req, res) => {
 
 //         let variantOptions = [];
 
+//         // same loop order as before (variant -> store) so ties sort the same
 //         product.variants.forEach((variant) => {
 //           allowedStoreIds.forEach((storeId) => {
 //             const key = `${product._id}_${variant._id}_${storeId}`;
-//             const stockEntry = stockDetailMap[key];
+//             const stockEntry = stockDetailMap.get(key);
 //             const store = storeMap[storeId];
 //             if (!store || !stockEntry) return;
 
 //             variantOptions.push({
-//               productId: product._id,
 //               variantId: variant._id,
 //               storeId: store._id,
 //               storeName: store.soldBy?.storeName || store.storeName,
 //               official: store.soldBy?.official || 0,
-//               deliveryMode: store.soldBy?.deliveryMode || "local",
 //               rating: 5,
 //               distance: store.distance || 999999,
 //               price: stockEntry.price ?? variant.sell_price ?? 0,
@@ -1857,8 +1577,6 @@ exports.getFeatureProduct = async (req, res) => {
 //           });
 //         });
 
-//         // Global featured products must have stock. Remove zero-quantity global
-//         // options before choosing the store and omit the product if none remain.
 //         if (isGlobalStoreGroup) {
 //           variantOptions = variantOptions.filter(
 //             (option) => Number(option.quantity) > 0,
@@ -1867,7 +1585,6 @@ exports.getFeatureProduct = async (req, res) => {
 
 //         if (!variantOptions.length) continue;
 
-//         // ✅ Sort variants
 //         variantOptions.sort((a, b) => {
 //           if (a.official !== b.official) return b.official - a.official;
 //           if (a.rating !== b.rating) return b.rating - a.rating;
@@ -1877,14 +1594,20 @@ exports.getFeatureProduct = async (req, res) => {
 
 //         const bestVariant = variantOptions[0];
 
+//         // OPT 6: O(1) lookup instead of .find() inside .map()
+//         // (first match in the sorted list, exactly what .find() returned)
+//         const optionByVariant = new Map();
+//         for (const opt of variantOptions) {
+//           const k = opt.variantId.toString();
+//           if (!optionByVariant.has(k)) optionByVariant.set(k, opt);
+//         }
+
 //         const enrichedProduct = {
 //           ...product,
 //           storeId: bestVariant.storeId,
 //           storeName: bestVariant.storeName,
 //           inventory: product.variants.map((variant) => {
-//             const match = variantOptions.find(
-//               (opt) => opt.variantId.toString() === variant._id.toString(),
-//             );
+//             const match = optionByVariant.get(variant._id.toString());
 //             return {
 //               variantId: variant._id,
 //               quantity: match ? match.quantity : 0,
@@ -1893,8 +1616,6 @@ exports.getFeatureProduct = async (req, res) => {
 //           inCart: { status: false, qty: 0, variantIds: [] },
 //         };
 
-//         // ✅ Global store products: return is allowed only within the return
-//         //    window (utils/returnPolicy.js). Zone/local products are untouched.
 //         if (storeMap[String(bestVariant.storeId)]?.serviceScope === "global") {
 //           enrichedProduct.returnProduct = {
 //             ...(product.returnProduct || {}),
@@ -1902,18 +1623,16 @@ exports.getFeatureProduct = async (req, res) => {
 //           };
 //         }
 
-//         // ✅ Override variant prices
+//         // override variant prices (same in-place update as before)
 //         product.variants.forEach((variant) => {
-//           const match = variantOptions.find(
-//             (opt) => opt.variantId.toString() === variant._id.toString(),
-//           );
+//           const match = optionByVariant.get(variant._id.toString());
 //           if (match) {
 //             variant.sell_price = match.price;
 //             variant.mrp = match.mrp;
 //           }
 //         });
 
-//         // ✅ Add cart info
+//         // cart info
 //         product.variants.forEach((variant) => {
 //           const cartQty = cartMap[`${product._id}_${variant._id}`] || 0;
 //           if (cartQty > 0) {
@@ -1926,18 +1645,15 @@ exports.getFeatureProduct = async (req, res) => {
 //         enrichedProducts.push(enrichedProduct);
 //       }
 
-//       return filterProductsByRequestedType(enrichedProducts, req);
+//       return enrichedProducts;
 //     };
 
-//     // ✅ Try the stores in priority order; the first group that has
-//     //    featured products in stock wins (otherwise fall back to the next one)
 //     let filteredProducts = [];
 //     for (const group of storeGroups) {
 //       filteredProducts = await buildFeaturedProducts(group);
 //       if (filteredProducts.length) break;
 //     }
 
-//     // ✅ Pagination
 //     const paginatedProducts = filteredProducts.slice(
 //       skip,
 //       skip + Number(limit),
@@ -1958,6 +1674,290 @@ exports.getFeatureProduct = async (req, res) => {
 //       .json({ message: "An error occurred!", error: error.message });
 //   }
 // };
+
+// Code comment for optimization (Aman singh)
+exports.getFeatureProduct = async (req, res) => {
+  try {
+    const userId = req.user._id; // Token logic untouched
+    const { page = 1, limit = 80, vegMode, productType } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    const isVegMode = vegMode === "true";
+    // ✅ Get user location
+    const user = await User.findById(userId).lean();
+    if (!user || !user.location?.latitude || !user.location?.longitude) {
+      return res.status(400).json({ message: "User location not found" });
+    }
+    const userLat = user.location.latitude;
+    const userLng = user.location.longitude;
+
+    // ✅ Fetch active cities, zones, nearby stores, and cart
+    const [activeCities, zoneDocs, stores, cartDocs] = await Promise.all([
+      CityData.find({ status: true }, "city").lean(),
+      ZoneData.find({}, "zones").lean(),
+      getStoresWithinRadius(userLat, userLng),
+      Cart.find({ userId }).lean(),
+    ]);
+
+    const matchedStores = Array.isArray(stores?.matchedStores)
+      ? stores.matchedStores
+      : [];
+    if (!matchedStores.length) {
+      return res.status(200).json({
+        message: "No feature products found for your location.",
+        products: [],
+        count: 0,
+      });
+    }
+
+    // ✅ Store groups in priority order:
+    //    1) open local (zone) stores of the user's zone
+    //    2) global store(s) -> used when the user is outside every zone,
+    //       when no local store is open, or when the local stores have no
+    //       featured product in stock (fallback)
+    const localStores = matchedStores.filter(
+      (store) => store.serviceScope !== "global",
+    );
+    const globalStores = matchedStores.filter(
+      (store) => store.serviceScope === "global",
+    );
+    const storeGroups = [];
+    if (localStores.length) storeGroups.push(localStores);
+    if (globalStores.length) storeGroups.push(globalStores);
+
+    // ✅ Cart lookup map (same for every store group)
+    const cartMap = {};
+    cartDocs.forEach((item) => {
+      const key = `${item.productId}_${item.varientId}`;
+      cartMap[key] = item.quantity;
+    });
+
+    // ✅ Builds the featured product list for one group of stores
+    const buildFeaturedProducts = async (allowedStores) => {
+      const allowedStoreIds = allowedStores.map((store) => store._id.toString());
+      const isGlobalStoreGroup = allowedStores.every(
+        (store) => store.serviceScope === "global",
+      );
+
+      // ✅ Collect all category IDs
+      // (store.Category AND store.sellerCategories are both used)
+      const allCategoryIds = new Set();
+      const storeCategoryIds = allowedStores.flatMap((store) =>
+        Array.isArray(store.Category)
+          ? store.Category.map((id) => id?.toString())
+          : store.Category
+            ? [store.Category.toString()]
+            : [],
+      );
+
+      allowedStores.forEach((store) => {
+        store.sellerCategories?.forEach((category) => {
+          if (category?.categoryId)
+            allCategoryIds.add(category.categoryId.toString());
+          category.subCategories?.forEach((sub) => {
+            if (sub?.subCategoryId)
+              allCategoryIds.add(sub.subCategoryId.toString());
+            sub.subSubCategories?.forEach((subsub) => {
+              if (subsub?.subSubCategoryId)
+                allCategoryIds.add(subsub.subSubCategoryId.toString());
+            });
+          });
+        });
+      });
+
+      if (storeCategoryIds.length > 0) {
+        const uniqueCategoryIds = [...new Set(storeCategoryIds)];
+        const categories = await Category.find({
+          _id: { $in: uniqueCategoryIds },
+        }).lean();
+        for (const cat of categories) {
+          allCategoryIds.add(cat._id.toString());
+          (cat.subcat || []).forEach((sub) => {
+            if (sub?._id) allCategoryIds.add(sub._id.toString());
+            (sub.subsubcat || []).forEach((subsub) => {
+              if (subsub?._id) allCategoryIds.add(subsub._id.toString());
+            });
+          });
+        }
+      }
+
+      const categoryArray = [...allCategoryIds];
+
+      // ✅ Fetch stock for allowed stores
+      const stockDocs = await Stock.find({
+        storeId: { $in: allowedStoreIds },
+      }).lean();
+
+      const stockMap = {};
+      const stockDetailMap = {};
+      for (const doc of stockDocs) {
+        for (const item of doc.stock || []) {
+          const key = `${item.productId}_${item.variantId}_${doc.storeId}`;
+          stockMap[key] = item.quantity;
+          stockDetailMap[key] = item;
+        }
+      }
+
+      // ✅ Fetch featured products
+      const query = {
+        feature_product: true,
+        $or: [
+          { "category._id": { $in: categoryArray } },
+          { "subCategory._id": { $in: categoryArray } },
+          { "subSubCategory._id": { $in: categoryArray } },
+        ],
+      };
+
+      // ✅ Veg filter (DB level)
+      if (isVegMode) {
+        query.isVeg = 1;
+      }
+
+      // ✅ Product type filter (DB level)
+      if (productType) {
+        query.productType = productType;
+      }
+
+      const products = await Products.find(query).lean();
+      // ✅ Store lookup map
+      const storeMap = {};
+      allowedStores.forEach((store) => {
+        storeMap[store._id.toString()] = store;
+      });
+
+      const enrichedProducts = [];
+
+      for (const product of products) {
+        if (!Array.isArray(product.variants) || !product.variants.length)
+          continue;
+
+        let variantOptions = [];
+
+        product.variants.forEach((variant) => {
+          allowedStoreIds.forEach((storeId) => {
+            const key = `${product._id}_${variant._id}_${storeId}`;
+            const stockEntry = stockDetailMap[key];
+            const store = storeMap[storeId];
+            if (!store || !stockEntry) return;
+
+            variantOptions.push({
+              productId: product._id,
+              variantId: variant._id,
+              storeId: store._id,
+              storeName: store.soldBy?.storeName || store.storeName,
+              official: store.soldBy?.official || 0,
+              deliveryMode: store.soldBy?.deliveryMode || "local",
+              rating: 5,
+              distance: store.distance || 999999,
+              price: stockEntry.price ?? variant.sell_price ?? 0,
+              mrp: stockEntry.mrp ?? variant.mrp ?? 0,
+              quantity: stockEntry.quantity,
+            });
+          });
+        });
+
+        // Global featured products must have stock. Remove zero-quantity global
+        // options before choosing the store and omit the product if none remain.
+        if (isGlobalStoreGroup) {
+          variantOptions = variantOptions.filter(
+            (option) => Number(option.quantity) > 0,
+          );
+        }
+
+        if (!variantOptions.length) continue;
+
+        // ✅ Sort variants
+        variantOptions.sort((a, b) => {
+          if (a.official !== b.official) return b.official - a.official;
+          if (a.rating !== b.rating) return b.rating - a.rating;
+          if (a.price !== b.price) return a.price - b.price;
+          return a.distance - b.distance;
+        });
+
+        const bestVariant = variantOptions[0];
+
+        const enrichedProduct = {
+          ...product,
+          storeId: bestVariant.storeId,
+          storeName: bestVariant.storeName,
+          inventory: product.variants.map((variant) => {
+            const match = variantOptions.find(
+              (opt) => opt.variantId.toString() === variant._id.toString(),
+            );
+            return {
+              variantId: variant._id,
+              quantity: match ? match.quantity : 0,
+            };
+          }),
+          inCart: { status: false, qty: 0, variantIds: [] },
+        };
+
+        // ✅ Global store products: return is allowed only within the return
+        //    window (utils/returnPolicy.js). Zone/local products are untouched.
+        if (storeMap[String(bestVariant.storeId)]?.serviceScope === "global") {
+          enrichedProduct.returnProduct = {
+            ...(product.returnProduct || {}),
+            title: `${RETURN_WINDOW_DAYS} Days Return`,
+          };
+        }
+
+        // ✅ Override variant prices
+        product.variants.forEach((variant) => {
+          const match = variantOptions.find(
+            (opt) => opt.variantId.toString() === variant._id.toString(),
+          );
+          if (match) {
+            variant.sell_price = match.price;
+            variant.mrp = match.mrp;
+          }
+        });
+
+        // ✅ Add cart info
+        product.variants.forEach((variant) => {
+          const cartQty = cartMap[`${product._id}_${variant._id}`] || 0;
+          if (cartQty > 0) {
+            enrichedProduct.inCart.status = true;
+            enrichedProduct.inCart.qty += cartQty;
+            enrichedProduct.inCart.variantIds.push(variant._id);
+          }
+        });
+
+        enrichedProducts.push(enrichedProduct);
+      }
+
+      return filterProductsByRequestedType(enrichedProducts, req);
+    };
+
+    // ✅ Try the stores in priority order; the first group that has
+    //    featured products in stock wins (otherwise fall back to the next one)
+    let filteredProducts = [];
+    for (const group of storeGroups) {
+      filteredProducts = await buildFeaturedProducts(group);
+      if (filteredProducts.length) break;
+    }
+
+    // ✅ Pagination
+    const paginatedProducts = filteredProducts.slice(
+      skip,
+      skip + Number(limit),
+    );
+
+    return res.status(200).json({
+      message: "Feature products fetched successfully.",
+      products: paginatedProducts,
+      count: filteredProducts.length,
+      totalPages: Math.ceil(filteredProducts.length / Number(limit)),
+      currentPage: Number(page),
+      limit: Number(limit),
+    });
+  } catch (error) {
+    console.error("❌ getFeatureProduct error:", error);
+    return res
+      .status(500)
+      .json({ message: "An error occurred!", error: error.message });
+  }
+};
 
 exports.unit = async (req, res) => {
   try {
