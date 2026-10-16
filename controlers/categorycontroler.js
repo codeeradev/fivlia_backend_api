@@ -30,156 +30,8 @@ const {
 } = require("../utils/locationCategories");
 const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
-// Helper function to determine store scope (local vs global)
-const determineStoreScope = async (req) => {
-  try {
-    // Get user location
-    let userLat, userLng;
-    
-    // Check for lat/lng in query params first (lat/lng or latitude/longitude)
-    const qLat = parseFloat(req.query.lat ?? req.query.latitude);
-    const qLng = parseFloat(req.query.lng ?? req.query.longitude);
-    if (!isNaN(qLat) && !isNaN(qLng)) {
-      userLat = qLat;
-      userLng = qLng;
-    } else {
-      // Fallback to the user's saved location.
-      // /getBrand has no verifyToken, so req.user is never set here:
-      // resolveUser() decodes the Bearer token itself (same as getMainCategory).
-      const user = await resolveUser(req);
-      if (user?.location?.latitude && user?.location?.longitude) {
-        userLat = user.location.latitude;
-        userLng = user.location.longitude;
-      }
-    }
-
-    // No location available - default to global
-    if (!userLat || !userLng) {
-      const globalStores = await Store.find({ 
-        serviceScope: 'global',
-        status: true 
-      }).lean();
-      
-      const globalStoreIds = globalStores.map(s => s._id.toString());
-      
-      // For global: Get ALL categories from global stores (not just products with stock)
-      const allCategoryIds = new Set();
-      for (const store of globalStores) {
-        const categoryIds = Array.isArray(store.Category) ? store.Category : [store.Category];
-        
-        for (const catId of categoryIds) {
-          const category = await Category.findById(catId).lean();
-          if (!category) continue;
-          
-          allCategoryIds.add(category._id.toString());
-          
-          (category.subcat || []).forEach((sub) => {
-            allCategoryIds.add(sub._id.toString());
-            (sub.subsubcat || []).forEach((subsub) => {
-              allCategoryIds.add(subsub._id.toString());
-            });
-          });
-        }
-      }
-      
-      return {
-        scopeType: 'global',
-        storeIds: globalStoreIds,
-        categoryIds: Array.from(allCategoryIds)
-      };
-    }
-
-    // Check for local active stores
-    const storeResult = await getStoresWithinRadius(userLat, userLng);
-    
-    // matchedStores = zone stores + ALL open global stores (global stores are
-    // always eligible). "Local" must mean zone stores only - otherwise a global
-    // store's stock leaks into the zone user's list and gets "10 Days Return".
-    const activeLocalStores = (storeResult?.matchedStores || []).filter(
-      store => store.status === true && store.serviceScope !== 'global'
-    );
-
-    // If active local stores found, use local scope
-    if (activeLocalStores.length > 0) {
-      const localStoreIds = activeLocalStores.map(s => s._id.toString());
-      
-      // Get product IDs that have stock in local stores
-      const stockInLocalStores = await Stock.find({
-        storeId: { $in: localStoreIds }
-      }).lean();
-      
-      const productIdsInStock = new Set();
-      stockInLocalStores.forEach(stockDoc => {
-        (stockDoc.stock || []).forEach(item => {
-          if (item.productId) {
-            productIdsInStock.add(item.productId);
-          }
-        });
-      });
-      
-      // Get products and their categories
-      const localProducts = await Products.find({
-        _id: { $in: Array.from(productIdsInStock) }
-      }).lean();
-      
-      const categoryIds = new Set();
-      localProducts.forEach(p => {
-        if (p.category?.[0]?._id) categoryIds.add(p.category[0]._id.toString());
-        if (p.subCategory?.[0]?._id) categoryIds.add(p.subCategory[0]._id.toString());
-        if (p.subSubCategory?.[0]?._id) categoryIds.add(p.subSubCategory[0]._id.toString());
-      });
-      
-      return {
-        scopeType: 'local',
-        storeIds: localStoreIds,
-        categoryIds: Array.from(categoryIds)
-      };
-    }
-
-    // No active local stores - fallback to global
-    const globalStores = await Store.find({ 
-      serviceScope: 'global',
-      status: true 
-    }).lean();
-    
-    const globalStoreIds = globalStores.map(s => s._id.toString());
-    
-    // For global: Get ALL categories from global stores (not just products with stock)
-    const allCategoryIds = new Set();
-    for (const store of globalStores) {
-      const categoryIds = Array.isArray(store.Category) ? store.Category : [store.Category];
-      
-      for (const catId of categoryIds) {
-        const category = await Category.findById(catId).lean();
-        if (!category) continue;
-        
-        allCategoryIds.add(category._id.toString());
-        
-        (category.subcat || []).forEach((sub) => {
-          allCategoryIds.add(sub._id.toString());
-          (sub.subsubcat || []).forEach((subsub) => {
-            allCategoryIds.add(subsub._id.toString());
-          });
-        });
-      }
-    }
-    
-    return {
-      scopeType: 'global',
-      storeIds: globalStoreIds,
-      categoryIds: Array.from(allCategoryIds)
-    };
-    
-  } catch (error) {
-    console.error('Error in determineStoreScope:', error);
-    // On error, return empty scope (will show no data rather than crash)
-    return {
-      scopeType: 'error',
-      storeIds: [],
-      categoryIds: []
-    };
-  }
-};
+// Optimized scope + brand-list helpers (cached, no N+1) - see utils/brandScope.js
+const { determineStoreScope, getBrandList } = require("../utils/brandScope");
 
 exports.update = async (req, res) => {
   try {
@@ -1383,13 +1235,17 @@ exports.getBrand = async (req, res) => {
   try {
     const { id, page = 1, limit, admin } = req.query;
     const skip = (page - 1) * limit;
-    
-    // Determine store scope (local vs global)
-    const storeScope = await determineStoreScope(req);
-    
+
+    // Determine store scope (local vs global) - cached. For a single brand,
+    // run the brand lookup in parallel instead of one after the other.
+    const [storeScope, singleBrand] = await Promise.all([
+      determineStoreScope(req),
+      id ? brand.findById(id).lean() : null,
+    ]);
+
     // 🔍 If specific brand ID
     if (id) {
-      const b = await brand.findById(id).lean();
+      const b = singleBrand;
       if (!b) return res.status(404).json({ message: "Brand not found" });
 
       // 🔥 Fetch only products of that brand within the determined scope
@@ -1582,63 +1438,13 @@ exports.getBrand = async (req, res) => {
       });
     }
 
-    // 🔁 For all brands - apply scope filtering
-    const brandFilter = {};
+    // 🔁 For all brands - scope filtering + caching live in utils/brandScope.js
+    // NOTE: query-string values are strings, so the old `admin !== true` was always true.
+    // Behaviour is kept as-is (typeId filter always applied when typeId is sent).
+    const typeId = req.typeId && admin !== true ? req.typeId : null;
+    const { featuredBrands, allBrands } = await getBrandList(storeScope, typeId);
 
-    if (req.typeId && admin !== true) {
-      brandFilter.typeId = new mongoose.Types.ObjectId(req.typeId);
-    }
-
-    // Get brands that have products in the scope categories
-    let visibleBrandIds = [];
-    if (storeScope.categoryIds && storeScope.categoryIds.length > 0) {
-      const categoryObjIds = storeScope.categoryIds.map(cid => 
-        typeof cid === 'string' ? new mongoose.Types.ObjectId(cid) : cid
-      );
-      
-      const productsInScope = await Products.find({
-        $or: [
-          { "category.0._id": { $in: categoryObjIds } },
-          { "subCategory.0._id": { $in: categoryObjIds } },
-          { "subSubCategory.0._id": { $in: categoryObjIds } },
-        ]
-      }).select('brand_Name._id').lean();
-      
-      visibleBrandIds = [...new Set(
-        productsInScope
-          .map(p => p.brand_Name?._id?.toString())
-          .filter(Boolean)
-      )];
-      
-      if (visibleBrandIds.length > 0) {
-        brandFilter._id = { 
-          $in: visibleBrandIds.map(id => new mongoose.Types.ObjectId(id)) 
-        };
-      } else {
-        // No brands in scope - return empty
-        return res.json({
-          featuredBrands: [],
-          allBrands: [],
-        });
-      }
-    }
-
-    const brands = await brand.find(brandFilter).sort({ createdAt: -1 }).lean();
-
-    const allBrands = [];
-    const featuredBrands = [];
-
-    for (const b of brands) {
-      allBrands.push(b);
-      if (b.featured === true || b.featured === "true") {
-        featuredBrands.push(b);
-      }
-    }
-
-    return res.json({
-      featuredBrands,
-      allBrands,
-    });
+    return res.json({ featuredBrands, allBrands });
   } catch (error) {
     console.error(error);
     return res.status(500).json({
