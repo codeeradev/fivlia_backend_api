@@ -88,29 +88,32 @@ const getDeliveryEstimate = async (req, res) => {
     const olaApi = mapApi?.ola || {};
 
     // ------------------------------------------------------------------
-    // ✅ Type of every open store (food / grocery / mall ... from the saved
-    //    typeId). Stores saved WITHOUT a typeId use the typeId of their
-    //    saved categories (Category.typeId is required).
+    // ✅ Types of every open store (food / grocery / mall ... from saved data).
+    //    A store can sell more than one type, so its types are:
+    //      - its own typeId, PLUS
+    //      - the typeId of every saved category (Category.typeId):
+    //        Store.Category and Store.sellerCategories
+    //    The store is listed under each of those types.
     // ------------------------------------------------------------------
     const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
 
     const getStoreCategoryIds = (store) =>
-      (Array.isArray(store.Category) ? store.Category : [store.Category])
+      [
+        ...(Array.isArray(store.Category) ? store.Category : [store.Category]),
+        ...(store.sellerCategories || []).map((c) => c?.categoryId),
+      ]
         .filter(Boolean)
         .map((c) => String(c))
         .filter((id) => OBJECT_ID_REGEX.test(id));
 
-    const untypedStores = matchedStores.filter(
-      (store) => !normalizeTypeId(store.typeId)
-    );
-    const untypedCategoryIds = [
-      ...new Set(untypedStores.flatMap(getStoreCategoryIds)),
+    const allCategoryIds = [
+      ...new Set(matchedStores.flatMap(getStoreCategoryIds)),
     ];
 
     const categoryTypeMap = new Map();
-    if (untypedCategoryIds.length) {
+    if (allCategoryIds.length) {
       const categoryDocs = await Category.find({
-        _id: { $in: untypedCategoryIds },
+        _id: { $in: allCategoryIds },
       })
         .select("_id typeId")
         .lean();
@@ -119,15 +122,17 @@ const getDeliveryEstimate = async (req, res) => {
       );
     }
 
-    // returns the type id, or "other" when the type cannot be found
-    const getStoreTypeKey = (store) => {
+    // every type id this store belongs to ("other" when none can be found)
+    const getStoreTypeKeys = (store) => {
+      const keys = new Set();
       const ownTypeId = normalizeTypeId(store.typeId);
-      if (ownTypeId) return ownTypeId;
-      for (const id of getStoreCategoryIds(store)) {
+      if (ownTypeId) keys.add(ownTypeId);
+      getStoreCategoryIds(store).forEach((id) => {
         const categoryType = categoryTypeMap.get(id);
-        if (categoryType) return categoryType;
-      }
-      return "other";
+        if (categoryType) keys.add(categoryType);
+      });
+      if (!keys.size) keys.add("other");
+      return [...keys];
     };
 
     // Distance + time for ONE local store (same logic as before)
@@ -212,11 +217,12 @@ const getDeliveryEstimate = async (req, res) => {
         { lat: currentLat, lng: currentLong },
         { lat: parseFloat(store.Latitude), lng: parseFloat(store.Longitude) }
       );
-      const typeKey = getStoreTypeKey(store);
-      const current = nearestLocalByType.get(typeKey);
-      if (!current || distanceMeters < current.distanceMeters) {
-        nearestLocalByType.set(typeKey, { store, distanceMeters });
-      }
+      getStoreTypeKeys(store).forEach((typeKey) => {
+        const current = nearestLocalByType.get(typeKey);
+        if (!current || distanceMeters < current.distanceMeters) {
+          nearestLocalByType.set(typeKey, { store, distanceMeters });
+        }
+      });
     });
 
     // 2️⃣ Global (All India) store of every type that has NO local store open
@@ -224,19 +230,30 @@ const getDeliveryEstimate = async (req, res) => {
     matchedStores
       .filter((store) => store.serviceScope === "global")
       .forEach((store) => {
-        const typeKey = getStoreTypeKey(store);
-        if (!nearestLocalByType.has(typeKey) && !globalByType.has(typeKey)) {
-          globalByType.set(typeKey, store);
-        }
+        getStoreTypeKeys(store).forEach((typeKey) => {
+          if (!nearestLocalByType.has(typeKey) && !globalByType.has(typeKey)) {
+            globalByType.set(typeKey, store);
+          }
+        });
       });
 
     // 3️⃣ Build one entry per type (nearest first, global entries last)
+    // a store that is the nearest for 2 types is measured only once
+    const estimateCache = new Map();
+    const getCachedEstimate = (store, distanceMeters) => {
+      const key = String(store._id);
+      if (!estimateCache.has(key)) {
+        estimateCache.set(key, getLocalEstimate(store, distanceMeters));
+      }
+      return estimateCache.get(key);
+    };
+
     const localEntries = await Promise.all(
       [...nearestLocalByType.entries()].map(
         async ([typeKey, { store, distanceMeters }]) => ({
           typeKey,
           distanceMeters,
-          entry: await getLocalEstimate(store, distanceMeters),
+          entry: await getCachedEstimate(store, distanceMeters),
         })
       )
     );
