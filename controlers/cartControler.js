@@ -573,13 +573,9 @@ exports.getCart = async (req, res) => {
           (freeProductItem?.freeProductSavings || 0),
         finalSubtotal: offerContext.cartDiscount.finalSubtotal,
       },
-      // Global orders: COD only when the admin enabled "globalCodAllowed"
-      // (no zone check - global stores serve all of India)
       paymentOption: isGlobalStore
         ? isGlobalCodAllowed(settings)
         : cashOnDelivery,
-      // settings,
-      // isGlobalStore,
       StoreID: storeId,
       deliveryMode: isGlobalStore ? "global" : "local",
       estimatedDeliveryText: isGlobalStore
@@ -787,13 +783,13 @@ exports.recommedProduct = async (req, res) => {
     const userId = req.user._id;
     const requestedTypeFilter = getRequestedTypeFilter(req);
 
-    // ✅ Pagination (mobile app sends ?page=1&limit=10)
-    //    Defaults keep the old behaviour: first page, 20 products.
+    // Pagination (mobile app sends ?page=1&limit=10)
+    // Defaults keep the old behaviour: first page, 20 products.
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const skip = (page - 1) * limit;
 
-    // 1️⃣ Get cart items
+    // Get cart items
     const cartItems = await Cart.find({ userId }).lean();
     if (!cartItems.length) {
       return res.status(404).json({ message: "Cart is empty" });
@@ -818,7 +814,7 @@ exports.recommedProduct = async (req, res) => {
       });
     }
 
-    // 2️⃣ Get seller of first cart item
+    // Get seller of first cart item
     const firstCartItem = cartItems[0];
     const seller = await Store.findById(firstCartItem.storeId).lean();
 
@@ -871,7 +867,6 @@ exports.recommedProduct = async (req, res) => {
       });
     }
 
-    console.log("allowedCategoryIds", allowedCategoryIds);
     // 4️⃣ Build query to exclude products already in cart
     const matchQuery = {
       ...requestedTypeFilter,
