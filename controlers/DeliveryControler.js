@@ -11,10 +11,9 @@ const { getDistance } = require("../config/Ola");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
 const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
-const {
-  normalizeTypeId,
-  resolveRequestedTypeId,
-} = require("../utils/productTypeFilter");
+const Category = require("../modals/category");
+const Type = require("../modals/type");
+const { normalizeTypeId } = require("../utils/productTypeFilter");
 
 function addFiveMinutes(durationText,settings) {
   const match = durationText.match(/(\d+)\s*min/);
@@ -45,41 +44,8 @@ const getDeliveryEstimate = async (req, res) => {
         .json({ status: false, message: "User location not set" });
     }
 
-    const {
-      zoneAvailable,
-      storesOpen,
-      matchedStores: allMatchedStores,
-      serviceMode: baseServiceMode,
-      insideZone,
-    } = await getStoresWithinRadius(currentLat, currentLong);
-
-    // ✅ Optional ?typeId=<food | grocery | mall ...>
-    //    - sent  -> only stores of that type are considered (nearest local store of
-    //               that type, else the global (All India) store of that type)
-    //    - not sent / invalid -> old behaviour (all store types)
-    const requestedTypeId = resolveRequestedTypeId(req);
-    const hasTypeFilter = /^[0-9a-fA-F]{24}$/.test(requestedTypeId);
-
-    const matchedStores = hasTypeFilter
-      ? (allMatchedStores || []).filter(
-          (store) => normalizeTypeId(store.typeId) === requestedTypeId
-        )
-      : allMatchedStores;
-
-    // serviceMode must describe the stores that can really serve this type
-    let serviceMode = baseServiceMode;
-    if (hasTypeFilter && storesOpen) {
-      const typeHasGlobal = matchedStores.some((s) => s.serviceScope === "global");
-      const typeHasLocal = matchedStores.some((s) => s.serviceScope !== "global");
-      serviceMode =
-        typeHasLocal && typeHasGlobal
-          ? "mixed"
-          : typeHasGlobal
-            ? "global_only"
-            : typeHasLocal
-              ? "local"
-              : "none";
-    }
+    const { zoneAvailable, storesOpen, matchedStores, serviceMode, insideZone } =
+      await getStoresWithinRadius(currentLat, currentLong);
 
     // Same serviceMode that resolveGlobalOnlyScope uses for the category filter:
     //   "local" | "mixed" -> local store serves the user  -> deliveryMode "local"
@@ -107,26 +73,183 @@ const getDeliveryEstimate = async (req, res) => {
       });
     }
 
-    // Nearest store is chosen from LOCAL (city) stores only
+    // Local (city) stores that can be measured
     const validStores = matchedStores.filter(
       (store) =>
         store.serviceScope !== "global" && store.Latitude && store.Longitude
     );
-    if (!validStores.length) {
-      // No local store: fall back to a global (All India) store if one is open
-      const globalStore = matchedStores.find(
-        (store) => store.serviceScope === "global"
+
+    // Admin settings + map API (Google > Ola > Apple)
+    const settings = await SettingAdmin.findOne().lean();
+    const mapApiArray = settings?.Map_Api || [];
+    const mapApi = mapApiArray[0] || {};
+    const googleApi = mapApi?.google || {};
+    const appleApi = mapApi?.apple || {};
+    const olaApi = mapApi?.ola || {};
+
+    // ------------------------------------------------------------------
+    // ✅ Type of every open store (food / grocery / mall ... from the saved
+    //    typeId). Stores saved WITHOUT a typeId use the typeId of their
+    //    saved categories (Category.typeId is required).
+    // ------------------------------------------------------------------
+    const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
+
+    const getStoreCategoryIds = (store) =>
+      (Array.isArray(store.Category) ? store.Category : [store.Category])
+        .filter(Boolean)
+        .map((c) => String(c))
+        .filter((id) => OBJECT_ID_REGEX.test(id));
+
+    const untypedStores = matchedStores.filter(
+      (store) => !normalizeTypeId(store.typeId)
+    );
+    const untypedCategoryIds = [
+      ...new Set(untypedStores.flatMap(getStoreCategoryIds)),
+    ];
+
+    const categoryTypeMap = new Map();
+    if (untypedCategoryIds.length) {
+      const categoryDocs = await Category.find({
+        _id: { $in: untypedCategoryIds },
+      })
+        .select("_id typeId")
+        .lean();
+      categoryDocs.forEach((c) =>
+        categoryTypeMap.set(String(c._id), normalizeTypeId(c.typeId))
       );
-      if (globalStore) {
-        const globalSettings = await SettingAdmin.findOne().lean();
-        return res.json({
-          status: true,
-          result: 2,
-          deliveryMode: "global",
-          ...meta,
-          filtered: [buildGlobalEstimateEntry(globalStore, globalSettings)],
-        });
+    }
+
+    // returns the type id, or "other" when the type cannot be found
+    const getStoreTypeKey = (store) => {
+      const ownTypeId = normalizeTypeId(store.typeId);
+      if (ownTypeId) return ownTypeId;
+      for (const id of getStoreCategoryIds(store)) {
+        const categoryType = categoryTypeMap.get(id);
+        if (categoryType) return categoryType;
       }
+      return "other";
+    };
+
+    // Distance + time for ONE local store (same logic as before)
+    const getLocalEstimate = async (store, distanceMeters) => {
+      let result = null;
+
+      // Only one API call per store: Google > Ola > Apple
+      if (googleApi.status && googleApi.api_key) {
+        try {
+          result = await calculateDeliveryTime(
+            parseFloat(store.Latitude),
+            parseFloat(store.Longitude),
+            currentLat,
+            currentLong,
+            googleApi.api_key
+          );
+          if (result) result.source = "google";
+        } catch (err) {
+          console.log("Google API failed:", err.message);
+        }
+      } else if (olaApi.status && olaApi.api_key) {
+        try {
+          // Track API usage once
+          await MapUsage.findOneAndUpdate(
+            {
+              source: "app",
+              callType: "getDistance",
+              subCallType: "getDeliveryEstimate_DeliveryControler",
+            },
+            { $inc: { count: 1 }, $set: { lastCalledAt: new Date() } },
+            { upsert: true, new: true }
+          );
+
+          const olaResult = await getDistance(
+            { lat: parseFloat(store.Latitude), lng: parseFloat(store.Longitude) },
+            { lat: currentLat, lng: currentLong },
+            olaApi.api_key
+          );
+
+          if (olaResult.status === "OK") {
+            result = {
+              source: "ola",
+              distanceText: olaResult.distance.text,
+              durationText: olaResult.duration.text,
+              trafficDurationText: olaResult.duration.text,
+              distanceValue: olaResult.distance.value,
+              durationValue: olaResult.duration.value,
+              trafficDurationValue: olaResult.duration.value,
+            };
+          }
+        } catch (err) {
+          console.error("Ola API failed:", err.message);
+        }
+      } else if (appleApi.status && appleApi.api_key) {
+        console.log("Apple API not implemented yet");
+      }
+
+      // If API fails, fallback: approximate duration based on distance
+      if (!result) {
+        const approxMinutes = (distanceMeters / 1000 / 25) * 60 + 5;
+        result = {
+          source: "approx",
+          distanceText: `${Math.round(distanceMeters / 1000)} km`,
+          trafficDurationText: `${Math.round(approxMinutes)} mins`,
+        };
+      }
+
+      return {
+        storeId: store._id,
+        storeName: store.storeName,
+        city: store.city?.name || null,
+        distance: result.distanceText,
+        duration: addFiveMinutes(result.trafficDurationText, settings),
+        raw: result,
+      };
+    };
+
+    // 1️⃣ Nearest LOCAL store of EACH type (haversine)
+    const nearestLocalByType = new Map();
+    validStores.forEach((store) => {
+      const distanceMeters = haversine(
+        { lat: currentLat, lng: currentLong },
+        { lat: parseFloat(store.Latitude), lng: parseFloat(store.Longitude) }
+      );
+      const typeKey = getStoreTypeKey(store);
+      const current = nearestLocalByType.get(typeKey);
+      if (!current || distanceMeters < current.distanceMeters) {
+        nearestLocalByType.set(typeKey, { store, distanceMeters });
+      }
+    });
+
+    // 2️⃣ Global (All India) store of every type that has NO local store open
+    const globalByType = new Map();
+    matchedStores
+      .filter((store) => store.serviceScope === "global")
+      .forEach((store) => {
+        const typeKey = getStoreTypeKey(store);
+        if (!nearestLocalByType.has(typeKey) && !globalByType.has(typeKey)) {
+          globalByType.set(typeKey, store);
+        }
+      });
+
+    // 3️⃣ Build one entry per type (nearest first, global entries last)
+    const localEntries = await Promise.all(
+      [...nearestLocalByType.entries()].map(
+        async ([typeKey, { store, distanceMeters }]) => ({
+          typeKey,
+          distanceMeters,
+          entry: await getLocalEstimate(store, distanceMeters),
+        })
+      )
+    );
+    localEntries.sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+    const globalEntries = [...globalByType.entries()].map(
+      ([typeKey, store]) => ({
+        typeKey,
+        entry: buildGlobalEstimateEntry(store, settings),
+      })
+    );
+
+    if (!localEntries.length && !globalEntries.length) {
       return res.json({
         status: false,
         result: 0,
@@ -136,109 +259,29 @@ const getDeliveryEstimate = async (req, res) => {
       });
     }
 
-    // Find nearest store using haversine
-    const nearestStoreData = validStores
-      .map((store) => ({
-        store,
-        distanceMeters: haversine(
-          { lat: currentLat, lng: currentLong },
-          { lat: parseFloat(store.Latitude), lng: parseFloat(store.Longitude) }
-        ),
-      }))
-      .sort((a, b) => a.distanceMeters - b.distanceMeters)[0];
+    // type name comes from the saved `type` collection (no hardcoded names)
+    const typeIds = [...localEntries, ...globalEntries]
+      .map((e) => e.typeKey)
+      .filter((k) => OBJECT_ID_REGEX.test(k));
+    const typeDocs = typeIds.length
+      ? await Type.find({ _id: { $in: typeIds } })
+          .select("_id name")
+          .lean()
+      : [];
+    const typeNameMap = new Map(typeDocs.map((t) => [String(t._id), t.name]));
 
-    const store = nearestStoreData.store;
-
-    // Get admin map API settings
-    const settings = await SettingAdmin.findOne().lean();
-    const mapApiArray = settings?.Map_Api || [];
-    const mapApi = mapApiArray[0] || {};
-    const googleApi = mapApi?.google || {};
-    const appleApi = mapApi?.apple || {};
-    const olaApi = mapApi?.ola || {};
-
-    let result = null;
-
-    // Only one API call: Google > Ola > Apple
-    if (googleApi.status && googleApi.api_key) {
-      try {
-        result = await calculateDeliveryTime(
-          parseFloat(store.Latitude),
-          parseFloat(store.Longitude),
-          currentLat,
-          currentLong,
-          googleApi.api_key
-        );
-        if (result) result.source = "google";
-      } catch (err) {
-        console.log("Google API failed:", err.message);
-      }
-    } else if (olaApi.status && olaApi.api_key) {
-      try {
-        // Track API usage once
-        await MapUsage.findOneAndUpdate(
-          {
-            source: "app",
-            callType: "getDistance",
-            subCallType: "getDeliveryEstimate_DeliveryControler",
-          },
-          { $inc: { count: 1 }, $set: { lastCalledAt: new Date() } },
-          { upsert: true, new: true }
-        );
-
-        const olaResult = await getDistance(
-          { lat: parseFloat(store.Latitude), lng: parseFloat(store.Longitude) },
-          { lat: currentLat, lng: currentLong },
-          olaApi.api_key
-        );
-
-        if (olaResult.status === "OK") {
-          result = {
-            source: "ola",
-            distanceText: olaResult.distance.text,
-            durationText: olaResult.duration.text,
-            trafficDurationText: olaResult.duration.text,
-            distanceValue: olaResult.distance.value,
-            durationValue: olaResult.duration.value,
-            trafficDurationValue: olaResult.duration.value,
-          };
-        }
-      } catch (err) {
-        console.error("Ola API failed:", err.message);
-      }
-    } else if (appleApi.status && appleApi.api_key) {
-      console.log("Apple API not implemented yet");
-    }
-
-    // If API fails, fallback: approximate duration based on distance
-    if (!result) {
-      const approxMinutes =
-        (nearestStoreData.distanceMeters / 1000 / 25) * 60 + 5;
-      result = {
-        source: "approx",
-        distanceText: `${Math.round(
-          nearestStoreData.distanceMeters / 1000
-        )} km`,
-        trafficDurationText: `${Math.round(approxMinutes)} mins`,
-      };
-    }
-
-    // Prepare filtered array (same structure as before)
-    const filtered = [
-      {
-        storeId: store._id,
-        storeName: store.storeName,
-        city: store.city?.name || null,
-        distance: result.distanceText,
-        duration: addFiveMinutes(result.trafficDurationText,settings),
-        raw: result,
-      },
-    ];
+    const filtered = [...localEntries, ...globalEntries].map(
+      ({ typeKey, entry }) => ({
+        ...entry,
+        typeId: OBJECT_ID_REGEX.test(typeKey) ? typeKey : null,
+        typeName: typeNameMap.get(typeKey) || null,
+      })
+    );
 
     res.json({
       status: true,
       result: 2,
-      deliveryMode: "local",
+      deliveryMode: localEntries.length ? "local" : "global",
       ...meta,
       filtered,
     });
