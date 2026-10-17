@@ -11,6 +11,10 @@ const { getDistance } = require("../config/Ola");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
 const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
+const {
+  normalizeTypeId,
+  resolveRequestedTypeId,
+} = require("../utils/productTypeFilter");
 
 function addFiveMinutes(durationText,settings) {
   const match = durationText.match(/(\d+)\s*min/);
@@ -41,8 +45,41 @@ const getDeliveryEstimate = async (req, res) => {
         .json({ status: false, message: "User location not set" });
     }
 
-    const { zoneAvailable, storesOpen, matchedStores, serviceMode, insideZone } =
-      await getStoresWithinRadius(currentLat, currentLong);
+    const {
+      zoneAvailable,
+      storesOpen,
+      matchedStores: allMatchedStores,
+      serviceMode: baseServiceMode,
+      insideZone,
+    } = await getStoresWithinRadius(currentLat, currentLong);
+
+    // ✅ Optional ?typeId=<food | grocery | mall ...>
+    //    - sent  -> only stores of that type are considered (nearest local store of
+    //               that type, else the global (All India) store of that type)
+    //    - not sent / invalid -> old behaviour (all store types)
+    const requestedTypeId = resolveRequestedTypeId(req);
+    const hasTypeFilter = /^[0-9a-fA-F]{24}$/.test(requestedTypeId);
+
+    const matchedStores = hasTypeFilter
+      ? (allMatchedStores || []).filter(
+          (store) => normalizeTypeId(store.typeId) === requestedTypeId
+        )
+      : allMatchedStores;
+
+    // serviceMode must describe the stores that can really serve this type
+    let serviceMode = baseServiceMode;
+    if (hasTypeFilter && storesOpen) {
+      const typeHasGlobal = matchedStores.some((s) => s.serviceScope === "global");
+      const typeHasLocal = matchedStores.some((s) => s.serviceScope !== "global");
+      serviceMode =
+        typeHasLocal && typeHasGlobal
+          ? "mixed"
+          : typeHasGlobal
+            ? "global_only"
+            : typeHasLocal
+              ? "local"
+              : "none";
+    }
 
     // Same serviceMode that resolveGlobalOnlyScope uses for the category filter:
     //   "local" | "mixed" -> local store serves the user  -> deliveryMode "local"
