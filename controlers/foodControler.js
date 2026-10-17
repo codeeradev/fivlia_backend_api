@@ -4,9 +4,9 @@ const Rating = require("../modals/rating");
 const Stock = require("../modals/StoreStock");
 const User = require("../modals/User");
 const { getStoresWithinRadius } = require("../config/google");
-const { Order, TempOrder } = require("../modals/order");
+// const { Order, TempOrder } = require("../modals/order");
 const mongoose = require("mongoose");
-const Category = require("../modals/category");
+// const Category = require("../modals/category");
 const Coupon = require("../modals/sellerCoupon");
 
 exports.addFood = async (req, res) => {
@@ -108,7 +108,15 @@ exports.getFoodSeller = async (req, res) => {
   try {
     const { veg, filter } = req.query;
 
-    console.log("Fetching foods with sellers...", req.query);
+    // ✅ Pagination (mobile app sends ?page=1&limit=10)
+    //    Paginates `allSellers`. If `limit` is NOT sent, everything is
+    //    returned exactly as before (old app versions keep working).
+    const isPaginated = parseInt(req.query.limit, 10) > 0;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = isPaginated
+      ? Math.min(parseInt(req.query.limit, 10), 100)
+      : 0;
+    const skip = (page - 1) * limit;
 
     const userId = req.user._id;
 
@@ -133,6 +141,13 @@ exports.getFoodSeller = async (req, res) => {
       return res.status(200).json({
         finalFoods: [],
         allSellers: [],
+        ...(isPaginated && {
+          page,
+          limit,
+          totalCount: 0,
+          totalPages: 0,
+          hasMore: false,
+        }),
       });
     }
     const allowedStoreIds = allowedStores.map((store) => store._id.toString());
@@ -425,6 +440,23 @@ exports.getFoodSeller = async (req, res) => {
       .sort((a, b) => {
         return (b.totalOffers || 0) - (a.totalOffers || 0);
       });
+
+    // ✅ Pagination of allSellers (only when the app sends `limit`)
+    if (isPaginated) {
+      const totalCount = allSellers.length;
+      const paginatedSellers = allSellers.slice(skip, skip + limit);
+
+      return res.status(200).json({
+        // food sections are sent only with the first page (no repeat on scroll)
+        finalFoods: page === 1 ? finalFoods : [],
+        allSellers: paginatedSellers,
+        page,
+        limit,
+        totalCount,
+        totalPages: Math.ceil(totalCount / limit),
+        hasMore: skip + paginatedSellers.length < totalCount,
+      });
+    }
 
     return res.status(200).json({
       finalFoods,

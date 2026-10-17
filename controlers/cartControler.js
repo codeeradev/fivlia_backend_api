@@ -787,6 +787,12 @@ exports.recommedProduct = async (req, res) => {
     const userId = req.user._id;
     const requestedTypeFilter = getRequestedTypeFilter(req);
 
+    // ✅ Pagination (mobile app sends ?page=1&limit=10)
+    //    Defaults keep the old behaviour: first page, 20 products.
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const skip = (page - 1) * limit;
+
     // 1️⃣ Get cart items
     const cartItems = await Cart.find({ userId }).lean();
     if (!cartItems.length) {
@@ -804,6 +810,11 @@ exports.recommedProduct = async (req, res) => {
       return res.status(200).json({
         message: "No recommended products found",
         relatedProducts: [],
+        page,
+        limit,
+        totalCount: 0,
+        totalPages: 0,
+        hasMore: false,
       });
     }
 
@@ -852,6 +863,11 @@ exports.recommedProduct = async (req, res) => {
       return res.status(200).json({
         message: "No recommended products found",
         relatedProducts: [],
+        page,
+        limit,
+        totalCount: 0,
+        totalPages: 0,
+        hasMore: false,
       });
     }
 
@@ -871,7 +887,7 @@ exports.recommedProduct = async (req, res) => {
     // the zone / local seller behaviour is exactly the same as before.
 
     // 5️⃣ Aggregate recommended products with stock info
-    const recommendedProducts = await Products.aggregate([
+    const aggregateResult = await Products.aggregate([
       { $match: matchQuery },
       {
         $lookup: {
@@ -934,10 +950,24 @@ exports.recommedProduct = async (req, res) => {
       },
       // drop products with no stock (zone / local and global sellers)
       { $match: { maxQuantity: { $gt: 0 } } },
-      { $sort: { maxQuantity: -1 } },
-      { $limit: 20 },
-      { $project: { maxQuantity: 0 } }, // remove temporary field
+      // _id tie-breaker keeps the order stable between pages (no duplicates)
+      { $sort: { maxQuantity: -1, _id: 1 } },
+      {
+        $facet: {
+          // current page only
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            { $project: { maxQuantity: 0 } }, // remove temporary field
+          ],
+          // total matching products (for totalPages / hasMore)
+          total: [{ $count: "count" }],
+        },
+      },
     ]);
+
+    const recommendedProducts = aggregateResult[0]?.data || [];
+    const totalCount = aggregateResult[0]?.total?.[0]?.count || 0;
 
     // 6) PRICE FIX: addCart saves the STORE price (stock.price / stock.mrp), but this
     //    API used to return the raw catalogue product, so variants[].sell_price was the
@@ -986,6 +1016,11 @@ exports.recommedProduct = async (req, res) => {
     return res.status(200).json({
       message: "Recommended products fetched successfully",
       relatedProducts: filteredRecommendedProducts,
+      page,
+      limit,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+      hasMore: skip + recommendedProducts.length < totalCount,
     });
   } catch (error) {
     console.error("❌ Error in recommedProduct:", error);

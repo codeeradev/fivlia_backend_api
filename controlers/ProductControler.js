@@ -1679,7 +1679,13 @@ exports.searchProduct = async (req, res) => {
 exports.getFeatureProduct = async (req, res) => {
   try {
     const userId = req.user._id; // Token logic untouched
-    const { page = 1, limit = 80, vegMode, productType } = req.query;
+    const { page: rawPage, limit: rawLimit, vegMode, productType } = req.query;
+
+    // ✅ Safe pagination values (mobile app sends ?page=1&limit=10)
+    //    - missing / invalid / <= 0  -> defaults (page 1, limit 80 as before)
+    //    - limit is capped at 100 to protect the server
+    const page = Math.max(parseInt(rawPage, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(rawLimit, 10) || 80, 1), 100);
 
     const skip = (page - 1) * limit;
 
@@ -1950,6 +1956,7 @@ exports.getFeatureProduct = async (req, res) => {
       totalPages: Math.ceil(filteredProducts.length / Number(limit)),
       currentPage: Number(page),
       limit: Number(limit),
+      hasMore: skip + paginatedProducts.length < filteredProducts.length,
     });
   } catch (error) {
     console.error("❌ getFeatureProduct error:", error);
