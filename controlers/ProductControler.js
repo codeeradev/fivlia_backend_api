@@ -41,6 +41,11 @@ const {
   dropOutOfStockGlobalOptions,
 } = require("../utils/globalStock");
 const { isGlobalStore } = require("../utils/globalDelivery");
+const {
+  getStoreScope,
+  preferZoneOptions,
+  applyZonePriority,
+} = require("../utils/zoneGlobalScope");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -690,6 +695,10 @@ exports.getProduct = async (req, res) => {
         }
       }
 
+      // Zone first: a product sold by a zone store is served by the zone store
+      // only (its global options are dropped, even if the zone stock is 0).
+      variantOptions = preferZoneOptions(variantOptions, storeMapById);
+
       // A global-store option is valid only when it has stock. This must happen
       // before selecting the serving store; otherwise a cheaper global item
       // with quantity 0 can be selected over an available option.
@@ -785,7 +794,7 @@ exports.getProduct = async (req, res) => {
 
     // Global-store products must be purchasable before they are shown. In a
     // global-only area, remove every product with no in-stock variant.
-    const visibleProducts = enrichedProducts.filter((product) => {
+    let visibleProducts = enrichedProducts.filter((product) => {
       const hasInStockVariant = product.inventory?.some(
         (item) => Number(item.quantity) > 0,
       );
@@ -798,6 +807,14 @@ exports.getProduct = async (req, res) => {
         ? hasInStockVariant
         : !isGlobalProduct || hasInStockVariant;
     });
+
+    // Zone first: if the zone has products (even out of stock), do not show
+    // global products. No zone product at all -> global products are shown.
+    visibleProducts = applyZonePriority(visibleProducts, (product) =>
+      product.storeId
+        ? getStoreScope(storeMapById[String(product.storeId)])
+        : null,
+    );
 
     visibleProducts.sort((a, b) => {
       const aQty = a.inventory?.some((i) => i.quantity > 0) ? 1 : 0;
@@ -980,9 +997,11 @@ exports.bestSelling = async (req, res) => {
       query.productType = productType;
     }
 
+    // 50 candidates are read so that, after the zone-first rule removes the
+    // global products, up to 10 best-selling products can still be returned.
     const bestProducts = await Products.find(query)
       .sort({ purchases: -1 })
-      .limit(10)
+      .limit(50)
       .lean();
 
     const enrichedBestProducts = [];
@@ -1015,6 +1034,10 @@ exports.bestSelling = async (req, res) => {
           });
         });
       });
+
+      // Zone first: a product sold by a zone store is served by the zone store
+      // only (its global options are dropped, even if the zone stock is 0).
+      variantOptions = preferZoneOptions(variantOptions, storeMap);
 
       // GLOBAL only: a global-store option is valid only when it has stock.
       variantOptions = dropOutOfStockGlobalOptions(variantOptions, storeMap);
@@ -1076,8 +1099,14 @@ exports.bestSelling = async (req, res) => {
       enrichedBestProducts.push(enrichedProduct);
     }
 
-    const filteredBestProducts = filterProductsByRequestedType(
+    // Zone first: if the zone has best-selling products, no global products.
+    const zoneFirstBestProducts = applyZonePriority(
       enrichedBestProducts,
+      (product) => getStoreScope(storeMap[String(product.storeId)]),
+    ).slice(0, 10);
+
+    const filteredBestProducts = filterProductsByRequestedType(
+      zoneFirstBestProducts,
       req,
     );
 
@@ -1272,11 +1301,23 @@ exports.searchProduct = async (req, res) => {
       product.inCart = { status: false, qty: 0, variantIds: [] };
       let bestStore = null;
 
+      // Zone first: does a zone store sell this product (even with 0 stock)?
+      const soldByZoneStore = (product.variants || []).some((variant) =>
+        allowedStoreIds.some(
+          (storeId) =>
+            stockDetailMap[`${product._id}_${variant._id}_${storeId}`] &&
+            getStoreScope(storeMap[storeId]) === "zone",
+        ),
+      );
+
       for (const variant of product.variants || []) {
         allowedStoreIds.forEach((storeId) => {
           const key = `${product._id}_${variant._id}_${storeId}`;
           const stockEntry = stockDetailMap[key];
           const store = storeMap[storeId];
+
+          // Zone first: a product sold by a zone store ignores global stores
+          if (soldByZoneStore && getStoreScope(store) === "global") return;
 
           // GLOBAL only: skip a global store that has no stock for this variant
           if (
@@ -1362,8 +1403,16 @@ exports.searchProduct = async (req, res) => {
       return !hide;
     });
 
+    // Zone first: if the zone has matching products (even out of stock), do not
+    // show global products. No zone product at all -> global products are shown.
+    const zoneFirstProducts = applyZonePriority(visibleProducts, (product) =>
+      product.storeId
+        ? getStoreScope(storeMap[String(product.storeId)])
+        : null,
+    );
+
     const filteredProducts = filterProductsByRequestedType(
-      visibleProducts,
+      zoneFirstProducts,
       req,
     );
 
@@ -2683,6 +2732,13 @@ exports.getRelatedProducts = async (req, res) => {
             continue;
           }
         }
+        // Zone first: a global entry never replaces a zone-store entry
+        if (isGlobalDoc) {
+          const zoneEntry = stockMap[key];
+          if (zoneEntry && !globalStoreIds.has(String(zoneEntry.storeId))) {
+            continue;
+          }
+        }
         stockMap[key] = {
           quantity: item.quantity || 0,
           price: item.price ?? null,
@@ -2755,6 +2811,7 @@ exports.getRelatedProducts = async (req, res) => {
       .slice(0, 10);
 
     // --- Attach inventory and cart info
+    const relatedScopeById = new Map(); // productId -> "zone" | "global"
     for (const relProduct of relatedProducts) {
       relProduct.inventory = [];
       relProduct.inCart = { status: false, qty: 0, variantIds: [] };
@@ -2766,6 +2823,16 @@ exports.getRelatedProducts = async (req, res) => {
           const key = `${relProduct._id}_${variant._id}`;
           const stockEntry = stockMap[key];
           const cartQty = cartMap[key] || 0;
+
+          // Zone first: remember if a zone / global store sells this product
+          if (stockEntry?.storeId) {
+            const entryScope = globalStoreIds.has(String(stockEntry.storeId))
+              ? "global"
+              : "zone";
+            if (relatedScopeById.get(String(relProduct._id)) !== "zone") {
+              relatedScopeById.set(String(relProduct._id), entryScope);
+            }
+          }
 
           if (stockEntry?.price != null) variant.sell_price = stockEntry.price;
           if (stockEntry?.mrp != null) variant.mrp = stockEntry.mrp;
@@ -2799,8 +2866,10 @@ exports.getRelatedProducts = async (req, res) => {
       // GLOBAL only: hide a product that has no stock when it belongs to the
       // global system (global-only area, or it is listed by a global store).
       // Local / zone products keep the old behaviour.
+      // (A product sold by a zone store is a zone product: it is kept.)
       if (
         !hasStock &&
+        relatedScopeById.get(String(relProduct._id)) !== "zone" &&
         (stores?.serviceMode === "global_only" ||
           globalAnyEntryProductIds.has(String(relProduct._id)))
       ) {
@@ -2819,8 +2888,11 @@ exports.getRelatedProducts = async (req, res) => {
       }
     }
 
-    const visibleRelatedProducts = relatedProducts.filter(
-      (p) => !p._hideOutOfStockGlobal,
+    // Zone first: if the zone has related products (even out of stock), do not
+    // show global products. No zone product at all -> global products are shown.
+    const visibleRelatedProducts = applyZonePriority(
+      relatedProducts.filter((p) => !p._hideOutOfStockGlobal),
+      (p) => relatedScopeById.get(String(p._id)) || null,
     );
 
     const filteredRelatedProducts = filterProductsByRequestedType(
