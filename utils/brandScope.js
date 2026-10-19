@@ -22,6 +22,7 @@ const Products = require("../modals/Product");
 const Brand = require("../modals/brand");
 const { getStoresWithinRadius } = require("../config/google");
 const { resolveUser } = require("./locationCategories");
+const { resolveTypeScopeForLocation } = require("./typeScope");
 const { getRedisClient } = require("./redisClient");
 
 const SCOPE_TTL = 5 * 60; // seconds - category/brand scope of a set of stores
@@ -203,8 +204,16 @@ async function getLocalStoreIds(lat, lng) {
   });
 }
 
+// lat/lng + type -> { scope: "zone" | "global" | "none", storeIds, ... } | null
+async function getTypeScope(lat, lng, typeId) {
+  const key = `brand:typeloc:${typeId}:${lat.toFixed(4)}:${lng.toFixed(4)}`;
+  return cached(key, LOCATION_TTL, () => resolveTypeScopeForLocation(lat, lng, typeId));
+}
+
 // Same contract as the old determineStoreScope(req): { scopeType, storeIds, categoryIds }
-async function determineStoreScope(req) {
+// typeId (optional): decide zone-vs-global for THAT type only, e.g. a zone grocery
+// store must not turn the mall brands into zone brands.
+async function determineStoreScope(req, typeId = null) {
   try {
     let userLat;
     let userLng;
@@ -224,6 +233,13 @@ async function determineStoreScope(req) {
 
     if (!userLat || !userLng || isNaN(userLat) || isNaN(userLng)) {
       return await getGlobalScope();
+    }
+
+    if (typeId) {
+      const typeScope = await getTypeScope(userLat, userLng, String(typeId));
+      if (typeScope?.scope === "zone") return await getLocalScope(typeScope.storeIds);
+      if (typeScope?.scope === "global") return await getGlobalScope();
+      // "none" / nothing open -> old behaviour below
     }
 
     const localStoreIds = await getLocalStoreIds(userLat, userLng);

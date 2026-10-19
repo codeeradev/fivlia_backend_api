@@ -46,6 +46,8 @@ const {
   preferZoneOptions,
   applyZonePriority,
 } = require("../utils/zoneGlobalScope");
+const { getZoneTypeIds } = require("../utils/typeScope");
+const { normalizeTypeId } = require("../utils/productTypeFilter");
 
 exports.addAtribute = async (req, res) => {
   try {
@@ -808,12 +810,17 @@ exports.getProduct = async (req, res) => {
         : !isGlobalProduct || hasInStockVariant;
     });
 
-    // Zone first: if the zone has products (even out of stock), do not show
-    // global products. No zone product at all -> global products are shown.
-    visibleProducts = applyZonePriority(visibleProducts, (product) =>
-      product.storeId
-        ? getStoreScope(storeMapById[String(product.storeId)])
-        : null,
+    // Zone first, decided PER TYPE: when a zone store serves a type (even with
+    // out-of-stock items) its global products are not shown. A type without a
+    // zone store shows the global products. One type never hides another.
+    const zoneTypes = await getZoneTypeIds(allowedStores);
+    visibleProducts = applyZonePriority(
+      visibleProducts,
+      (product) =>
+        product.storeId
+          ? getStoreScope(storeMapById[String(product.storeId)])
+          : null,
+      { getType: (product) => normalizeTypeId(product.typeId), zoneTypes },
     );
 
     visibleProducts.sort((a, b) => {
@@ -1099,16 +1106,19 @@ exports.bestSelling = async (req, res) => {
       enrichedBestProducts.push(enrichedProduct);
     }
 
-    // Zone first: if the zone has best-selling products, no global products.
+    // Zone first, decided PER TYPE (see getProduct). The top 10 is taken AFTER
+    // the type filter so a mall request is not cut down by other types' items.
+    const zoneTypes = await getZoneTypeIds(allowedStores);
     const zoneFirstBestProducts = applyZonePriority(
       enrichedBestProducts,
       (product) => getStoreScope(storeMap[String(product.storeId)]),
-    ).slice(0, 10);
+      { getType: (product) => normalizeTypeId(product.typeId), zoneTypes },
+    );
 
     const filteredBestProducts = filterProductsByRequestedType(
       zoneFirstBestProducts,
       req,
-    );
+    ).slice(0, 10);
 
     return res.status(200).json({
       message: "Success",
@@ -1403,12 +1413,15 @@ exports.searchProduct = async (req, res) => {
       return !hide;
     });
 
-    // Zone first: if the zone has matching products (even out of stock), do not
-    // show global products. No zone product at all -> global products are shown.
-    const zoneFirstProducts = applyZonePriority(visibleProducts, (product) =>
-      product.storeId
-        ? getStoreScope(storeMap[String(product.storeId)])
-        : null,
+    // Zone first, decided PER TYPE (see getProduct).
+    const zoneTypes = await getZoneTypeIds(allowedStores);
+    const zoneFirstProducts = applyZonePriority(
+      visibleProducts,
+      (product) =>
+        product.storeId
+          ? getStoreScope(storeMap[String(product.storeId)])
+          : null,
+      { getType: (product) => normalizeTypeId(product.typeId), zoneTypes },
     );
 
     const filteredProducts = filterProductsByRequestedType(
@@ -2888,11 +2901,12 @@ exports.getRelatedProducts = async (req, res) => {
       }
     }
 
-    // Zone first: if the zone has related products (even out of stock), do not
-    // show global products. No zone product at all -> global products are shown.
+    // Zone first, decided PER TYPE (see getProduct).
+    const zoneTypes = await getZoneTypeIds(stores?.matchedStores || []);
     const visibleRelatedProducts = applyZonePriority(
       relatedProducts.filter((p) => !p._hideOutOfStockGlobal),
       (p) => relatedScopeById.get(String(p._id)) || null,
+      { getType: (p) => normalizeTypeId(p.typeId), zoneTypes },
     );
 
     const filteredRelatedProducts = filterProductsByRequestedType(

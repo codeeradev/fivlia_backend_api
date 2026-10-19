@@ -32,6 +32,7 @@ const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 
 // Optimized scope + brand-list helpers (cached, no N+1) - see utils/brandScope.js
 const { determineStoreScope, getBrandList } = require("../utils/brandScope");
+const { resolveTypeScope } = require("../utils/typeScope");
 
 exports.update = async (req, res) => {
   try {
@@ -1130,12 +1131,26 @@ exports.getCategories = async (req, res) => {
       return res.status(404).json({ message: "Category not found" });
     }
     // otherwise return all (global-only user: only the global stores' categories)
-    const globalScope = await resolveGlobalOnlyScope(req);
-    const visibleCategories = globalScope
-      ? allCategories.filter((c) =>
-          globalScope.mainCategoryIds.includes(String(c._id)),
-        )
-      : allCategories;
+    // ?typeId=<type> -> only that type, zone categories if a zone store serves
+    // it, else the global store's categories.
+    let visibleCategories;
+    const requestedTypeId = req.query.typeId;
+    if (requestedTypeId && mongoose.Types.ObjectId.isValid(requestedTypeId)) {
+      const typeScope = await resolveTypeScope(req, requestedTypeId);
+      const typeCategorySet = typeScope ? new Set(typeScope.categoryIds) : null;
+      visibleCategories = allCategories.filter(
+        (c) =>
+          String(c.typeId) === String(requestedTypeId) &&
+          (!typeCategorySet || typeCategorySet.has(String(c._id))),
+      );
+    } else {
+      const globalScope = await resolveGlobalOnlyScope(req);
+      visibleCategories = globalScope
+        ? allCategories.filter((c) =>
+            globalScope.mainCategoryIds.includes(String(c._id)),
+          )
+        : allCategories;
+    }
     const formatted = await Promise.all(visibleCategories.map(formatCategory));
 
     return res.status(200).json({ categories: formatted });
@@ -1239,7 +1254,7 @@ exports.getBrand = async (req, res) => {
     // Determine store scope (local vs global) - cached. For a single brand,
     // run the brand lookup in parallel instead of one after the other.
     const [storeScope, singleBrand] = await Promise.all([
-      determineStoreScope(req),
+      determineStoreScope(req, req.typeId),
       id ? brand.findById(id).lean() : null,
     ]);
 
@@ -1953,14 +1968,14 @@ exports.getMainCategory = async (req, res) => {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;
 
-    // null for city/zone users (no change). Set only for a global-only user.
-    const globalScope = await resolveGlobalOnlyScope(req);
-
     if (req.typeId) {
-      const typeCategoryIds = globalScope
-        ? req.categoryIds.filter((id) =>
-            globalScope.mainCategoryIds.includes(String(id)),
-          )
+      // PER TYPE: when an open zone store serves this type -> only the zone
+      // stores' categories. Otherwise -> only the global store's categories.
+      // null (guest without location / nothing open) -> no filtering.
+      const typeScope = await resolveTypeScope(req, req.typeId);
+      const typeCategorySet = typeScope ? new Set(typeScope.categoryIds) : null;
+      const typeCategoryIds = typeCategorySet
+        ? req.categoryIds.filter((id) => typeCategorySet.has(String(id)))
         : req.categoryIds;
 
       const categories = await Category.find({ _id: { $in: typeCategoryIds } })
@@ -1986,6 +2001,9 @@ exports.getMainCategory = async (req, res) => {
       });
     }
 
+    // no typeId (admin panel etc.): null for city/zone users (no change).
+    // Set only for a global-only user.
+    const globalScope = await resolveGlobalOnlyScope(req);
     const categoryFilter = globalScope
       ? { _id: { $in: globalScope.mainCategoryIds } }
       : {};

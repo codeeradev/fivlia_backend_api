@@ -107,18 +107,27 @@ const getDeliveryEstimate = async (req, res) => {
       .select("storeId stock")
       .lean();
 
-    const availableProductIdsByStore = new Map();
+    const availableProductIdsByStore = new Map(); // quantity > 0   (global stores)
+    const stockedProductIdsByStore = new Map(); // any quantity     (zone stores)
     const allAvailableProductIds = new Set();
     stockDocs.forEach((doc) => {
       const storeKey = String(doc.storeId);
       (doc.stock || []).forEach((item) => {
-        if (item && item.productId && item.quantity > 0) {
-          const productKey = String(item.productId);
+        if (!item || !item.productId) return;
+        const productKey = String(item.productId);
+
+        // every stock row counts for a ZONE store, even with quantity 0
+        if (!stockedProductIdsByStore.has(storeKey)) {
+          stockedProductIdsByStore.set(storeKey, new Set());
+        }
+        stockedProductIdsByStore.get(storeKey).add(productKey);
+        allAvailableProductIds.add(productKey);
+
+        if (item.quantity > 0) {
           if (!availableProductIdsByStore.has(storeKey)) {
             availableProductIdsByStore.set(storeKey, new Set());
           }
           availableProductIdsByStore.get(storeKey).add(productKey);
-          allAvailableProductIds.add(productKey);
         }
       });
     });
@@ -169,27 +178,38 @@ const getDeliveryEstimate = async (req, res) => {
       if (productType) productTypeMap.set(String(product._id), productType);
     });
 
-    // 4) types served by each store (only from active, in-stock products)
-    const servedTypesByStore = new Map();
-    availableProductIdsByStore.forEach((productIds, storeKey) => {
-      const types = new Set();
-      productIds.forEach((productId) => {
-        const productType = productTypeMap.get(productId);
-        if (productType) types.add(productType);
+    // 4) types served by each store (only from ACTIVE products)
+    //    servedTypesByStore  : in-stock products          -> GLOBAL stores
+    //    stockedTypesByStore : any stock row (qty >= 0)   -> ZONE stores
+    const buildServedTypes = (productIdsByStore) => {
+      const result = new Map();
+      productIdsByStore.forEach((productIds, storeKey) => {
+        const types = new Set();
+        productIds.forEach((productId) => {
+          const productType = productTypeMap.get(productId);
+          if (productType) types.add(productType);
+        });
+        if (types.size) result.set(storeKey, types);
       });
-      if (types.size) servedTypesByStore.set(storeKey, types);
-    });
+      return result;
+    };
+    const servedTypesByStore = buildServedTypes(availableProductIdsByStore);
+    const stockedTypesByStore = buildServedTypes(stockedProductIdsByStore);
 
     // every type this store really serves ([] = no sellable product -> hidden)
     // LOCAL store: serves only its OWN type (store.typeId). Products tagged with a
     //   different typeId (wrong data) must not create a second entry for it.
     //   If the store has no typeId saved, fall back to the product-derived types.
+    //   An out-of-stock item still counts (same rule as the product APIs, see
+    //   utils/typeScope.js), so a zone seller never gets replaced by global.
     // GLOBAL (All India) store: serves EVERY type it has in-stock products for
     //   (e.g. Fivlia -> mall + grocery + food), used when no local store of that
     //   type is open in the zone.
     const getStoreTypeKeys = (store) => {
-      const served = [...(servedTypesByStore.get(String(store._id)) || [])];
-      if (store.serviceScope === "global") return served;
+      if (store.serviceScope === "global") {
+        return [...(servedTypesByStore.get(String(store._id)) || [])];
+      }
+      const served = [...(stockedTypesByStore.get(String(store._id)) || [])];
       const ownType = normalizeTypeId(store.typeId);
       return ownType ? served.filter((t) => t === ownType) : served;
     };
