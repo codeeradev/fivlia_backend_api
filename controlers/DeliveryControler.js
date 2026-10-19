@@ -181,9 +181,14 @@ const getDeliveryEstimate = async (req, res) => {
     });
 
     // every type this store really serves ([] = no sellable product -> hidden)
-    const getStoreTypeKeys = (store) => [
-      ...(servedTypesByStore.get(String(store._id)) || []),
-    ];
+    // A store only serves its OWN type (store.typeId). Products tagged with a
+    // different typeId (wrong data) must not create a second entry for the store.
+    // If the store has no typeId saved, fall back to the product-derived types.
+    const getStoreTypeKeys = (store) => {
+      const ownType = normalizeTypeId(store.typeId);
+      const served = [...(servedTypesByStore.get(String(store._id)) || [])];
+      return ownType ? served.filter((t) => t === ownType) : served;
+    };
 
     // Distance + time for ONE local store (same logic as before)
     const getLocalEstimate = async (store, distanceMeters) => {
