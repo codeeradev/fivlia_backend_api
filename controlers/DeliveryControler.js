@@ -13,6 +13,8 @@ const haversine = require("haversine-distance");
 const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
 const Category = require("../modals/category");
 const Type = require("../modals/type");
+const Products = require("../modals/Product");
+const Stock = require("../modals/StoreStock");
 const { normalizeTypeId } = require("../utils/productTypeFilter");
 
 function addFiveMinutes(durationText,settings) {
@@ -88,32 +90,61 @@ const getDeliveryEstimate = async (req, res) => {
     const olaApi = mapApi?.ola || {};
 
     // ------------------------------------------------------------------
-    // ✅ Types of every open store (food / grocery / mall ... from saved data).
-    //    A store can sell more than one type, so its types are:
-    //      - its own typeId, PLUS
-    //      - the typeId of every saved category (Category.typeId):
-    //        Store.Category and Store.sellerCategories
-    //    The store is listed under each of those types.
+    // ✅ Types a store can REALLY serve = types of its IN-STOCK products.
+    //    A store with no in-stock product of a type is not shown for that type
+    //    (an empty store is never returned).
+    //      in stock = Stock item quantity > 0 AND item status true
+    //                 AND product status true
+    //      product type = Product.typeId, else Category.typeId of its category
     // ------------------------------------------------------------------
     const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
 
-    const getStoreCategoryIds = (store) =>
-      [
-        ...(Array.isArray(store.Category) ? store.Category : [store.Category]),
-        ...(store.sellerCategories || []).map((c) => c?.categoryId),
-      ]
-        .filter(Boolean)
-        .map((c) => String(c))
-        .filter((id) => OBJECT_ID_REGEX.test(id));
+    // 1) available stock items of all open stores (one query)
+    const stockDocs = await Stock.find({
+      storeId: { $in: matchedStores.map((store) => store._id) },
+    })
+      .select("storeId stock")
+      .lean();
 
-    const allCategoryIds = [
-      ...new Set(matchedStores.flatMap(getStoreCategoryIds)),
+    const availableProductIdsByStore = new Map();
+    const allAvailableProductIds = new Set();
+    stockDocs.forEach((doc) => {
+      const storeKey = String(doc.storeId);
+      (doc.stock || []).forEach((item) => {
+        if (item && item.productId && item.quantity > 0 && item.status === true) {
+          const productKey = String(item.productId);
+          if (!availableProductIdsByStore.has(storeKey)) {
+            availableProductIdsByStore.set(storeKey, new Set());
+          }
+          availableProductIdsByStore.get(storeKey).add(productKey);
+          allAvailableProductIds.add(productKey);
+        }
+      });
+    });
+
+    // 2) active products and their type (one query)
+    const productDocs = allAvailableProductIds.size
+      ? await Products.find({
+          _id: { $in: [...allAvailableProductIds] },
+          status: true,
+        })
+          .select("_id typeId category")
+          .lean()
+      : [];
+
+    // 3) products saved without typeId: type from their category (one query)
+    const productCategoryIds = [
+      ...new Set(
+        productDocs
+          .filter((product) => !normalizeTypeId(product.typeId))
+          .flatMap((product) => (product.category || []).map((c) => String(c?._id)))
+          .filter((id) => OBJECT_ID_REGEX.test(id))
+      ),
     ];
-
     const categoryTypeMap = new Map();
-    if (allCategoryIds.length) {
+    if (productCategoryIds.length) {
       const categoryDocs = await Category.find({
-        _id: { $in: allCategoryIds },
+        _id: { $in: productCategoryIds },
       })
         .select("_id typeId")
         .lean();
@@ -122,18 +153,36 @@ const getDeliveryEstimate = async (req, res) => {
       );
     }
 
-    // every type id this store belongs to ("other" when none can be found)
-    const getStoreTypeKeys = (store) => {
-      const keys = new Set();
-      const ownTypeId = normalizeTypeId(store.typeId);
-      if (ownTypeId) keys.add(ownTypeId);
-      getStoreCategoryIds(store).forEach((id) => {
-        const categoryType = categoryTypeMap.get(id);
-        if (categoryType) keys.add(categoryType);
+    const productTypeMap = new Map(); // productId -> typeId
+    productDocs.forEach((product) => {
+      let productType = normalizeTypeId(product.typeId);
+      if (!productType) {
+        for (const c of product.category || []) {
+          const categoryType = categoryTypeMap.get(String(c?._id));
+          if (categoryType) {
+            productType = categoryType;
+            break;
+          }
+        }
+      }
+      if (productType) productTypeMap.set(String(product._id), productType);
+    });
+
+    // 4) types served by each store (only from active, in-stock products)
+    const servedTypesByStore = new Map();
+    availableProductIdsByStore.forEach((productIds, storeKey) => {
+      const types = new Set();
+      productIds.forEach((productId) => {
+        const productType = productTypeMap.get(productId);
+        if (productType) types.add(productType);
       });
-      if (!keys.size) keys.add("other");
-      return [...keys];
-    };
+      if (types.size) servedTypesByStore.set(storeKey, types);
+    });
+
+    // every type this store really serves ([] = no sellable product -> hidden)
+    const getStoreTypeKeys = (store) => [
+      ...(servedTypesByStore.get(String(store._id)) || []),
+    ];
 
     // Distance + time for ONE local store (same logic as before)
     const getLocalEstimate = async (store, distanceMeters) => {
