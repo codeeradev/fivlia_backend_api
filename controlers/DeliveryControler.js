@@ -93,8 +93,9 @@ const getDeliveryEstimate = async (req, res) => {
     // ✅ Types a store can REALLY serve = types of its IN-STOCK products.
     //    A store with no in-stock product of a type is not shown for that type
     //    (an empty store is never returned).
-    //      in stock = Stock item quantity > 0 AND item status true
-    //                 AND product status true
+    //      in stock = Stock item quantity > 0 AND product not disabled
+    //                 (same rule as getProduct / getFeatureProduct: the stock
+    //                 item `status` flag is NOT used)
     //      product type = Product.typeId, else Category.typeId of its category
     // ------------------------------------------------------------------
     const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
@@ -111,7 +112,7 @@ const getDeliveryEstimate = async (req, res) => {
     stockDocs.forEach((doc) => {
       const storeKey = String(doc.storeId);
       (doc.stock || []).forEach((item) => {
-        if (item && item.productId && item.quantity > 0 && item.status === true) {
+        if (item && item.productId && item.quantity > 0) {
           const productKey = String(item.productId);
           if (!availableProductIdsByStore.has(storeKey)) {
             availableProductIdsByStore.set(storeKey, new Set());
@@ -126,7 +127,7 @@ const getDeliveryEstimate = async (req, res) => {
     const productDocs = allAvailableProductIds.size
       ? await Products.find({
           _id: { $in: [...allAvailableProductIds] },
-          status: true,
+          status: { $ne: false },
         })
           .select("_id typeId category")
           .lean()
