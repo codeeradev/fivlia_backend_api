@@ -35,9 +35,10 @@ const categorySchema = new mongoose.Schema({
   filter: [{_id: { type: mongoose.Schema.Types.ObjectId },Filter_name: { type: String },
   selected: [{_id: { type: mongoose.Schema.Types.ObjectId },name: { type: String }}],
  }],
-  status:{type:Boolean,default:true}
+  status:{type:Boolean,default:true},
+  // Display order in the app: lower number = shown first. New categories go last.
+  sortOrder:{type:Number,default:999}
 });
+categorySchema.index({ sortOrder: 1, categoryId: 1 });
 const Category=mongoose.model('Category', categorySchema,'Categories');
 module.exports = Category
-
-//isme filter ka system banana dikhe navi schema banegi shayad

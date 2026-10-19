@@ -1041,7 +1041,9 @@ exports.getCategories = async (req, res) => {
   "-> need change";
   try {
     const { id } = req.query;
-    const allCategories = await Category.find().lean();
+    const allCategories = await Category.find()
+      .sort({ sortOrder: 1, categoryId: 1 })
+      .lean();
 
     // helper: get product count by field
     const getCount = async (query) => {
@@ -1988,6 +1990,7 @@ exports.getMainCategory = async (req, res) => {
       //   : req.categoryIds;
 
       const categories = await Category.find(categoryFilter)
+        .sort({ sortOrder: 1, categoryId: 1 })
         .skip(skip)
         .limit(Number(limit))
         .lean();
@@ -2020,7 +2023,10 @@ exports.getMainCategory = async (req, res) => {
     const totalCategories = await Category.countDocuments(categoryFilter);
 
     // Fetch only current page categories
-    const data = await Category.find(categoryFilter).skip(skip).limit(limit);
+    const data = await Category.find(categoryFilter)
+      .sort({ sortOrder: 1, categoryId: 1 })
+      .skip(skip)
+      .limit(limit);
 
     // Enrich with totalProducts
     const enriched = await Promise.all(

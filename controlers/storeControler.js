@@ -630,6 +630,7 @@ exports.getStoreCategory = async (req, res) => {
       const category = await CategoryModel.find({
         _id: { $in: Seller.productCategory },
       })
+        .sort({ sortOrder: 1, categoryId: 1 })
         .skip(skip)
         .limit(Number(limit))
         .lean();
@@ -642,6 +643,7 @@ exports.getStoreCategory = async (req, res) => {
     const store = await Store.findById(storeId);
 
     const category = await CategoryModel.find({ _id: { $in: store.Category } })
+      .sort({ sortOrder: 1, categoryId: 1 })
       .skip(skip)
       .limit(Number(limit))
       .lean();
