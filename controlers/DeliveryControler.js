@@ -181,12 +181,16 @@ const getDeliveryEstimate = async (req, res) => {
     });
 
     // every type this store really serves ([] = no sellable product -> hidden)
-    // A store only serves its OWN type (store.typeId). Products tagged with a
-    // different typeId (wrong data) must not create a second entry for the store.
-    // If the store has no typeId saved, fall back to the product-derived types.
+    // LOCAL store: serves only its OWN type (store.typeId). Products tagged with a
+    //   different typeId (wrong data) must not create a second entry for it.
+    //   If the store has no typeId saved, fall back to the product-derived types.
+    // GLOBAL (All India) store: serves EVERY type it has in-stock products for
+    //   (e.g. Fivlia -> mall + grocery + food), used when no local store of that
+    //   type is open in the zone.
     const getStoreTypeKeys = (store) => {
-      const ownType = normalizeTypeId(store.typeId);
       const served = [...(servedTypesByStore.get(String(store._id)) || [])];
+      if (store.serviceScope === "global") return served;
+      const ownType = normalizeTypeId(store.typeId);
       return ownType ? served.filter((t) => t === ownType) : served;
     };
 
