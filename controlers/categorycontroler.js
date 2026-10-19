@@ -33,6 +33,7 @@ const { RETURN_WINDOW_DAYS } = require("../utils/returnPolicy");
 // Optimized scope + brand-list helpers (cached, no N+1) - see utils/brandScope.js
 const { determineStoreScope, getBrandList } = require("../utils/brandScope");
 const { resolveTypeScope } = require("../utils/typeScope");
+const { resolveMainCategoryFilter } = require("../utils/mainCategoryFilter");
 
 exports.update = async (req, res) => {
   try {
@@ -1968,24 +1969,30 @@ exports.getMainCategory = async (req, res) => {
     const { page = 1, limit = 20 } = req.query; // default values
     const skip = (page - 1) * limit;
 
-    if (req.typeId) {
-      // PER TYPE: when an open zone store serves this type -> only the zone
-      // stores' categories. Otherwise -> only the global store's categories.
-      // null (guest without location / nothing open) -> no filtering.
-      const typeScope = await resolveTypeScope(req, req.typeId);
-      const typeCategorySet = typeScope ? new Set(typeScope.categoryIds) : null;
-      const typeCategoryIds = typeCategorySet
-        ? req.categoryIds.filter((id) => typeCategorySet.has(String(id)))
-        : req.categoryIds;
+    const categoryFilter = await resolveMainCategoryFilter(req, {
+      resolveUser,
+      getStoresWithinRadius,
+      resolveTypeScope,
+      resolveGlobalOnlyScope,
+    });
 
-      const categories = await Category.find({ _id: { $in: typeCategoryIds } })
+    if (req.typeId) {
+      // Previous filtering retained for reference; global behavior lives in mainCategoryFilter.
+      // // PER TYPE: when an open zone store serves this type -> only the zone
+      // // stores' categories. Otherwise -> only the global store's categories.
+      // // null (guest without location / nothing open) -> no filtering.
+      // const typeScope = await resolveTypeScope(req, req.typeId);
+      // const typeCategorySet = typeScope ? new Set(typeScope.categoryIds) : null;
+      // const typeCategoryIds = typeCategorySet
+      //   ? req.categoryIds.filter((id) => typeCategorySet.has(String(id)))
+      //   : req.categoryIds;
+
+      const categories = await Category.find(categoryFilter)
         .skip(skip)
         .limit(Number(limit))
         .lean();
 
-      const totalCategories = await Category.countDocuments({
-        _id: { $in: typeCategoryIds },
-      });
+      const totalCategories = await Category.countDocuments(categoryFilter);
 
       return res.status(200).send({
         message: "Success",
@@ -2001,12 +2008,13 @@ exports.getMainCategory = async (req, res) => {
       });
     }
 
-    // no typeId (admin panel etc.): null for city/zone users (no change).
-    // Set only for a global-only user.
-    const globalScope = await resolveGlobalOnlyScope(req);
-    const categoryFilter = globalScope
-      ? { _id: { $in: globalScope.mainCategoryIds } }
-      : {};
+    // Previous no-type filter retained; mainCategoryFilter now handles zone membership.
+    // // no typeId (admin panel etc.): null for city/zone users (no change).
+    // // Set only for a global-only user.
+    // const globalScope = await resolveGlobalOnlyScope(req);
+    // const categoryFilter = globalScope
+    //   ? { _id: { $in: globalScope.mainCategoryIds } }
+    //   : {};
 
     // Get total categories for pagination
     const totalCategories = await Category.countDocuments(categoryFilter);
