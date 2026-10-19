@@ -1802,7 +1802,12 @@ exports.getFeatureProduct = async (req, res) => {
     });
 
     // ✅ Builds the featured product list for one group of stores
-    const buildFeaturedProducts = async (allowedStores) => {
+    // featuredOnly=false -> every product the stores sell (used as the zone
+    // fallback when a zone seller has no product flagged as featured)
+    const buildFeaturedProducts = async (
+      allowedStores,
+      { featuredOnly = true } = {},
+    ) => {
       const allowedStoreIds = allowedStores.map((store) => store._id.toString());
       const isGlobalStoreGroup = allowedStores.every(
         (store) => store.serviceScope === "global",
@@ -1869,7 +1874,7 @@ exports.getFeatureProduct = async (req, res) => {
 
       // ✅ Fetch featured products
       const query = {
-        feature_product: true,
+        ...(featuredOnly ? { feature_product: true } : {}),
         $or: [
           { "category._id": { $in: categoryArray } },
           { "subCategory._id": { $in: categoryArray } },
@@ -1997,13 +2002,73 @@ exports.getFeatureProduct = async (req, res) => {
       return filterProductsByRequestedType(enrichedProducts, req);
     };
 
-    // ✅ Try the stores in priority order; the first group that has
-    //    featured products in stock wins (otherwise fall back to the next one)
-    let filteredProducts = [];
-    for (const group of storeGroups) {
-      filteredProducts = await buildFeaturedProducts(group);
-      if (filteredProducts.length) break;
+    // ✅ Zone first, decided PER TYPE.
+    //    The "featured" flag is saved on the shared product, so a zone seller
+    //    can have products but none flagged featured. That must NOT push the
+    //    user to the global products:
+    //      - type served by a zone store -> zone products only
+    //        (featured ones; if none are featured, the zone seller's own
+    //        products, in stock first)
+    //      - type with no zone seller    -> global featured products
+    const ZONE_FEATURE_FALLBACK_LIMIT = 50;
+    const requestedTypeId = normalizeTypeId(req.typeId || req.query?.typeId);
+    const typeOf = (product) => normalizeTypeId(product.typeId);
+    const matchedStoreById = {};
+    matchedStores.forEach((store) => {
+      matchedStoreById[String(store._id)] = store;
+    });
+
+    const zoneTypes = await getZoneTypeIds(matchedStores);
+
+    const [localFeatured, globalFeatured] = await Promise.all([
+      localStores.length ? buildFeaturedProducts(localStores) : [],
+      globalStores.length ? buildFeaturedProducts(globalStores) : [],
+    ]);
+
+    // zone-served types that have NO featured zone product
+    let zoneFallback = [];
+    if (localStores.length && zoneTypes?.size) {
+      const typesWithFeatured = new Set(localFeatured.map(typeOf));
+      const missingTypes = [...zoneTypes].filter(
+        (type) =>
+          !typesWithFeatured.has(type) &&
+          (!requestedTypeId || type === requestedTypeId),
+      );
+      if (missingTypes.length) {
+        const hasStock = (product) =>
+          product.inventory?.some((i) => Number(i.quantity) > 0) ? 1 : 0;
+        const zoneProducts = await buildFeaturedProducts(localStores, {
+          featuredOnly: false,
+        });
+        zoneFallback = zoneProducts
+          .filter((product) => missingTypes.includes(typeOf(product)))
+          .sort((a, b) => hasStock(b) - hasStock(a))
+          .slice(0, ZONE_FEATURE_FALLBACK_LIMIT);
+      }
     }
+
+    // one entry per product (zone copy first), then drop global items of every
+    // type that has a zone seller
+    const seenProducts = new Set();
+    const mergedProducts = [
+      ...localFeatured,
+      ...zoneFallback,
+      ...globalFeatured,
+    ].filter((product) => {
+      const key = String(product._id);
+      if (seenProducts.has(key)) return false;
+      seenProducts.add(key);
+      return true;
+    });
+
+    const filteredProducts = applyZonePriority(
+      mergedProducts,
+      (product) =>
+        product.storeId
+          ? getStoreScope(matchedStoreById[String(product.storeId)])
+          : null,
+      { getType: typeOf, zoneTypes },
+    );
 
     // ✅ Pagination
     const paginatedProducts = filteredProducts.slice(
