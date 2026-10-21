@@ -215,7 +215,7 @@ async function generatePDFInvoice(
           doc.text(`Phone: ${store.PhoneNumber || "+91-XXXXXXXXXX"}`);
         }
         if (!isSecondInvoice) {
-          doc.text(`Address: ${store.fullAddress || store.city.name || "N/A"}`);
+          doc.text(`Address: ${store.fullAddress || store.city?.name || "N/A"}`);
         }
         doc.text(`Date: ${moment(order.createdAt).format("DD MMM, YYYY")}`);
         doc.text(`Time: ${moment(order.createdAt).format("hh:mm:ss A")}`);
