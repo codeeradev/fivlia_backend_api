@@ -1,18 +1,3 @@
-// utils/brandScope.js
-// Fast helpers for GET /getBrand.
-//
-// What was slow before (per request, x4 requests from the app):
-//   1. global scope : Category.findById() inside a for-loop            (N+1 queries)
-//   2. local scope  : loaded EVERY stock doc + EVERY full product doc just to read category ids
-//   3. brand list   : loaded every product in scope just to read brand ids
-//   4. nothing was cached, and 4 identical parallel calls did 4x the work
-//
-// What this file does:
-//   - one batched query instead of N+1
-//   - Stock.distinct / Products.distinct (DB does the work, tiny payload)
-//   - Redis cache (falls back to in-memory if REDIS_URL is not set)
-//   - in-flight de-duplication: parallel identical requests share ONE computation
-
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const Store = require("../modals/store");
@@ -257,11 +242,11 @@ async function determineStoreScope(req, typeId = null) {
 /* ------------------------------------------------------------------ */
 
 // Returns { featuredBrands, allBrands } - cached per scope + typeId
-async function getBrandList(storeScope, typeId) {
+async function getBrandList(storeScope, typeId, skipCache = false) {
   const scopeKey = `${storeScope.scopeType}:${hashIds(storeScope.storeIds || [])}`;
   const key = `brand:list:${scopeKey}:${typeId || "all"}`;
 
-  return cached(key, LIST_TTL, async () => {
+  const loadBrands = async () => {
     const brandFilter = {};
     if (typeId) brandFilter.typeId = new mongoose.Types.ObjectId(typeId);
 
@@ -288,7 +273,9 @@ async function getBrandList(storeScope, typeId) {
     );
 
     return { featuredBrands, allBrands };
-  });
+  };
+
+  return skipCache ? loadBrands() : cached(key, LIST_TTL, loadBrands);
 }
 
 module.exports = { determineStoreScope, getBrandList };

@@ -109,7 +109,7 @@ exports.storeLogin = async (req, res) => {
 
 exports.createStore = async (req, res) => {
   try {
-    console.log("Incoming body:", req.body);
+    // console.log("Incoming body:", req.body); // Do not log submitted passwords.
 
     let {
       storeName,
@@ -124,10 +124,15 @@ exports.createStore = async (req, res) => {
       status,
       Description,
       isAssured,
+      isAuthorized,
       typeId,
       serviceScope,
       Category: categoryInput,
     } = req.body;
+
+    // Admin-created sellers go directly to the admin review queue. Keep the
+    // legacy authorized-store default when older callers omit the switch.
+    const authorizedStore = isAuthorized === undefined ? true : isTruthyFlag(isAuthorized);
 
     //
     // 1️⃣ Parse `Category` string → array
@@ -220,7 +225,8 @@ exports.createStore = async (req, res) => {
     //
     // 5️⃣ Category → full list + sub/subsub for product lookup
     //
-    categoryInput = categoryInput.map((id) => id.trim());
+    // categoryInput = categoryInput.map((id) => id.trim());
+    categoryInput = (Array.isArray(categoryInput) ? categoryInput : []).map((id) => id.trim());
     const finalCategoryIds = [];
     const allProductCategoryIds = [];
 
@@ -268,7 +274,10 @@ exports.createStore = async (req, res) => {
       password,
       emailVerified: false, // ⬅️ Add this line
       verificationToken: null,
-      status,
+      // status, // Sellers remain inactive until reviewed and enabled.
+      status: authorizedStore ? status : false,
+      Authorized_Store: authorizedStore,
+      ...(authorizedStore ? {} : { approveStatus: "pending_admin_approval" }),
       Description,
       Category: finalCategoryIds,
       image,
