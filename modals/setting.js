@@ -13,6 +13,7 @@ const settingAdminSchema = new mongoose.Schema({
   },
   Password: String,
   Platform_Fee: Number,
+  Platform_Fee_Fixed: { type: Number, default: 0, min: 0 },
   codLimit: Number,
   GST_Number: String,
   Description: String,

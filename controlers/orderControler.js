@@ -1,3 +1,4 @@
+const { getLocalPlatformFee } = require("../utils/platformFee");
 const mongoose = require("mongoose");
 const { Order, TempOrder } = require("../modals/order");
 const { ZoneData } = require("../modals/cityZone");
@@ -364,7 +365,10 @@ exports.placeOrder = async (req, res) => {
     // Global (All India) orders are delivered by a third party: no platform fee
     const platformFeeStored = isGlobalOrder ? chargesData.Platform_Fee : chargesData.Platform_Fee;
     const platformFeeRate = (platformFeeStored || 0) / 100;
-    const platformFeeAmount = itemsTotal * platformFeeRate;
+    // const platformFeeAmount = itemsTotal * platformFeeRate;
+    const platformFeeAmount = isGlobalOrder
+      ? itemsTotal * platformFeeRate
+      : getLocalPlatformFee(itemsTotal, chargesData).amount;
 
     // OLD: total price before distance-based delivery charge
     // let totalPrice = itemsTotal;
@@ -1361,7 +1365,10 @@ exports.getOrderDetails = async (req, res) => {
       // Global orders carry no platform fee
       const platformFee = isGlobalOrderRow
         ? Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2))
-        : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
+        // Use the saved local fee so later settings changes do not rewrite history.
+        : order.platformFee != null
+          ? Number(order.platformFee)
+          : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {

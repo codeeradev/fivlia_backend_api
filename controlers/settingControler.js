@@ -1,3 +1,4 @@
+const { validatePlatformFeeSettings } = require("../utils/platformFee");
 const { SettingAdmin } = require("../modals/setting");
 const Order = require("../modals/order");
 const User = require("../modals/User");
@@ -18,7 +19,7 @@ exports.getSettings = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Settings", settings: withGlobalSettingDefaults(settings) });
+      .json({ message: "Settings", settings: { ...withGlobalSettingDefaults(settings), Platform_Fee_Fixed: settings.Platform_Fee_Fixed ?? 0 } });
   } catch (error) {
     console.error("Get User Settings Error =>", error);
     return res
@@ -114,6 +115,9 @@ exports.adminSetting = async (req, res) => {
     if (req.body.payload) {
       updateFields = JSON.parse(req.body.payload);
     }
+
+    const feeError = validatePlatformFeeSettings(updateFields);
+    if (feeError) return res.status(400).json({ message: feeError });
 
     const currentSettings = await SettingAdmin.findOne().lean();
 

@@ -1,3 +1,4 @@
+const { getLocalPlatformFee } = require("../utils/platformFee");
 const { Cart, Discount } = require("../modals/cart");
 const { ZoneData } = require("../modals/cityZone");
 const Products = require("../modals/Product");
@@ -582,7 +583,10 @@ exports.getCart = async (req, res) => {
         ? formatGlobalDeliveryText(settings)
         : null,
       // Global carts: no platform fee (the app should not add one)
-      platformFeePercent: isGlobalStore ? 0 : Number(settings?.Platform_Fee || 0),
+      // platformFeePercent: isGlobalStore ? 0 : Number(settings?.Platform_Fee || 0),
+      platformFeePercent: isGlobalStore ? 0 : getLocalPlatformFee(
+        offerContext.cartDiscount.finalSubtotal, settings,
+      ).percent,
       deliveryCharge,
       deliveryBaseCharge,
       deliveryChargeMode,
