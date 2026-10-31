@@ -1,4 +1,7 @@
-const { validatePlatformFeeSettings } = require("../utils/platformFee");
+const { Cart } = require("../modals/cart");
+const Store = require("../modals/store");
+const { getAppliedOfferContext } = require("../utils/storeOffer");
+const { getLocalPlatformFee, validatePlatformFeeSettings } = require("../utils/platformFee");
 const { SettingAdmin } = require("../modals/setting");
 const Order = require("../modals/order");
 const User = require("../modals/User");
@@ -30,7 +33,7 @@ exports.getSettings = async (req, res) => {
 
 exports.settings = async (req, res) => {
   try {
-    const userId = req.user;
+    const userId = req.user?._id || req.user?.id || req.user;
 
     // Get the settings document (full, with all fields)
     const settingsDoc = await SettingAdmin.findOne().lean();
@@ -81,6 +84,24 @@ exports.settings = async (req, res) => {
     const user = await User.findById(userId).lean();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    // Only override the response percentage for the authenticated user's local
+    // cart. Do not persist this effective rate or alter global-store settings.
+    const cartItems = await Cart.find({ userId }).lean();
+    const cartStoreId = cartItems[0]?.storeId;
+    const singleStore = cartStoreId && cartItems.every(
+      (item) => String(item.storeId) === String(cartStoreId),
+    );
+    if (singleStore) {
+      const cartStore = await Store.findById(cartStoreId).select("serviceScope").lean();
+      if (cartStore && cartStore.serviceScope !== "global") {
+        const regularItems = cartItems.filter((item) => !item.isFreeProduct);
+        const offerContext = await getAppliedOfferContext(regularItems, cartStoreId);
+        settings.Platform_Fee = getLocalPlatformFee(
+          offerContext.cartDiscount.finalSubtotal, settingsDoc,
+        ).percent;
+      }
     }
 
     return res.status(200).json({
