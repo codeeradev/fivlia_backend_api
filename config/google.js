@@ -253,7 +253,8 @@ const reverseGeocode = async (lat, lng) => {
         c.types.includes("sublocality_level_1")
     )?.long_name;
 
-    return { city, zone };
+    const pincode = components.find(c => c.types.includes("postal_code"))?.long_name;
+    return { city, zone, pincode };
   } catch (err) {
     console.error("Reverse geocoding error:", err.message);
     return null;

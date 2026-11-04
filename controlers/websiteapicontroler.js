@@ -24,7 +24,7 @@ const { contactUsTemplate } = require("../utils/emailTemplates");
 const Blog = require("../modals/blog");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
-const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
+const { buildWebsiteGlobalEstimateEntry } = require("../utils/globalDelivery");
 const {
   dropOutOfStockGlobalOptions,
   isInStock,
@@ -1459,11 +1459,14 @@ exports.getDeliveryEstimateForWebsite = async (req, res) => {
       );
       if (globalStore) {
         const globalSettings = await SettingAdmin.findOne().lean();
+        const pincode = req.query.pincode || (await reverseGeocode(currentLat, currentLong))?.pincode;
+        const entry = buildWebsiteGlobalEstimateEntry(globalStore, globalSettings, pincode);
+        if (!entry) return res.json({ status: false, deliveryMode: "none", filtered: [], message: "Global delivery is not available for this PIN code." });
         return res.json({
           status: true,
           result: 2,
           deliveryMode: "global",
-          filtered: [buildGlobalEstimateEntry(globalStore, globalSettings)],
+          filtered: [entry],
         });
       }
       return res.json({ status: false, filtered: [] });

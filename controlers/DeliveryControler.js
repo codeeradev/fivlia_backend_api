@@ -338,12 +338,15 @@ const getDeliveryEstimate = async (req, res) => {
     );
     localEntries.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
+    const globalPincode = globalByType.size
+      ? (req.query?.pincode || (await reverseGeocode(currentLat, currentLong))?.pincode)
+      : null;
     const globalEntries = [...globalByType.entries()].map(
       ([typeKey, store]) => ({
         typeKey,
-        entry: buildGlobalEstimateEntry(store, settings),
+        entry: buildGlobalEstimateEntry(store, settings, globalPincode),
       })
-    );
+    ).filter(item => item.entry);
 
     if (!localEntries.length && !globalEntries.length) {
       return res.json({

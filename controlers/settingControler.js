@@ -1,7 +1,4 @@
-const { Cart } = require("../modals/cart");
-const Store = require("../modals/store");
-const { getAppliedOfferContext } = require("../utils/storeOffer");
-const { getLocalPlatformFee, validatePlatformFeeSettings } = require("../utils/platformFee");
+const { validatePlatformFeeSettings } = require("../utils/platformFee");
 const { SettingAdmin } = require("../modals/setting");
 const Order = require("../modals/order");
 const User = require("../modals/User");
@@ -86,24 +83,6 @@ exports.settings = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Only override the response percentage for the authenticated user's local
-    // cart. Do not persist this effective rate or alter global-store settings.
-    const cartItems = await Cart.find({ userId }).lean();
-    const cartStoreId = cartItems[0]?.storeId;
-    const singleStore = cartStoreId && cartItems.every(
-      (item) => String(item.storeId) === String(cartStoreId),
-    );
-    if (singleStore) {
-      const cartStore = await Store.findById(cartStoreId).select("serviceScope").lean();
-      if (cartStore && cartStore.serviceScope !== "global") {
-        const regularItems = cartItems.filter((item) => !item.isFreeProduct);
-        const offerContext = await getAppliedOfferContext(regularItems, cartStoreId);
-        settings.Platform_Fee = getLocalPlatformFee(
-          offerContext.cartDiscount.finalSubtotal, settingsDoc,
-        ).percent;
-      }
-    }
-
     return res.status(200).json({
       message: "Settings",
       mobileNumber: user.mobileNumber,
@@ -119,7 +98,7 @@ exports.settings = async (req, res) => {
 
 exports.getSmsType = async (req, res) => {
   try {
-    const setting = await SettingAdmin.find();
+    const setting = (await SettingAdmin.find().lean()).map(withGlobalSettingDefaults);
     return res.status(200).json({ message: "Setting", setting });
   } catch {
     console.error("Get User Settings Error =>", error);
@@ -151,7 +130,6 @@ exports.adminSetting = async (req, res) => {
       if (key in updateFields) delete updateFields[key];
     });
     Object.assign(updateFields, globalCheck.values);
-
     // Shipping platforms (third party couriers for global orders)
     if ("shippingPlatforms" in updateFields) {
       const platformCheck = validateShippingPlatforms(

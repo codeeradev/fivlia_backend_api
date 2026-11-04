@@ -1,181 +1,175 @@
-// Shared helpers for Global (All India) store delivery.
-// Used by getCart, placeOrder, getDeliveryEstimate and the product list APIs
-// so every place calculates the same values.
-
-const toNumber = (value, fallback = 0) => {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
-};
-
-const roundCurrency = (value) =>
-  Math.round((toNumber(value) + Number.EPSILON) * 100) / 100;
-
-// store.serviceScope -> "global" | "local"
+// One PIN-code rule is used by cart, order validation and delivery estimates.
 const isGlobalStore = (store) => store?.serviceScope === "global";
-
 const getDeliveryMode = (store) => (isGlobalStore(store) ? "global" : "local");
-
-// Order / TempOrder / cart scope: "global" | "city" (missing = "city")
 const getOrderScope = (store) => (isGlobalStore(store) ? "global" : "city");
-
-// Normalise the 4 global settings (missing values fall back to defaults)
-const getGlobalSettings = (settings = {}) => {
-  const min = Math.max(0, toNumber(settings?.globalDeliveryDaysMin, 3));
-  const maxRaw = Math.max(0, toNumber(settings?.globalDeliveryDaysMax, 5));
+const normalizePincode = (value) => String(value ?? "").trim();
+const getGlobalSettings = (settings = {}, pincode) => {
+  const pin = normalizePincode(pincode);
+  if (!/^[1-9][0-9]{5}$/.test(pin)) return null;
+  return (
+    settings?.globalDeliveryRules?.find((rule) => rule.pincode === pin) || null
+  );
+};
+// The website may use the admin default when no exact PIN rule exists.
+// Mobile/app callers continue using getGlobalSettings and exact rules only.
+const getWebsiteGlobalSettings = (settings = {}, pincode) => {
+  const pin = normalizePincode(pincode);
+  if (!/^[1-9][0-9]{5}$/.test(pin)) return null;
+  const exactRule = getGlobalSettings(settings, pin);
+  if (exactRule) return { ...exactRule, source: "pincode" };
+  const defaults = settings?.globalDeliveryDefaults;
+  if (!defaults) return null;
+  return { ...defaults, pincode: pin, source: "default" };
+};
+const isGlobalCodAllowed = (settings, pincode, ruleOverride) =>
+  (ruleOverride === undefined ? getGlobalSettings(settings, pincode) : ruleOverride)
+    ?.codAllowed === true;
+const computeGlobalShippingCharge = (itemsTotal, settings, pincode, ruleOverride) => {
+  const rule = ruleOverride === undefined
+    ? getGlobalSettings(settings, pincode)
+    : ruleOverride;
+  if (!rule)
+    throw new Error("Global delivery is not available for this PIN code.");
+  return Math.round((Number(rule.shippingCharge) + Number.EPSILON) * 100) / 100;
+};
+const formatGlobalDeliveryText = (settings, pincode, ruleOverride) => {
+  const rule = ruleOverride === undefined
+    ? getGlobalSettings(settings, pincode)
+    : ruleOverride;
+  if (!rule) return null;
+  return rule.daysMin === rule.daysMax
+    ? `${rule.daysMin} days`
+    : `${rule.daysMin}-${rule.daysMax} days`;
+};
+const buildGlobalEstimateEntry = (store, settings, pincode) => {
+  if (!getGlobalSettings(settings, pincode)) return null;
   return {
-    shippingCharge: Math.max(0, toNumber(settings?.globalShippingCharge, 0)),
-    freeShippingLimit: Math.max(0, toNumber(settings?.globalFreeShippingLimit, 0)),
-    daysMin: min,
-    daysMax: Math.max(min, maxRaw),
-    codAllowed: settings?.globalCodAllowed === true,
+    storeId: store._id,
+    storeName: store.storeName,
+    city: null,
+    distance: "All India",
+    duration: formatGlobalDeliveryText(settings, pincode),
+    raw: { source: "global" },
   };
 };
-
-// Admin toggle: may customers pay Cash on Delivery on Global (All India) orders?
-const isGlobalCodAllowed = (settings = {}) => settings?.globalCodAllowed === true;
-
-// Flat shipping. This is the FINAL global delivery charge (admin setting
-// "globalShippingCharge"): it never depends on the cart value and no free-shipping
-// rule applies to global orders.
-const computeGlobalShippingCharge = (itemsTotal, settings = {}) => {
-  const g = getGlobalSettings(settings);
-  return roundCurrency(g.shippingCharge);
+const buildWebsiteGlobalEstimateEntry = (store, settings, pincode) => {
+  const rule = getWebsiteGlobalSettings(settings, pincode);
+  if (!rule) return null;
+  return {
+    storeId: store._id,
+    storeName: store.storeName,
+    city: null,
+    distance: "All India",
+    duration: formatGlobalDeliveryText(settings, pincode, rule),
+    raw: { source: "global", deliveryRuleSource: rule.source },
+  };
 };
-
-// "3-5 days" or "3 days" when min === max
-const formatGlobalDeliveryText = (settings = {}) => {
-  const g = getGlobalSettings(settings);
-  return g.daysMin === g.daysMax
-    ? `${g.daysMin} days`
-    : `${g.daysMin}-${g.daysMax} days`;
-};
-
-// One entry of the getDeliveryEstimate "filtered" array for a global store
-const buildGlobalEstimateEntry = (store, settings = {}) => ({
-  storeId: store._id,
-  storeName: store.storeName,
-  city: null,
-  distance: "All India",
-  duration: formatGlobalDeliveryText(settings),
-  raw: { source: "global" },
-});
-
-// ---------------------------------------------------------------------------
-// Admin settings: validation + defaults for the 4 global settings
-// ---------------------------------------------------------------------------
-const GLOBAL_NUMBER_KEYS = [
+// Ignore retired fields from old clients and omit them from API responses.
+const LEGACY_KEYS = [
   "globalShippingCharge",
   "globalFreeShippingLimit",
   "globalDeliveryDaysMin",
   "globalDeliveryDaysMax",
+  "globalCodAllowed",
 ];
-
-const GLOBAL_BOOLEAN_KEYS = ["globalCodAllowed"];
-
-const GLOBAL_SETTING_KEYS = [...GLOBAL_NUMBER_KEYS, ...GLOBAL_BOOLEAN_KEYS];
-
-const GLOBAL_SETTING_DEFAULTS = {
-  globalShippingCharge: 0,
-  globalFreeShippingLimit: 0,
-  globalDeliveryDaysMin: 3,
-  globalDeliveryDaysMax: 5,
-  globalCodAllowed: false,
-};
-
-const isBlank = (value) =>
-  value === undefined ||
-  value === null ||
-  (typeof value === "string" && value.trim() === "");
-
-// Returns { error } or { values } (only the keys that were sent).
-// - every number must be >= 0 (days must be whole numbers)
-// - globalDeliveryDaysMax >= globalDeliveryDaysMin (checked against the saved
-//   value when only one of the two is sent)
-// Blank values are treated as "not sent".
-const validateGlobalSettings = (input = {}, current = {}) => {
+const GLOBAL_SETTING_KEYS = ["globalDeliveryRules", "globalDeliveryDefaults", ...LEGACY_KEYS];
+const GLOBAL_SETTING_DEFAULTS = { globalDeliveryRules: [], globalDeliveryDefaults: null };
+const validateGlobalSettings = (input = {}) => {
   const values = {};
-
-  for (const key of GLOBAL_BOOLEAN_KEYS) {
-    const raw = input?.[key];
-    if (isBlank(raw)) continue;
-
-    if (raw === true || raw === "true") values[key] = true;
-    else if (raw === false || raw === "false") values[key] = false;
-    else return { error: `${key} must be true or false` };
+  if ("globalDeliveryRules" in input) {
+    if (!Array.isArray(input.globalDeliveryRules))
+      return { error: "globalDeliveryRules must be a list" };
+    const seen = new Set();
+    const rules = [];
+    for (const raw of input.globalDeliveryRules) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return { error: "Each delivery rule must be an object" };
+      const pincode = normalizePincode(raw.pincode);
+      if (!/^[1-9][0-9]{5}$/.test(pincode))
+        return { error: "Enter a valid six-digit PIN code" };
+      if (seen.has(pincode)) return { error: `Duplicate PIN code: ${pincode}` };
+      seen.add(pincode);
+      const rule = { pincode };
+      for (const key of ["shippingCharge", "daysMin", "daysMax"]) {
+        const value = raw[key];
+        if (
+          !["number", "string"].includes(typeof value) ||
+          String(value).trim() === "" ||
+          !Number.isFinite(Number(value)) ||
+          Number(value) < 0
+        ) {
+          return { error: `${pincode}: ${key} must be a non-negative number` };
+        }
+        rule[key] = Number(value);
+        if (key !== "shippingCharge" && !Number.isInteger(rule[key]))
+          return { error: `${pincode}: delivery days must be whole numbers` };
+      }
+      if (rule.daysMax < rule.daysMin)
+        return {
+          error: `${pincode}: maximum days must be at least minimum days`,
+        };
+      if (typeof raw.codAllowed !== "boolean")
+        return { error: `${pincode}: codAllowed must be true or false` };
+      rule.codAllowed = raw.codAllowed;
+      rules.push(rule);
+    }
+    values.globalDeliveryRules = rules;
   }
 
-  for (const key of GLOBAL_NUMBER_KEYS) {
-    const raw = input?.[key];
-    if (isBlank(raw)) continue;
-
-    if (typeof raw !== "number" && typeof raw !== "string") {
-      return { error: `${key} must be a number` };
-    }
-
-    const num = typeof raw === "number" ? raw : Number(raw.trim());
-    if (!Number.isFinite(num) || num < 0) {
-      return { error: `${key} must be a number greater than or equal to 0` };
-    }
-
-    const isDayKey = key === "globalDeliveryDaysMin" || key === "globalDeliveryDaysMax";
-    if (isDayKey && !Number.isInteger(num)) {
-      return { error: `${key} must be a whole number of days` };
-    }
-
-    values[key] = num;
-  }
-
-  const daysSent =
-    "globalDeliveryDaysMin" in values || "globalDeliveryDaysMax" in values;
-
-  if (daysSent) {
-    const min =
-      values.globalDeliveryDaysMin ??
-      toNumber(
-        current?.globalDeliveryDaysMin,
-        GLOBAL_SETTING_DEFAULTS.globalDeliveryDaysMin,
-      );
-    const max =
-      values.globalDeliveryDaysMax ??
-      toNumber(
-        current?.globalDeliveryDaysMax,
-        GLOBAL_SETTING_DEFAULTS.globalDeliveryDaysMax,
-      );
-
-    if (max < min) {
-      return {
-        error:
-          "globalDeliveryDaysMax must be greater than or equal to globalDeliveryDaysMin",
-      };
+  if ("globalDeliveryDefaults" in input) {
+    const raw = input.globalDeliveryDefaults;
+    if (raw == null) {
+      values.globalDeliveryDefaults = null;
+    } else {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return { error: "globalDeliveryDefaults must be an object or null" };
+      const defaults = {};
+      for (const key of ["shippingCharge", "daysMin", "daysMax"]) {
+        const value = raw[key];
+        if (
+          !["number", "string"].includes(typeof value) ||
+          String(value).trim() === "" ||
+          !Number.isFinite(Number(value)) ||
+          Number(value) < 0
+        ) {
+          return { error: `Default ${key} must be a non-negative number` };
+        }
+        defaults[key] = Number(value);
+        if (key !== "shippingCharge" && !Number.isInteger(defaults[key]))
+          return { error: `Default ${key} must be a whole number of days` };
+      }
+      if (defaults.daysMax < defaults.daysMin)
+        return { error: "Default maximum days must be at least minimum days" };
+      if (typeof raw.codAllowed !== "boolean")
+        return { error: "Default codAllowed must be true or false" };
+      defaults.codAllowed = raw.codAllowed;
+      values.globalDeliveryDefaults = defaults;
     }
   }
-
   return { values };
 };
-
-// Older settings documents do not have the new keys (lean() skips schema
-// defaults), so API responses fill them in.
 const withGlobalSettingDefaults = (settings = {}) => {
-  const out = { ...settings };
-  for (const key of GLOBAL_SETTING_KEYS) {
-    if (out[key] === undefined || out[key] === null) {
-      out[key] = GLOBAL_SETTING_DEFAULTS[key];
-    }
-  }
+  const out = {
+    ...settings,
+    globalDeliveryRules: settings?.globalDeliveryRules || [],
+    globalDeliveryDefaults: settings?.globalDeliveryDefaults || null,
+  };
+  LEGACY_KEYS.forEach((key) => delete out[key]);
   return out;
 };
-
 module.exports = {
   GLOBAL_SETTING_KEYS,
   GLOBAL_SETTING_DEFAULTS,
   validateGlobalSettings,
   withGlobalSettingDefaults,
   buildGlobalEstimateEntry,
+  buildWebsiteGlobalEstimateEntry,
   isGlobalStore,
   getDeliveryMode,
   getOrderScope,
   getGlobalSettings,
+  getWebsiteGlobalSettings,
   isGlobalCodAllowed,
   computeGlobalShippingCharge,
-  formatGlobalDeliveryText
+  formatGlobalDeliveryText,
 };

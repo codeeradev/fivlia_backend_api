@@ -43,6 +43,8 @@ const {
   getOrderScope,
   computeGlobalShippingCharge,
   isGlobalCodAllowed,
+  getGlobalSettings,
+  getWebsiteGlobalSettings,
 } = require("../utils/globalDelivery");
 const {
   getAppliedOfferContext,
@@ -248,27 +250,34 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
-    // Global (All India) store: COD only when the admin enabled it. Checked
-    // first so no order id is consumed for a request that will be rejected.
     const storeScopeDoc = await Store.findById(storeId, {
       serviceScope: 1,
     }).lean();
     const isGlobalOrder = isGlobalStore(storeScopeDoc);
     const orderScope = getOrderScope(storeScopeDoc);
 
-    if (isGlobalOrder && paymentMode === true) {
-      const globalCodSetting = await SettingAdmin.findOne(
-        {},
-        { globalCodAllowed: 1 },
-      ).lean();
-      console.log(
-        "[placeOrder] global COD check -> globalCodAllowed =",
-        globalCodSetting?.globalCodAllowed,
-      );
-      if (!isGlobalCodAllowed(globalCodSetting)) {
-        return res.status(400).json({
-          message: "Cash on delivery is not available for this store.",
-        });
+    const chargesData = await SettingAdmin.findOne();
+    const address = await Address.findById(addressId);
+
+    if (!address) {
+      console.log("Address not found");
+      return res.status(400).json({
+        message: "Address not found",
+      });
+    }
+
+    const globalDeliveryRule = isGlobalOrder
+      ? req.isWebsiteGlobalOrder
+        ? getWebsiteGlobalSettings(chargesData, address.pincode)
+        : getGlobalSettings(chargesData, address.pincode)
+      : null;
+
+    if (isGlobalOrder) {
+      if (!globalDeliveryRule) {
+        return res.status(400).json({ errorType: "global_delivery_unavailable", message: "Global delivery is not available for this PIN code." });
+      }
+      if (paymentMode === true && !isGlobalCodAllowed(chargesData, address.pincode, globalDeliveryRule)) {
+        return res.status(400).json({ message: "Cash on delivery is not available for this PIN code." });
       }
     }
 
@@ -342,7 +351,6 @@ exports.placeOrder = async (req, res) => {
 
     let nextOrderId = await getNextOrderId(true);
     console.log(`${nextOrderId} recived`);
-    const chargesData = await SettingAdmin.findOne();
 
     // OLD: flat delivery charge
     // let deliveryChargeRaw = chargesData.Delivery_Charges || 0;
@@ -362,13 +370,7 @@ exports.placeOrder = async (req, res) => {
     const ready_in_min = chargesData.ready_in_min;
 
     const itemsTotal = offerContext.cartDiscount.finalSubtotal;
-    // Global (All India) orders are delivered by a third party: no platform fee
-    const platformFeeStored = isGlobalOrder ? chargesData.Platform_Fee : chargesData.Platform_Fee;
-    const platformFeeRate = (platformFeeStored || 0) / 100;
-    // const platformFeeAmount = itemsTotal * platformFeeRate;
-    const platformFeeAmount = isGlobalOrder
-      ? itemsTotal * platformFeeRate
-      : getLocalPlatformFee(itemsTotal, chargesData).amount;
+    const platformFeeAmount = getLocalPlatformFee(itemsTotal, chargesData).amount;
 
     // OLD: total price before distance-based delivery charge
     // let totalPrice = itemsTotal;
@@ -386,15 +388,6 @@ exports.placeOrder = async (req, res) => {
     //     .status(401)
     //     .json({ message: "Cash On Delivery is not available in your zone" });
     // }
-
-    const address = await Address.findById(addressId);
-
-    if (!address) {
-      console.log("Address not found");
-      return res.status(400).json({
-        message: "Address not found",
-      });
-    }
 
     const userLat = address.latitude;
     const userLng = address.longitude;
@@ -425,9 +418,14 @@ exports.placeOrder = async (req, res) => {
     }).lean();
 
     if (isGlobalOrder) {
-      // Global store: flat shipping (same function as getCart), no distance
+      // Global store: PIN-code shipping (same function as getCart), no distance
       deliveryDistanceKm = 0;
-      deliveryChargeRaw = computeGlobalShippingCharge(itemsTotal, chargesData);
+      deliveryChargeRaw = computeGlobalShippingCharge(
+        itemsTotal,
+        chargesData,
+        address.pincode,
+        globalDeliveryRule,
+      );
     } else {
       const storeLat = parseFloat(storeData?.Latitude);
       const storeLng = parseFloat(storeData?.Longitude);
@@ -670,7 +668,7 @@ exports.placeOrder = async (req, res) => {
       }
 
       await Cart.deleteMany({ _id: { $in: cartIds } });
-      console.log(`${nextOrderId} stock deducted cart deleted`);
+      // console.log(`${nextOrderId} stock deducted cart deleted`);
       const sellerDoc = await Store.findById(storeId);
 
       await telegramOrderLog("📦 ORDER PLACED", {
@@ -689,9 +687,9 @@ exports.placeOrder = async (req, res) => {
           `You’ve received a new order worth ₹${newOrder.totalPrice}.
            Please confirm and prepare for dispatch.`,
         );
-        console.log(
-          `${nextOrderId} notification started for seller-> ${sellerDoc.storeName}`,
-        );
+        // console.log(
+        //   `${nextOrderId} notification started for seller-> ${sellerDoc.storeName}`,
+        // );
 
         await telegramOrderLog("🏪 STORE NOTIFIED", {
           orderId: newOrder.orderId,
@@ -720,9 +718,9 @@ exports.placeOrder = async (req, res) => {
       const admin = await AdminStaff.findOne({
         roleId: "6924308f010bf6509aecedf0",
       });
-      console.log("noti block next");
+      // console.log("noti block next");
       if (admin?.fcmToken) {
-        console.log("noti block runned");
+        // console.log("noti block runned");
         try {
           await sendNotification(
             admin.fcmToken,
@@ -1362,13 +1360,10 @@ exports.getOrderDetails = async (req, res) => {
         return total + Number(item.price) * Number(item.quantity);
       }, 0);
 
-      // Global orders carry no platform fee
-      const platformFee = isGlobalOrderRow
-        ? Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2))
-        // Use the saved local fee so later settings changes do not rewrite history.
-        : order.platformFee != null
-          ? Number(order.platformFee)
-          : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
+      // Preserve each order's saved fee so later setting changes do not rewrite history.
+      const platformFee = order.platformFee != null
+        ? Number(order.platformFee)
+        : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {

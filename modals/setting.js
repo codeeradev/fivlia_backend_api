@@ -66,12 +66,20 @@ const settingAdminSchema = new mongoose.Schema({
   perKmNightCharges: Number,
   foodGlobalCommission: Number,
   ready_in_min: Number,
-  globalShippingCharge: { type: Number, default: 0 },
-  globalFreeShippingLimit: { type: Number, default: 0 },
-  globalDeliveryDaysMin: { type: Number, default: 3 },
-  globalDeliveryDaysMax: { type: Number, default: 5 },
-  // Cash on Delivery for Global (All India) store orders (admin toggle)
-  globalCodAllowed: { type: Boolean, default: false },
+  globalDeliveryRules: [{
+    _id: false,
+    pincode: { type: String, required: true, match: /^[1-9][0-9]{5}$/ },
+    shippingCharge: { type: Number, required: true, min: 0 },
+    daysMin: { type: Number, required: true, min: 0 },
+    daysMax: { type: Number, required: true, min: 0 },
+    codAllowed: { type: Boolean, default: false },
+  }],
+  globalDeliveryDefaults: {
+    shippingCharge: { type: Number, min: 0 },
+    daysMin: { type: Number, min: 0 },
+    daysMax: { type: Number, min: 0 },
+    codAllowed: { type: Boolean, default: false },
+  },
   // Third party courier platforms used for global order tracking
   shippingPlatforms: [
     {

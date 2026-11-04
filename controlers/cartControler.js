@@ -20,6 +20,8 @@ const {
   computeGlobalShippingCharge,
   formatGlobalDeliveryText,
   isGlobalCodAllowed,
+  getGlobalSettings,
+  getWebsiteGlobalSettings,
 } = require("../utils/globalDelivery");
 const {
   filterProductsByRequestedType,
@@ -138,47 +140,55 @@ exports.addCart = async (req, res) => {
       await Cart.deleteMany({ userId });
     }
 
-    // Get user location
-    const user = await User.findOne(userId).lean();
-    const userLat = parseFloat(user?.location?.latitude);
-    const userLng = parseFloat(user?.location?.longitude);
-
-    if (!userLat || !userLng) {
-      return res.status(400).json({ message: "User location not available." });
-    }
-    // Fetch active zones
-    const [zoneDocs, zoneWindowConfig] = await Promise.all([
-      ZoneData.find({}),
-      getZoneWindowConfig(),
-    ]);
-    const activeZones = zoneDocs.flatMap((doc) =>
-      doc.zones.filter((z) => z.status === true),
-    );
-
-    const matchedZone = activeZones.find((zone) =>
-      isWithinZone(userLat, userLng, zone, zoneWindowConfig),
-    );
-
-    let paymentOption = false;
+    const user = await User.findById(userId?._id || userId).lean();
     const isGlobalCartStore = await Store.exists({
       _id: storeId,
       serviceScope: "global",
     });
-    if (matchedZone) {
-      paymentOption = matchedZone.cashOnDelivery === true;
-    } else if (!isGlobalCartStore) {
-      // Global (All India) stores can serve customers outside every active zone
-      return res
-        .status(400)
-        .json({ message: "No active zone found for your location." });
+    let paymentOption = false;
+
+    if (req.isWebsiteGlobalCart) {
+      if (!isGlobalCartStore) {
+        return res.status(400).json({ message: "Only global products can be added on this website." });
+      }
+    } else {
+      // Preserve the existing app/local cart location and zone validation.
+      const userLat = parseFloat(user?.location?.latitude);
+      const userLng = parseFloat(user?.location?.longitude);
+      if (!userLat || !userLng) {
+        return res.status(400).json({ message: "User location not available." });
+      }
+      const [zoneDocs, zoneWindowConfig] = await Promise.all([
+        ZoneData.find({}),
+        getZoneWindowConfig(),
+      ]);
+      const activeZones = zoneDocs.flatMap((doc) =>
+        doc.zones.filter((z) => z.status === true),
+      );
+      const matchedZone = activeZones.find((zone) =>
+        isWithinZone(userLat, userLng, zone, zoneWindowConfig),
+      );
+      if (matchedZone) {
+        paymentOption = matchedZone.cashOnDelivery === true;
+      } else if (!isGlobalCartStore) {
+        return res.status(400).json({ message: "No active zone found for your location." });
+      }
     }
+
     if (isGlobalCartStore) {
-      // Global store COD is controlled only by the admin global setting
-      const globalCodSetting = await SettingAdmin.findOne(
-        {},
-        { globalCodAllowed: 1 },
-      ).lean();
-      paymentOption = isGlobalCodAllowed(globalCodSetting);
+      const globalCodSetting = req.isWebsiteGlobalCart
+        ? await SettingAdmin.findOne().lean()
+        : await SettingAdmin.findOne({}, { globalDeliveryRules: 1 }).lean();
+      const deliveryAddress = await Address.findOne({
+        userId: user?._id,
+        isDeleted: { $ne: true },
+      }).sort({ default: -1, createdAt: -1 }).lean();
+      if (req.isWebsiteGlobalCart) {
+        const pincode = String(req.body.pincode || deliveryAddress?.pincode || "").trim();
+        paymentOption = getWebsiteGlobalSettings(globalCodSetting, pincode)?.codAllowed === true;
+      } else {
+        paymentOption = isGlobalCodAllowed(globalCodSetting, deliveryAddress?.pincode);
+      }
     }
 
     // Single-store cart policy
@@ -399,7 +409,6 @@ exports.getCart = async (req, res) => {
       ...(freeProductItem ? [freeProductItem] : []),
     ];
 
-    const settings = await SettingAdmin.findOne().lean();
     let address = null;
 
     address = await Address.findOne({
@@ -415,6 +424,38 @@ exports.getCart = async (req, res) => {
         .sort({ createdAt: -1 })
         .lean();
     }
+
+    // The website's selected global PIN is separate from the customer's saved
+    // address. Keep the existing /getCart behavior for apps; only the
+    // website-specific route may use its selected PIN for global delivery.
+    const websitePincode = req.isWebsiteGlobalCart
+      ? String(req.query?.pincode || "").trim()
+      : "";
+    const deliveryPincode = websitePincode || address?.pincode;
+    const settings = req.isWebsiteGlobalCart && isGlobalStore && deliveryPincode
+      ? (await SettingAdmin.findOne({ "globalDeliveryRules.pincode": deliveryPincode }).lean()) ||
+        (await SettingAdmin.findOne().lean())
+      : await SettingAdmin.findOne().lean();
+
+    const globalDeliveryRule = isGlobalStore
+      ? req.isWebsiteGlobalCart
+        ? getWebsiteGlobalSettings(settings, deliveryPincode)
+        : getGlobalSettings(settings, deliveryPincode)
+      : null;
+
+    if (isGlobalStore && !globalDeliveryRule) {
+      return res.status(400).json({ status: false, errorType: "global_delivery_unavailable",
+        pincode: deliveryPincode || null,
+        message: address || websitePincode ? "Global delivery is not available for this PIN code." : "Add a delivery address to check global delivery availability." });
+    }
+
+    const platformFee = getLocalPlatformFee(
+      offerContext.cartDiscount.finalSubtotal,
+      settings,
+    ).amount;
+    const platformFeePercent = offerContext.cartDiscount.finalSubtotal > 0
+      ? (platformFee / offerContext.cartDiscount.finalSubtotal) * 100
+      : 0;
 
     let deliveryCharge = 0;
     let deliveryDistanceKm = 0;
@@ -467,10 +508,15 @@ exports.getCart = async (req, res) => {
       );
 
       if (isGlobalStore) {
-        // Global store: flat shipping, no distance based charge
+        // Global store: PIN-code shipping, no distance based charge
         deliveryDistanceKm = 0;
         billableKm = 0;
-        deliveryCharge = computeGlobalShippingCharge(itemsTotal, settings);
+        deliveryCharge = computeGlobalShippingCharge(
+          itemsTotal,
+          settings,
+          deliveryPincode,
+          globalDeliveryRule,
+        );
       } else {
         deliveryDistanceKm = Number(getDistanceKm(distanceMeters).toFixed(2));
         billableKm = getBillableKm(distanceMeters);
@@ -575,18 +621,18 @@ exports.getCart = async (req, res) => {
         finalSubtotal: offerContext.cartDiscount.finalSubtotal,
       },
       paymentOption: isGlobalStore
-        ? isGlobalCodAllowed(settings)
+        ? isGlobalCodAllowed(settings, deliveryPincode, globalDeliveryRule)
         : cashOnDelivery,
       StoreID: storeId,
       deliveryMode: isGlobalStore ? "global" : "local",
       estimatedDeliveryText: isGlobalStore
-        ? formatGlobalDeliveryText(settings)
+        ? formatGlobalDeliveryText(settings, deliveryPincode, globalDeliveryRule)
         : null,
-      // Global carts: no platform fee (the app should not add one)
-      // platformFeePercent: isGlobalStore ? 0 : Number(settings?.Platform_Fee || 0),
-      platformFeePercent: isGlobalStore ? 0 : getLocalPlatformFee(
-        offerContext.cartDiscount.finalSubtotal, settings,
-      ).percent,
+      deliveryPincode: isGlobalStore ? deliveryPincode : null,
+      // Return the final fee for clients to display. Keep the percentage field
+      // for older clients, but never require them to calculate the fee amount.
+      platformFeeAmount: platformFee,
+      platformFeePercent,
       deliveryCharge,
       deliveryBaseCharge,
       deliveryChargeMode,

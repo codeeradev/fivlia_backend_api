@@ -104,6 +104,8 @@ const {
   getStaff,
 } = require("../controlers/dashboardControler");
 const { getDeliveryEstimate } = require("../controlers/DeliveryControler");
+const globalWebsiteRoutes = require("../globalWebsite/routes");
+const globalWebsiteController = require("../globalWebsite/controller");
 
 //seller product
 const {
@@ -488,6 +490,20 @@ router.post("/get-driver-referral-seller", getDriverReferralSeller);
 router.post("/rate-driver", saveDriverRating);
 //website
 
+router.use("/website/global", globalWebsiteRoutes);
+router.post("/website/global/add-cart", upload, verifyToken, (req, res, next) => {
+  req.isWebsiteGlobalCart = true;
+  return addCart(req, res, next);
+});
+router.post("/website/global/place-order", verifyToken, (req, res, next) => {
+  req.isWebsiteGlobalOrder = true;
+  return placeOrder(req, res, next);
+});
+// Keep the existing public paths working while the new global storefront uses
+// its namespaced routes.
+router.get("/website/global-delivery/:pincode", globalWebsiteController.checkDelivery);
+router.post("/website/inquiry", globalWebsiteController.submitInquiry);
+
 router.get("/website/forwebGetSingleProduct/:slug", forwebGetSingleProduct);
 router.get("/website/bestSelling", typeCategoryResolver, forwebbestselling);
 router.get("/website/getProduct", forwebgetProduct);
@@ -511,6 +527,10 @@ router.get("/transactionList/:driverId", transactionList);
 router.get("/bestSelling", verifyToken, typeCategoryResolver, bestSelling);
 router.get("/search", verifyToken, typeCategoryResolver, searchProduct);
 router.get("/getUnit", getUnit);
+router.get("/website/global/cart", verifyToken, (req, res, next) => {
+  req.isWebsiteGlobalCart = true;
+  return getCart(req, res, next);
+});
 router.get("/getCart", verifyToken, getCart);
 router.get("/getDiscount", getDicount);
 router.get("/getVarients/:id", getVarients);
