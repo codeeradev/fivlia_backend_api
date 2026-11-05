@@ -748,3 +748,45 @@ exports.getStoreByCategory = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
+
+exports.setSellerAccountActive = async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const { accountActive } = req.body;
+    if (typeof accountActive !== "boolean") {
+      return res.status(400).json({ message: "accountActive must be a boolean" });
+    }
+
+    const store = await Store.findOne({ _id: storeId, Authorized_Store: false });
+    if (!store) return res.status(404).json({ message: "Seller not found" });
+
+    const wasActive = store.accountActive !== false;
+    if (!accountActive && wasActive) {
+      store.statusBeforeAccountDeactivation = store.status === true;
+      store.status = false;
+    } else if (accountActive && !wasActive) {
+      store.status = store.statusBeforeAccountDeactivation === true;
+      store.statusBeforeAccountDeactivation = null;
+    }
+    store.accountActive = accountActive;
+    store.accountStatusChangedAt = new Date();
+    store.accountStatusChangedBy = req.staff._id;
+    await store.save();
+
+    return res.status(200).json({
+      message: accountActive ? "Seller reactivated" : "Seller deactivated",
+      store: {
+        _id: store._id,
+        storeName: store.storeName,
+        accountActive: store.accountActive,
+        accountStatusChangedAt: store.accountStatusChangedAt,
+        accountStatusChangedBy: store.accountStatusChangedBy,
+        status: store.status,
+      },
+    });
+  } catch (error) {
+    console.error("Error changing seller account state:", error);
+    return res.status(500).json({ message: "Could not update seller account state" });
+  }
+};

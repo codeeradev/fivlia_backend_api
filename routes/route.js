@@ -139,6 +139,7 @@ const {
 const {
   addSeller,
   getSeller,
+  getAdminSellerList,
   getSellerRequest,
   sendOtp,
   acceptDeclineRequest,
@@ -161,6 +162,7 @@ const {
   addCategoryInStore,
   removeCategoryInStore,
   storeEdit,
+  setSellerAccountActive,
   getStoreTransaction,
   getStoreCategory,
   getStoreByCategory
@@ -450,6 +452,7 @@ router.get("/getSingleProduct/:slug", verifyToken, getSingleProduct);
 router.get("/checkSimilarProduct/:productId", verifyToken, typeCategoryResolver, checkSimilarProduct);
 router.get("/getAllStore", getAllStore);
 router.get("/getSeller", getSeller);
+router.get("/admin/sellers", attachStaffRole, checkPermission("STORE_VIEW"), getAdminSellerList);
 router.get("/getSellerRequest", getSellerRequest);
 router.get("/getCategoryProduct", getCategoryProduct);
 
@@ -581,6 +584,7 @@ router.put("/editBrand/:id", attachStaffRole, checkPermission("BRAND_ADD_EDIT"),
 router.put("/editMainCategory", upload, editMainCategory);
 router.put("/editDriver/:driverId", upload, editDriver);
 router.put("/storeEdit/:storeId", upload, storeEdit);
+router.put("/seller/:storeId/account-status", attachStaffRole, checkPermission("STORE_ADD_EDIT"), setSellerAccountActive);
 router.put("/updatedeliveryStatus/:id", upload, updatedeliveryStatus);
 router.put("/EditAddress/:id", EditAddress);
 router.put("/addFilterInCategory/:id", addFiltersToCategory);

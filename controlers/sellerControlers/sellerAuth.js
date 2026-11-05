@@ -511,6 +511,49 @@ exports.getSeller = async (req, res) => {
   }
 };
 
+
+exports.getAdminSellerList = async (req, res) => {
+  try {
+    const sellers = await seller.aggregate([
+      { $match: { Authorized_Store: false } },
+      {
+        $project: {
+          password: 0, verificationToken: 0, accessKey: 0,
+          aadharCard: 0, panCard: 0, bankDetails: 0, devices: 0,
+        },
+      },
+      {
+        $lookup: {
+          from: "store_transactions",
+          localField: "_id",
+          foreignField: "storeId",
+          as: "sellerWalletData",
+        },
+      },
+      {
+        $addFields: {
+          sellerWalletData: {
+            $sortArray: { input: "$sellerWalletData", sortBy: { createdAt: -1 } },
+          },
+        },
+      },
+    ]);
+    const statusCounts = await seller.aggregate([
+      { $match: { Authorized_Store: false } },
+      { $group: { _id: { $ifNull: ["$approveStatus", "unknown"] }, count: { $sum: 1 } } },
+    ]);
+    const counts = Object.fromEntries(statusCounts.map(({ _id, count }) => [_id, count]));
+    return res.status(200).json({
+      message: "Seller register",
+      sellers,
+      counts: { total: sellers.length, ...counts },
+    });
+  } catch (error) {
+    console.error("Error fetching admin seller list:", error);
+    return res.status(500).json({ message: "Could not fetch sellers" });
+  }
+};
+
 exports.acceptDeclineRequest = async (req, res) => {
   try {
     const {
@@ -757,6 +800,9 @@ exports.verifyOtpSeller = async (req, res) => {
       if (!store) {
         return res.status(404).json({ message: "Store not found" });
       }
+      if (store.accountActive === false) {
+        return res.status(403).json({ message: "This seller account is deactivated. Contact support." });
+      }
 
       // Check access key
       if (store.accessKey !== accessKey) {
@@ -807,6 +853,9 @@ exports.verifyOtpSeller = async (req, res) => {
 
       if (!sellerDoc) {
         return res.status(404).json({ message: "Seller not found" });
+      }
+      if (sellerDoc.accountActive === false) {
+        return res.status(403).json({ message: "This seller account is deactivated. Contact support." });
       }
 
       const otpRecord = await OtpModel.findOne({

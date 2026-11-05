@@ -28,8 +28,11 @@ module.exports = async function sellerOrAdminAuth(req, res, next) {
       return res.status(401).json({ status: false, message: "Invalid Token" });
     }
 
-    const store = await Store.findById(id).select("_id").lean();
+    const store = await Store.findById(id).select("_id accountActive").lean();
     if (store) {
+      if (store.accountActive === false) {
+        return res.status(403).json({ status: false, message: "Seller account is deactivated" });
+      }
       req.auth = { role: "seller", storeId: String(store._id) };
       return next();
     }
