@@ -128,93 +128,24 @@ exports.getSellerReport = async (req, res) => {
               ],
             },
           },
-          profit: {
-            $sum: {
-              $add: [
-                // commission
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        {
-                          $cond: [
-                            { $eq: [{ $type: "$items.commision" }, "string"] },
-                            {
-                              $toDouble: {
-                                $replaceAll: {
-                                  input: "$items.commision",
-                                  find: "%",
-                                  replacement: "",
-                                },
-                              },
-                            },
-                            { $toDouble: "$items.commision" },
-                          ],
-                        },
-                        100,
-                      ],
-                    },
-                    {
-                      $multiply: [
-                        { $toDouble: "$items.price" },
-                        { $toDouble: "$items.quantity" },
-                      ],
-                    },
-                  ],
-                },
-
-                // platform fee
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        {
-                          $cond: [
-                            { $eq: [{ $type: "$platformFee" }, "string"] },
-                            {
-                              $toDouble: {
-                                $replaceAll: {
-                                  input: "$platformFee",
-                                  find: "%",
-                                  replacement: "",
-                                },
-                              },
-                            },
-                            { $toDouble: "$platformFee" },
-                          ],
-                        },
-                        100,
-                      ],
-                    },
-                    {
-                      $multiply: [
-                        { $toDouble: "$items.price" },
-                        { $toDouble: "$items.quantity" },
-                      ],
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-          platformFeeAmount: {
+          commissionProfit: {
             $sum: {
               $multiply: [
                 {
                   $divide: [
                     {
                       $cond: [
-                        { $eq: [{ $type: "$platformFee" }, "string"] },
+                        { $eq: [{ $type: "$items.commision" }, "string"] },
                         {
                           $toDouble: {
                             $replaceAll: {
-                              input: "$platformFee",
+                              input: "$items.commision",
                               find: "%",
                               replacement: "",
                             },
                           },
                         },
-                        { $toDouble: "$platformFee" },
+                        { $toDouble: "$items.commision" },
                       ],
                     },
                     100,
@@ -226,6 +157,21 @@ exports.getSellerReport = async (req, res) => {
                     { $toDouble: "$items.quantity" },
                   ],
                 },
+              ],
+            },
+          },
+          platformFeeAmount: {
+            $first: {
+              $round: [
+                {
+                  $convert: {
+                    input: "$platformFee",
+                    to: "double",
+                    onError: 0,
+                    onNull: 0,
+                  },
+                },
+                0,
               ],
             },
           },
@@ -250,6 +196,13 @@ exports.getSellerReport = async (req, res) => {
           },
         },
       },
+
+      {
+        $addFields: {
+          profit: { $add: ["$commissionProfit", "$platformFeeAmount"] },
+        },
+      },
+      { $project: { commissionProfit: 0 } },
 
       // latest first
       { $sort: { createdAt: -1 } }
@@ -308,7 +261,21 @@ exports.getSellerReport = async (req, res) => {
           totalPrice: { $first: "$totalPrice" },
           deliveryPayout: { $first: "$deliveryPayout" },
           deliveryCharges: { $first: "$deliveryCharges" },
-          platformFee: { $first: "$platformFee" },
+          platformFeeAmount: {
+            $first: {
+              $round: [
+                {
+                  $convert: {
+                    input: "$platformFee",
+                    to: "double",
+                    onError: 0,
+                    onNull: 0,
+                  },
+                },
+                0,
+              ],
+            },
+          },
 
           itemTotal: {
             $sum: {
@@ -346,12 +313,7 @@ exports.getSellerReport = async (req, res) => {
               $add: [
                 "$totalCommission",
                 { $subtract: ["$deliveryCharges", "$deliveryPayout"] },
-                {
-                  $multiply: [
-                    "$itemTotal",
-                    { $divide: ["$platformFee", 100] }, // ✅ platform % stays
-                  ],
-                },
+                "$platformFeeAmount",
               ],
             },
           },

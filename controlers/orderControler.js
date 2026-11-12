@@ -1,4 +1,10 @@
-const { getLocalPlatformFee } = require("../utils/platformFee");
+const { getLocalPlatformFee, roundPlatformFeeAmount } = require("../utils/platformFee");
+
+const serializeOrderPlatformFee = (order) => {
+  const data = order && typeof order.toObject === "function" ? order.toObject() : { ...(order || {}) };
+  const amount = roundPlatformFeeAmount(data.platformFeeAmount ?? data.platformFee);
+  return { ...data, platformFee: amount, platformFeeAmount: amount };
+};
 const mongoose = require("mongoose");
 const { Order, TempOrder } = require("../modals/order");
 const { ZoneData } = require("../modals/cityZone");
@@ -754,9 +760,12 @@ exports.placeOrder = async (req, res) => {
         },
       });
       console.log(`Order(${newOrder.orderId}) placed successfully`);
-      return res
-        .status(200)
-        .json({ message: "Order placed successfully", order: newOrder });
+      const orderResponse = serializeOrderPlatformFee(newOrder);
+      return res.status(200).json({
+        message: "Order placed successfully",
+        platformFeeAmount: orderResponse.platformFeeAmount,
+        order: orderResponse,
+      });
     } else {
       const tempOrder = await TempOrder.create({
         userId,
@@ -793,10 +802,12 @@ exports.placeOrder = async (req, res) => {
         razorpayOrderId: payResponse.id,
       });
 
+      const tempOrderResponse = serializeOrderPlatformFee(tempOrder);
       return res.status(200).json({
         message: "Proceed to payment",
         tempOrderId: tempOrder._id,
-        tempOrder,
+        platformFeeAmount: tempOrderResponse.platformFeeAmount,
+        tempOrder: tempOrderResponse,
         payResponse,
       });
     }
@@ -951,10 +962,12 @@ exports.verifyPayment = async (req, res) => {
     });
 
     if (existingOrder) {
+      const orderResponse = serializeOrderPlatformFee(existingOrder);
       return res.status(200).json({
         status: true,
         message: "Order already exists",
-        order: existingOrder,
+        platformFeeAmount: orderResponse.platformFeeAmount,
+        order: orderResponse,
       });
     }
 
@@ -1072,10 +1085,12 @@ exports.verifyPayment = async (req, res) => {
       }
     }
 
+    const orderResponse = serializeOrderPlatformFee(finalOrder);
     return res.status(200).json({
       status: paymentStatus ? true : false,
       message: "Payment verified. Order placed successfully.",
-      order: finalOrder,
+      platformFeeAmount: orderResponse.platformFeeAmount,
+      order: orderResponse,
     });
   } catch (error) {
     console.error("Error verifying payment:", error);
@@ -1196,8 +1211,11 @@ exports.getOrders = async (req, res) => {
         attachVariantInfo(item, productMap),
       );
 
+      const platformFeeAmount = roundPlatformFeeAmount(order.platformFeeAmount ?? order.platformFee);
       return {
         ...order,
+        platformFee: platformFeeAmount,
+        platformFeeAmount,
         items: itemsWithVariant,
         addressId: formattedAddress,
         storeId: order.storeId
@@ -1361,9 +1379,11 @@ exports.getOrderDetails = async (req, res) => {
       }, 0);
 
       // Preserve each order's saved fee so later setting changes do not rewrite history.
-      const platformFee = order.platformFee != null
-        ? Number(order.platformFee)
-        : getLocalPlatformFee(subtotal, settings || {}).amount;
+      const platformFee = roundPlatformFeeAmount(
+        order.platformFee != null
+          ? Number(order.platformFee)
+          : getLocalPlatformFee(subtotal, settings || {}).amount,
+      );
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {
@@ -1401,6 +1421,7 @@ exports.getOrderDetails = async (req, res) => {
         cashOnDelivery: order.cashOnDelivery,
         deliveryCharges: order.deliveryCharges,
         platformFee,
+        platformFeeAmount: platformFee,
         transactionId: order.transactionId || "",
         items: itemsWithDetails,
         address,
@@ -3302,11 +3323,12 @@ exports.getTempOrders = async (req, res) => {
       .limit(limit)
       .lean();
 
+    const tempOrdersWithPlatformFee = tempOrders.map(serializeOrderPlatformFee);
     return res.status(200).json({
       success: true,
-      count: tempOrders.length,
+      count: tempOrdersWithPlatformFee.length,
       limit,
-      tempOrders,
+      tempOrders: tempOrdersWithPlatformFee,
     });
   } catch (error) {
     console.error("Temp order fetch error:", error);

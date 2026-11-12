@@ -1,6 +1,9 @@
-const roundRupees = (amount) => Math.round(amount + Number.EPSILON);
+const roundRupees = (amount) => {
+  const value = Number(amount);
+  return Number.isFinite(value) ? Math.round(value + Number.EPSILON) : 0;
+};
 
-// For local carts, encode the combined rupee charge in the existing percent field.
+// Calculate the percentage plus fixed platform charge as a whole-rupee amount.
 // A zero subtotal cannot represent a fixed charge as a percentage: waive it.
 const getLocalPlatformFee = (subtotal, settings = {}) => {
   const total = Number(subtotal);
@@ -25,4 +28,8 @@ const validatePlatformFeeSettings = (fields) => {
   return null;
 };
 
-module.exports = { getLocalPlatformFee, validatePlatformFeeSettings };
+module.exports = {
+  getLocalPlatformFee,
+  roundPlatformFeeAmount: roundRupees,
+  validatePlatformFeeSettings,
+};
