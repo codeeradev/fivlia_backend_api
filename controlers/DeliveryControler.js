@@ -15,6 +15,7 @@ const {
   buildGlobalEstimateEntry,
   resolveDeliveryPincode,
 } = require("../utils/globalDelivery");
+const { getSettingsForGlobalDelivery } = require("../utils/globalDeliverySettings");
 const Category = require("../modals/category");
 const Type = require("../modals/type");
 const Products = require("../modals/Product");
@@ -368,10 +369,13 @@ const getDeliveryEstimate = async (req, res) => {
         globalPincode = resolveDeliveryPincode(geocodedPincode);
       }
     }
+    const globalSettings = globalPincode
+      ? await getSettingsForGlobalDelivery(SettingAdmin, globalPincode)
+      : settings;
     const globalEntries = [...globalByType.entries()].map(
       ([typeKey, store]) => ({
         typeKey,
-        entry: buildGlobalEstimateEntry(store, settings, globalPincode),
+        entry: buildGlobalEstimateEntry(store, globalSettings, globalPincode),
       })
     ).filter(item => item.entry);
 

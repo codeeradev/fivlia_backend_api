@@ -9,6 +9,7 @@ const Brand = require("../modals/brand");
 const Banner = require("../modals/banner");
 const Type = require("../modals/type");
 const { getGlobalDeliveryRule } = require("../utils/globalDelivery");
+const { getSettingsForGlobalDelivery } = require("../utils/globalDeliverySettings");
 
 const INQUIRY_TYPES = new Set(["general", "seller", "delivery"]);
 const pageArgs = (query) => ({
@@ -16,17 +17,83 @@ const pageArgs = (query) => ({
   limit: Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 24)),
 });
 const escapeRegex = (value) => String(value).slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const formatDeliveryDays = (daysMin, daysMax) =>
+  Number(daysMin) === Number(daysMax)
+    ? `${Number(daysMin)}`
+    : `${Number(daysMin)}-${Number(daysMax)}`;
+
+exports.deliveryRules = async (req, res) => {
+  const search = String(req.query.search || "").trim();
+  if (search && !/^\d{1,6}$/.test(search)) {
+    return res.status(400).json({
+      status: false,
+      message: "Search must contain up to six digits.",
+    });
+  }
+
+  try {
+    const settings = await SettingAdmin.findOne()
+      .select("globalDeliveryRules globalDeliveryDefaults")
+      .lean();
+    const rules = (settings?.globalDeliveryRules || [])
+      .filter((rule) =>
+        /^[1-9][0-9]{5}$/.test(String(rule?.pincode || "")) &&
+        String(rule.pincode).includes(search),
+      )
+      .map((rule) => ({
+        pincode: String(rule.pincode),
+        shippingCharge: Number(rule.shippingCharge),
+        daysMin: Number(rule.daysMin),
+        daysMax: Number(rule.daysMax),
+        deliveryDays: formatDeliveryDays(rule.daysMin, rule.daysMax),
+        estimatedDeliveryText: `${formatDeliveryDays(rule.daysMin, rule.daysMax)} days`,
+        codAllowed: rule.codAllowed === true,
+        ruleSource: "pincode",
+      }))
+      .filter((rule) =>
+        [rule.shippingCharge, rule.daysMin, rule.daysMax].every(Number.isFinite),
+      )
+      .sort((left, right) => left.pincode.localeCompare(right.pincode));
+
+    const defaults = settings?.globalDeliveryDefaults;
+    const defaultRule = defaults &&
+      [defaults.shippingCharge, defaults.daysMin, defaults.daysMax]
+        .every((value) => Number.isFinite(Number(value)))
+      ? {
+          shippingCharge: Number(defaults.shippingCharge),
+          daysMin: Number(defaults.daysMin),
+          daysMax: Number(defaults.daysMax),
+          deliveryDays: formatDeliveryDays(defaults.daysMin, defaults.daysMax),
+          estimatedDeliveryText: `${formatDeliveryDays(defaults.daysMin, defaults.daysMax)} days`,
+          codAllowed: defaults.codAllowed === true,
+          ruleSource: "default",
+        }
+      : null;
+
+    return res.json({
+      status: true,
+      search,
+      count: rules.length,
+      rules,
+      defaultRule,
+    });
+  } catch (error) {
+    console.error("Global delivery rules fetch failed:", error);
+    return res.status(500).json({
+      status: false,
+      message: "Could not load global delivery options right now.",
+    });
+  }
+};
 
 exports.checkDelivery = async (req, res) => {
   const pincode = String(req.params.pincode || "").trim();
   if (!/^[1-9][0-9]{5}$/.test(pincode)) return res.status(400).json({ available: false, message: "Enter a valid six-digit PIN code." });
   try {
-    const settings = await SettingAdmin.findOne().select("globalDeliveryRules globalDeliveryDefaults").lean();
+    const settings = await getSettingsForGlobalDelivery(SettingAdmin, pincode);
     const rule = getGlobalDeliveryRule(settings, pincode);
     if (!rule) return res.json({ available: false, pincode, message: "Global delivery is not available for this PIN code yet." });
-    const deliveryDays = rule.daysMin === rule.daysMax
-      ? `${rule.daysMin}`
-      : `${rule.daysMin}-${rule.daysMax}`;
+    const deliveryDays = formatDeliveryDays(rule.daysMin, rule.daysMax);
     const deliveryCharge = Number(rule.shippingCharge);
     return res.json({
       available: true,

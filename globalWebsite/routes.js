@@ -2,6 +2,7 @@ const express = require("express");
 const controller = require("./controller");
 const router = express.Router();
 
+router.get("/delivery-rules", controller.deliveryRules);
 router.get("/delivery/:pincode", controller.checkDelivery);
 router.get("/banners", controller.banners);
 router.get("/categories", controller.categories);
@@ -18,4 +19,3 @@ router.get("/seller", controller.seller);
 router.post("/inquiry", controller.submitInquiry);
 
 module.exports = router;
-

@@ -177,21 +177,21 @@ exports.addCart = async (req, res) => {
     }
 
     if (isGlobalCartStore) {
-      const globalCodSetting = req.isWebsiteGlobalCart
-        ? await SettingAdmin.findOne().lean()
-        : await SettingAdmin.findOne(
-            {},
-            { globalDeliveryRules: 1, globalDeliveryDefaults: 1 },
-          ).lean();
       const deliveryAddress = await Address.findOne({
         userId: user?._id,
         isDeleted: { $ne: true },
       }).sort({ default: -1, createdAt: -1 }).lean();
+      const deliveryPincode = req.isWebsiteGlobalCart
+        ? String(req.body.pincode || deliveryAddress?.pincode || "").trim()
+        : deliveryAddress?.pincode;
+      const globalCodSetting = await getSettingsForGlobalDelivery(
+        SettingAdmin,
+        deliveryPincode,
+      );
       if (req.isWebsiteGlobalCart) {
-        const pincode = String(req.body.pincode || deliveryAddress?.pincode || "").trim();
-        paymentOption = getGlobalDeliveryRule(globalCodSetting, pincode)?.codAllowed === true;
+        paymentOption = getGlobalDeliveryRule(globalCodSetting, deliveryPincode)?.codAllowed === true;
       } else {
-        paymentOption = isGlobalCodAllowed(globalCodSetting, deliveryAddress?.pincode);
+        paymentOption = isGlobalCodAllowed(globalCodSetting, deliveryPincode);
       }
     }
 
