@@ -3,6 +3,9 @@ const isGlobalStore = (store) => store?.serviceScope === "global";
 const getDeliveryMode = (store) => (isGlobalStore(store) ? "global" : "local");
 const getOrderScope = (store) => (isGlobalStore(store) ? "global" : "city");
 const normalizePincode = (value) => String(value ?? "").trim();
+const isValidPincode = (value) => /^[1-9][0-9]{5}$/.test(normalizePincode(value));
+const resolveDeliveryPincode = (...values) =>
+  values.map(normalizePincode).find(isValidPincode) || null;
 const getGlobalSettings = (settings = {}, pincode) => {
   const pin = normalizePincode(pincode);
   if (!/^[1-9][0-9]{5}$/.test(pin)) return null;
@@ -181,4 +184,5 @@ module.exports = {
   isGlobalCodAllowed,
   computeGlobalShippingCharge,
   formatGlobalDeliveryText,
+  resolveDeliveryPincode,
 };

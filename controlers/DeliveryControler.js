@@ -6,11 +6,15 @@ const {
 const Store = require("../modals/store");
 const { SettingAdmin } = require("../modals/setting");
 const User = require("../modals/User");
+const Address = require("../modals/Address");
 const { ZoneData } = require("../modals/cityZone");
 const { getDistance } = require("../config/Ola");
 const MapUsage = require("../modals/mapUsage");
 const haversine = require("haversine-distance");
-const { buildGlobalEstimateEntry } = require("../utils/globalDelivery");
+const {
+  buildGlobalEstimateEntry,
+  resolveDeliveryPincode,
+} = require("../utils/globalDelivery");
 const Category = require("../modals/category");
 const Type = require("../modals/type");
 const Products = require("../modals/Product");
@@ -338,9 +342,32 @@ const getDeliveryEstimate = async (req, res) => {
     );
     localEntries.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-    const globalPincode = globalByType.size
-      ? (req.query?.pincode || (await reverseGeocode(currentLat, currentLong))?.pincode)
-      : null;
+    let globalPincode = null;
+    if (globalByType.size) {
+      // The selected PIN from the request wins. Mobile clients commonly omit
+      // it, so use the customer's default (or most recently saved) address
+      // before trying reverse geocoding from the current device location.
+      const requestedPincode = req.query?.pincode;
+      let deliveryAddress = null;
+      if (!requestedPincode || !/^[1-9][0-9]{5}$/.test(String(requestedPincode).trim())) {
+        deliveryAddress = await Address.findOne({
+          userId: id,
+          default: true,
+          isDeleted: { $ne: true },
+        }).lean();
+        if (!deliveryAddress) {
+          deliveryAddress = await Address.findOne({
+            userId: id,
+            isDeleted: { $ne: true },
+          }).sort({ createdAt: -1 }).lean();
+        }
+      }
+      globalPincode = resolveDeliveryPincode(requestedPincode, deliveryAddress?.pincode);
+      if (!globalPincode) {
+        const geocodedPincode = (await reverseGeocode(currentLat, currentLong))?.pincode;
+        globalPincode = resolveDeliveryPincode(geocodedPincode);
+      }
+    }
     const globalEntries = [...globalByType.entries()].map(
       ([typeKey, store]) => ({
         typeKey,
@@ -349,12 +376,24 @@ const getDeliveryEstimate = async (req, res) => {
     ).filter(item => item.entry);
 
     if (!localEntries.length && !globalEntries.length) {
+      const errorType = globalByType.size
+        ? globalPincode
+          ? "global_delivery_unavailable"
+          : "delivery_pincode_required"
+        : "no_eligible_store_types";
       return res.json({
         status: false,
         result: 0,
         deliveryMode: "none",
         ...meta,
         filtered: [],
+        errorType,
+        ...(globalPincode ? { pincode: globalPincode } : {}),
+        message: globalByType.size
+          ? globalPincode
+            ? "Global delivery is not configured for this PIN code."
+            : "Add a valid delivery PIN code to check global delivery availability."
+          : "No eligible product types are available from open stores for a delivery estimate.",
       });
     }
 

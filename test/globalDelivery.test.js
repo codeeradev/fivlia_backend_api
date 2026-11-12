@@ -11,6 +11,7 @@ const {
   getWebsiteGlobalSettings,
   buildWebsiteGlobalEstimateEntry,
   withGlobalSettingDefaults,
+  resolveDeliveryPincode,
 } = require("../utils/globalDelivery");
 const first = {
   pincode: "110001",
@@ -205,4 +206,11 @@ test("invalid rules and duplicate PIN codes are rejected", () => {
   ]) {
     assert.ok(validateGlobalSettings({ globalDeliveryRules: rules }).error);
   }
+});
+
+test("delivery estimate resolves a valid PIN from request, saved address, then geocode", () => {
+  assert.equal(resolveDeliveryPincode(" 560001 ", "110001", "400001"), "560001");
+  assert.equal(resolveDeliveryPincode("invalid", " 110001 ", "400001"), "110001");
+  assert.equal(resolveDeliveryPincode(undefined, "invalid", "400001"), "400001");
+  assert.equal(resolveDeliveryPincode("invalid", "011001", null), null);
 });
