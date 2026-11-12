@@ -69,6 +69,8 @@ test('backend calculates the percentage plus fixed platform fee in rupees', () =
     Platform_Fee_Fixed: 12,
   }).amount, 15);
   assert.equal(fee.roundPlatformFeeAmount(14.7), 15);
+  assert.equal(fee.roundPlatformFeeAmount(24.25), 24);
+  assert.equal(fee.roundPlatformFeeAmount(0.48), 0);
 });
 
 test('settings API preserves configured values for authenticated user id shapes', async () => {

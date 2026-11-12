@@ -1380,9 +1380,9 @@ exports.getOrderDetails = async (req, res) => {
 
       // Preserve each order's saved fee so later setting changes do not rewrite history.
       const platformFee = roundPlatformFeeAmount(
-        order.platformFee != null
-          ? Number(order.platformFee)
-          : getLocalPlatformFee(subtotal, settings || {}).amount,
+        order.platformFeeAmount ??
+          order.platformFee ??
+          getLocalPlatformFee(subtotal, settings || {}).amount,
       );
 
       const itemsWithDetails = await Promise.all(
