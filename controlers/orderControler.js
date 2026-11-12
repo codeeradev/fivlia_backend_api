@@ -1,5 +1,6 @@
 const { getLocalPlatformFee, roundPlatformFeeAmount } = require("../utils/platformFee");
 const { roundMoney, calculatePayableTotal } = require("../utils/money");
+const { getSettingsForGlobalDelivery } = require("../utils/globalDeliverySettings");
 
 const serializeOrderAmounts = (order) => {
   const data = order && typeof order.toObject === "function" ? order.toObject() : { ...(order || {}) };
@@ -282,7 +283,6 @@ exports.placeOrder = async (req, res) => {
       req.isWebsiteGlobalOrder === true || isGlobalStore(storeScopeDoc);
     const orderScope = isGlobalOrder ? "global" : getOrderScope(storeScopeDoc);
 
-    const chargesData = await SettingAdmin.findOne();
     const address = await Address.findById(addressId);
 
     if (!address) {
@@ -291,6 +291,10 @@ exports.placeOrder = async (req, res) => {
         message: "Address not found",
       });
     }
+
+    const chargesData = isGlobalOrder
+      ? await getSettingsForGlobalDelivery(SettingAdmin, address.pincode)
+      : await SettingAdmin.findOne();
 
     const globalDeliveryRule = isGlobalOrder
       ? getGlobalDeliveryRule(chargesData, address.pincode)
@@ -788,6 +792,9 @@ exports.placeOrder = async (req, res) => {
       const orderResponse = serializeOrderAmounts(newOrder);
       return res.status(200).json({
         message: "Order placed successfully",
+        subtotal: itemsTotal,
+        deliveryPincode: isGlobalOrder ? address.pincode : null,
+        deliveryRuleSource: globalDeliveryRule?.source || null,
         platformFeeAmount: orderResponse.platformFeeAmount,
         deliveryCharge: orderResponse.deliveryCharge,
         totalAmount: orderResponse.totalAmount,
@@ -833,6 +840,9 @@ exports.placeOrder = async (req, res) => {
       return res.status(200).json({
         message: "Proceed to payment",
         tempOrderId: tempOrder._id,
+        subtotal: itemsTotal,
+        deliveryPincode: isGlobalOrder ? address.pincode : null,
+        deliveryRuleSource: globalDeliveryRule?.source || null,
         platformFeeAmount: tempOrderResponse.platformFeeAmount,
         deliveryCharge: tempOrderResponse.deliveryCharge,
         totalAmount: tempOrderResponse.totalAmount,

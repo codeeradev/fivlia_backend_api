@@ -18,6 +18,11 @@ async function checkout(
     console: { log() {}, error() {} },
     require(name) {
       if (name === "../utils/globalDelivery") return delivery;
+      if (name === "../utils/globalDeliverySettings")
+        return {
+          getSettingsForGlobalDelivery: async (settingsModel, pincode) =>
+            settingsModel.findOne({ "globalDeliveryRules.pincode": pincode }),
+        };
       if (name === "../modals/store")
         return {
           findById: () => ({ lean: async () => ({ serviceScope: storeScope }) }),

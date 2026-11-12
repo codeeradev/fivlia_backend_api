@@ -178,6 +178,8 @@ module.exports = {
   isGlobalStore,
   getDeliveryMode,
   getOrderScope,
+  normalizePincode,
+  isValidPincode,
   getGlobalSettings,
   getGlobalDeliveryRule,
   getWebsiteGlobalSettings,

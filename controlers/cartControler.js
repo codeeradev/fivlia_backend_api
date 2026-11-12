@@ -23,6 +23,7 @@ const {
   isGlobalCodAllowed,
   getGlobalDeliveryRule,
 } = require("../utils/globalDelivery");
+const { getSettingsForGlobalDelivery } = require("../utils/globalDeliverySettings");
 const {
   filterProductsByRequestedType,
   resolveRequestedTypeId,
@@ -437,9 +438,8 @@ exports.getCart = async (req, res) => {
       ? String(req.query?.pincode || "").trim()
       : "";
     const deliveryPincode = websitePincode || address?.pincode;
-    const settings = req.isWebsiteGlobalCart && isGlobalStore && deliveryPincode
-      ? (await SettingAdmin.findOne({ "globalDeliveryRules.pincode": deliveryPincode }).lean()) ||
-        (await SettingAdmin.findOne().lean())
+    const settings = isGlobalStore
+      ? await getSettingsForGlobalDelivery(SettingAdmin, deliveryPincode)
       : await SettingAdmin.findOne().lean();
 
     const globalDeliveryRule = isGlobalStore
