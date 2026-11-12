@@ -4,7 +4,13 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 const delivery = require("../utils/globalDelivery");
-async function checkout(pincode, paymentMode, website = false, defaultsAvailable = true) {
+async function checkout(
+  pincode,
+  paymentMode,
+  website = false,
+  defaultsAvailable = true,
+  storeScope = "global",
+) {
   let cartRead = false;
   let counterCalls = 0;
   const ctx = {
@@ -14,7 +20,7 @@ async function checkout(pincode, paymentMode, website = false, defaultsAvailable
       if (name === "../utils/globalDelivery") return delivery;
       if (name === "../modals/store")
         return {
-          findById: () => ({ lean: async () => ({ serviceScope: "global" }) }),
+          findById: () => ({ lean: async () => ({ serviceScope: storeScope }) }),
         };
       if (name === "../modals/Address")
         return { findById: async () => ({ pincode }) };
@@ -117,6 +123,12 @@ test("website global checkout uses admin defaults for a valid unlisted PIN", asy
   assert.equal(cartRead, true);
   assert.match(res.body.message, /Cart item.*not found/);
   assert.notEqual(res.body.errorType, "global_delivery_unavailable");
+});
+test("website global checkout applies global PIN validation even if store scope is stale", async () => {
+  const { res, cartRead } = await checkout("400001", false, true, false, "city");
+  assert.equal(res.code, 400);
+  assert.equal(res.body.errorType, "global_delivery_unavailable");
+  assert.equal(cartRead, false);
 });
 test("app global checkout uses admin defaults for an unlisted valid PIN", async () => {
   const { res, cartRead } = await checkout("400001", false, false);

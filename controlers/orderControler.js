@@ -1,5 +1,5 @@
 const { getLocalPlatformFee, roundPlatformFeeAmount } = require("../utils/platformFee");
-const { roundMoney } = require("../utils/money");
+const { roundMoney, calculatePayableTotal } = require("../utils/money");
 
 const serializeOrderAmounts = (order) => {
   const data = order && typeof order.toObject === "function" ? order.toObject() : { ...(order || {}) };
@@ -276,8 +276,11 @@ exports.placeOrder = async (req, res) => {
     const storeScopeDoc = await Store.findById(storeId, {
       serviceScope: 1,
     }).lean();
-    const isGlobalOrder = isGlobalStore(storeScopeDoc);
-    const orderScope = getOrderScope(storeScopeDoc);
+    // The namespaced global storefront is authoritative for website orders;
+    // regular app orders use the store's configured service scope.
+    const isGlobalOrder =
+      req.isWebsiteGlobalOrder === true || isGlobalStore(storeScopeDoc);
+    const orderScope = isGlobalOrder ? "global" : getOrderScope(storeScopeDoc);
 
     const chargesData = await SettingAdmin.findOne();
     const address = await Address.findById(addressId);
@@ -524,7 +527,11 @@ exports.placeOrder = async (req, res) => {
     deliveryChargeRaw = roundMoney(deliveryChargeRaw);
     deliveryBaseCharge = roundMoney(deliveryBaseCharge);
     totalDeliveryCharge = roundMoney(totalDeliveryCharge);
-    const totalPrice = roundMoney(itemsTotal + deliveryChargeRaw + platformFeeAmount);
+    const totalPrice = calculatePayableTotal(
+      itemsTotal,
+      platformFeeAmount,
+      deliveryChargeRaw,
+    );
 
     const cashOnDelivery = paymentMode === true;
 

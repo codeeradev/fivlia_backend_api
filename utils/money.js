@@ -5,4 +5,7 @@ const roundMoney = (amount) => {
     : 0;
 };
 
-module.exports = { roundMoney };
+const calculatePayableTotal = (subtotal, platformFee, deliveryCharge) =>
+  roundMoney(Number(subtotal) + Number(platformFee) + Number(deliveryCharge));
+
+module.exports = { roundMoney, calculatePayableTotal };

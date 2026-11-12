@@ -1,5 +1,5 @@
 const { getLocalPlatformFee } = require("../utils/platformFee");
-const { roundMoney } = require("../utils/money");
+const { roundMoney, calculatePayableTotal } = require("../utils/money");
 const { Cart, Discount } = require("../modals/cart");
 const { ZoneData } = require("../modals/cityZone");
 const Products = require("../modals/Product");
@@ -334,7 +334,10 @@ exports.getCart = async (req, res) => {
     const storeId = items[0]?.storeId;
 
     let storeZone = await Store.findById(storeId);
-    const isGlobalStore = storeZone?.serviceScope === "global";
+    // The namespaced global storefront is an explicit global checkout path.
+    // Regular app carts continue to follow the store's configured scope.
+    const isGlobalStore =
+      req.isWebsiteGlobalCart === true || storeZone?.serviceScope === "global";
 
     storeZone = storeZone?.zone?.[0];
 
@@ -573,7 +576,11 @@ exports.getCart = async (req, res) => {
     deliveryBaseCharge = roundMoney(deliveryBaseCharge);
     const rawCartSubtotal = Number(offerContext.cartDiscount.finalSubtotal) || 0;
     const cartSubtotal = roundMoney(rawCartSubtotal);
-    const totalAmount = roundMoney(rawCartSubtotal + platformFee + deliveryCharge);
+    const totalAmount = calculatePayableTotal(
+      rawCartSubtotal,
+      platformFee,
+      deliveryCharge,
+    );
 
     return res.status(200).json({
       status: true,
