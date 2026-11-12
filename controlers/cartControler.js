@@ -642,7 +642,6 @@ exports.getCart = async (req, res) => {
       platformFeeAmount: platformFee,
       platformFeePercent,
       deliveryCharge,
-      deliveryCharges: deliveryCharge,
       totalAmount,
       totalPrice: totalAmount,
       deliveryBaseCharge,

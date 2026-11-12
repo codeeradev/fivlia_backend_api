@@ -1297,7 +1297,7 @@ exports.getOrderDetails = async (req, res) => {
 
     const settings = await SettingAdmin.findOne(
       {},
-      "freeDeliveryLimit Platform_Fee Platform_Fee_Fixed",
+      "Platform_Fee Platform_Fee_Fixed",
     ).lean();
 
     const driverIds = [
@@ -1396,15 +1396,6 @@ exports.getOrderDetails = async (req, res) => {
       }
 
       const isGlobalOrderRow = order.serviceScope === "global";
-
-      // Global orders keep the stored shipping charge (no free-delivery override)
-      if (
-        !isGlobalOrderRow &&
-        settings &&
-        order.totalPrice > settings.freeDeliveryLimit
-      ) {
-        order.deliveryCharges = 0;
-      }
 
       const subtotal = order.items.reduce((total, item) => {
         return total + Number(item.price) * Number(item.quantity);
