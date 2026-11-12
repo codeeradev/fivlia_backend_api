@@ -1247,7 +1247,7 @@ exports.getOrderDetails = async (req, res) => {
 
     const settings = await SettingAdmin.findOne(
       {},
-      "freeDeliveryLimit Platform_Fee",
+      "freeDeliveryLimit Platform_Fee Platform_Fee_Fixed",
     ).lean();
 
     const driverIds = [
@@ -1363,7 +1363,7 @@ exports.getOrderDetails = async (req, res) => {
       // Preserve each order's saved fee so later setting changes do not rewrite history.
       const platformFee = order.platformFee != null
         ? Number(order.platformFee)
-        : Number(((subtotal * settings.Platform_Fee) / 100).toFixed(2));
+        : getLocalPlatformFee(subtotal, settings || {}).amount;
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {

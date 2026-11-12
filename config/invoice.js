@@ -577,7 +577,7 @@ async function generatePDFInvoice(
         if (order.platformFee > 0) {
           platformTotal = Number(order.platformFee);
           const platformLine =
-            "Platform Fee:".padEnd(30) + platformTotal.toFixed(2).padStart(15);
+            "Platform Fee:".padEnd(30) + platformTotal.toFixed(0).padStart(15);
           doc.text(platformLine);
         }
 

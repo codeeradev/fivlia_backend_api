@@ -38,6 +38,7 @@ exports.settings = async (req, res) => {
       return res.status(404).json({ message: "Settings not found" });
     }
     const settings = withGlobalSettingDefaults(settingsDoc);
+    settings.Platform_Fee_Fixed = Number(settings.Platform_Fee_Fixed ?? 0);
 
     const pages = await Page.find({
       pageSlug: {
