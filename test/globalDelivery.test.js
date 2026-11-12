@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   validateGlobalSettings,
   getGlobalSettings,
+  getGlobalDeliveryRule,
   computeGlobalShippingCharge,
   isGlobalCodAllowed,
   formatGlobalDeliveryText,
@@ -79,7 +80,44 @@ test("website uses exact PIN rules first and admin defaults for other valid PINs
   assert.equal(isGlobalCodAllowed(withDefaults, "560001", defaultRule), true);
   const entry = buildWebsiteGlobalEstimateEntry({ _id: "s", storeName: "Global" }, withDefaults, "560001");
   assert.equal(entry.duration, "5-8 days");
+  assert.equal(entry.estimatedDeliveryText, "5-8 days");
+  assert.equal(entry.deliveryCharge, 30);
   assert.equal(entry.raw.deliveryRuleSource, "default");
+});
+test("all global delivery callers use PIN rules first, then the admin defaults", () => {
+  const withDefaults = {
+    ...settings,
+    globalDeliveryDefaults: {
+      shippingCharge: 30,
+      daysMin: 5,
+      daysMax: 8,
+      codAllowed: true,
+    },
+  };
+
+  const exactRule = getGlobalDeliveryRule(withDefaults, "110001");
+  assert.equal(exactRule.shippingCharge, 50);
+  assert.equal(exactRule.source, "pincode");
+  assert.equal(computeGlobalShippingCharge(100, withDefaults, "110001"), 50);
+  assert.equal(formatGlobalDeliveryText(withDefaults, "110001"), "2-4 days");
+
+  const defaultRule = getGlobalDeliveryRule(withDefaults, "560001");
+  assert.equal(defaultRule.shippingCharge, 30);
+  assert.equal(defaultRule.source, "default");
+  assert.equal(computeGlobalShippingCharge(100, withDefaults, "560001"), 30);
+  assert.equal(formatGlobalDeliveryText(withDefaults, "560001"), "5-8 days");
+  assert.equal(isGlobalCodAllowed(withDefaults, "560001"), true);
+
+  const estimate = buildGlobalEstimateEntry(
+    { _id: "s", storeName: "Global" },
+    withDefaults,
+    "560001",
+  );
+  assert.equal(estimate.duration, "5-8 days");
+  assert.equal(estimate.estimatedDeliveryText, "5-8 days");
+  assert.equal(estimate.deliveryCharge, 30);
+  assert.equal(estimate.raw.deliveryRuleSource, "default");
+  assert.equal(getGlobalDeliveryRule(withDefaults, "011001"), null);
 });
 test("rules normalize numeric inputs and PIN whitespace; an empty list disables delivery", () => {
   assert.deepEqual(

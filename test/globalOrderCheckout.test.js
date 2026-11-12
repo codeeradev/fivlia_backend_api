@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 const delivery = require("../utils/globalDelivery");
-async function checkout(pincode, paymentMode, website = false) {
+async function checkout(pincode, paymentMode, website = false, defaultsAvailable = true) {
   let cartRead = false;
   let counterCalls = 0;
   const ctx = {
@@ -31,12 +31,16 @@ async function checkout(pincode, paymentMode, website = false) {
                   codAllowed: false,
                 },
               ],
-              globalDeliveryDefaults: {
-                shippingCharge: 75,
-                daysMin: 6,
-                daysMax: 9,
-                codAllowed: false,
-              },
+              ...(defaultsAvailable
+                ? {
+                    globalDeliveryDefaults: {
+                      shippingCharge: 75,
+                      daysMin: 6,
+                      daysMax: 9,
+                      codAllowed: false,
+                    },
+                  }
+                : {}),
             }),
           },
         };
@@ -90,7 +94,7 @@ async function checkout(pincode, paymentMode, website = false) {
   return { res, cartRead, counterCalls };
 }
 test("checkout rejects unsupported PIN before order side effects", async () => {
-  const { res, cartRead, counterCalls } = await checkout("400001", false);
+  const { res, cartRead, counterCalls } = await checkout("400001", false, false, false);
   assert.equal(res.code, 400);
   assert.equal(res.body.errorType, "global_delivery_unavailable");
   assert.equal(cartRead, false);
@@ -114,11 +118,11 @@ test("website global checkout uses admin defaults for a valid unlisted PIN", asy
   assert.match(res.body.message, /Cart item.*not found/);
   assert.notEqual(res.body.errorType, "global_delivery_unavailable");
 });
-test("mobile checkout remains exact-PIN-only for an unlisted PIN", async () => {
+test("app global checkout uses admin defaults for an unlisted valid PIN", async () => {
   const { res, cartRead } = await checkout("400001", false, false);
-  assert.equal(res.code, 400);
-  assert.equal(res.body.errorType, "global_delivery_unavailable");
-  assert.equal(cartRead, false);
+  assert.equal(cartRead, true);
+  assert.match(res.body.message, /Cart item.*not found/);
+  assert.notEqual(res.body.errorType, "global_delivery_unavailable");
 });
 test("website fallback COD setting is enforced for an unlisted PIN", async () => {
   const { res, cartRead } = await checkout("400001", true, true);

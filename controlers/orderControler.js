@@ -1,9 +1,27 @@
 const { getLocalPlatformFee, roundPlatformFeeAmount } = require("../utils/platformFee");
+const { roundMoney } = require("../utils/money");
 
-const serializeOrderPlatformFee = (order) => {
+const serializeOrderAmounts = (order) => {
   const data = order && typeof order.toObject === "function" ? order.toObject() : { ...(order || {}) };
   const amount = roundPlatformFeeAmount(data.platformFeeAmount ?? data.platformFee);
-  return { ...data, platformFee: amount, platformFeeAmount: amount };
+  const hasTotal = data.totalAmount != null || data.totalPrice != null;
+  const hasDeliveryCharge = data.deliveryCharge != null || data.deliveryCharges != null;
+  const totalAmount = hasTotal
+    ? roundMoney(data.totalAmount ?? data.totalPrice)
+    : undefined;
+  const deliveryCharge = hasDeliveryCharge
+    ? roundMoney(data.deliveryCharge ?? data.deliveryCharges)
+    : undefined;
+
+  return {
+    ...data,
+    ...(hasTotal ? { totalAmount, totalPrice: totalAmount } : {}),
+    ...(hasDeliveryCharge
+      ? { deliveryCharge, deliveryCharges: deliveryCharge }
+      : {}),
+    platformFee: amount,
+    platformFeeAmount: amount,
+  };
 };
 const mongoose = require("mongoose");
 const { Order, TempOrder } = require("../modals/order");
@@ -49,8 +67,7 @@ const {
   getOrderScope,
   computeGlobalShippingCharge,
   isGlobalCodAllowed,
-  getGlobalSettings,
-  getWebsiteGlobalSettings,
+  getGlobalDeliveryRule,
 } = require("../utils/globalDelivery");
 const {
   getAppliedOfferContext,
@@ -273,9 +290,7 @@ exports.placeOrder = async (req, res) => {
     }
 
     const globalDeliveryRule = isGlobalOrder
-      ? req.isWebsiteGlobalOrder
-        ? getWebsiteGlobalSettings(chargesData, address.pincode)
-        : getGlobalSettings(chargesData, address.pincode)
+      ? getGlobalDeliveryRule(chargesData, address.pincode)
       : null;
 
     if (isGlobalOrder) {
@@ -506,7 +521,10 @@ exports.placeOrder = async (req, res) => {
         deliveryPricing.sellerSponsoredDeliveryPayout;
     }
 
-    const totalPrice = itemsTotal + deliveryChargeRaw + platformFeeAmount;
+    deliveryChargeRaw = roundMoney(deliveryChargeRaw);
+    deliveryBaseCharge = roundMoney(deliveryBaseCharge);
+    totalDeliveryCharge = roundMoney(totalDeliveryCharge);
+    const totalPrice = roundMoney(itemsTotal + deliveryChargeRaw + platformFeeAmount);
 
     const cashOnDelivery = paymentMode === true;
 
@@ -760,10 +778,12 @@ exports.placeOrder = async (req, res) => {
         },
       });
       console.log(`Order(${newOrder.orderId}) placed successfully`);
-      const orderResponse = serializeOrderPlatformFee(newOrder);
+      const orderResponse = serializeOrderAmounts(newOrder);
       return res.status(200).json({
         message: "Order placed successfully",
         platformFeeAmount: orderResponse.platformFeeAmount,
+        deliveryCharge: orderResponse.deliveryCharge,
+        totalAmount: orderResponse.totalAmount,
         order: orderResponse,
       });
     } else {
@@ -802,11 +822,13 @@ exports.placeOrder = async (req, res) => {
         razorpayOrderId: payResponse.id,
       });
 
-      const tempOrderResponse = serializeOrderPlatformFee(tempOrder);
+      const tempOrderResponse = serializeOrderAmounts(tempOrder);
       return res.status(200).json({
         message: "Proceed to payment",
         tempOrderId: tempOrder._id,
         platformFeeAmount: tempOrderResponse.platformFeeAmount,
+        deliveryCharge: tempOrderResponse.deliveryCharge,
+        totalAmount: tempOrderResponse.totalAmount,
         tempOrder: tempOrderResponse,
         payResponse,
       });
@@ -962,11 +984,13 @@ exports.verifyPayment = async (req, res) => {
     });
 
     if (existingOrder) {
-      const orderResponse = serializeOrderPlatformFee(existingOrder);
+      const orderResponse = serializeOrderAmounts(existingOrder);
       return res.status(200).json({
         status: true,
         message: "Order already exists",
         platformFeeAmount: orderResponse.platformFeeAmount,
+        deliveryCharge: orderResponse.deliveryCharge,
+        totalAmount: orderResponse.totalAmount,
         order: orderResponse,
       });
     }
@@ -1085,11 +1109,13 @@ exports.verifyPayment = async (req, res) => {
       }
     }
 
-    const orderResponse = serializeOrderPlatformFee(finalOrder);
+    const orderResponse = serializeOrderAmounts(finalOrder);
     return res.status(200).json({
       status: paymentStatus ? true : false,
       message: "Payment verified. Order placed successfully.",
       platformFeeAmount: orderResponse.platformFeeAmount,
+      deliveryCharge: orderResponse.deliveryCharge,
+      totalAmount: orderResponse.totalAmount,
       order: orderResponse,
     });
   } catch (error) {
@@ -1212,8 +1238,14 @@ exports.getOrders = async (req, res) => {
       );
 
       const platformFeeAmount = roundPlatformFeeAmount(order.platformFeeAmount ?? order.platformFee);
+      const totalAmount = roundMoney(order.totalAmount ?? order.totalPrice);
+      const deliveryCharge = roundMoney(order.deliveryCharge ?? order.deliveryCharges);
       return {
         ...order,
+        totalAmount,
+        totalPrice: totalAmount,
+        deliveryCharge,
+        deliveryCharges: deliveryCharge,
         platformFee: platformFeeAmount,
         platformFeeAmount,
         items: itemsWithVariant,
@@ -1384,6 +1416,8 @@ exports.getOrderDetails = async (req, res) => {
           order.platformFee ??
           getLocalPlatformFee(subtotal, settings || {}).amount,
       );
+      const totalAmount = roundMoney(order.totalAmount ?? order.totalPrice);
+      const deliveryCharge = roundMoney(order.deliveryCharge ?? order.deliveryCharges);
 
       const itemsWithDetails = await Promise.all(
         order.items.map(async (item) => {
@@ -1417,9 +1451,11 @@ exports.getOrderDetails = async (req, res) => {
         returnStatus: returnState.returnStatus,
         isPartialReturn: returnState.isPartialReturn,
         serviceScope: order.serviceScope || "city",
-        totalPrice: order.totalPrice,
+        totalAmount,
+        totalPrice: totalAmount,
         cashOnDelivery: order.cashOnDelivery,
-        deliveryCharges: order.deliveryCharges,
+        deliveryCharge,
+        deliveryCharges: deliveryCharge,
         platformFee,
         platformFeeAmount: platformFee,
         transactionId: order.transactionId || "",
@@ -3323,7 +3359,7 @@ exports.getTempOrders = async (req, res) => {
       .limit(limit)
       .lean();
 
-    const tempOrdersWithPlatformFee = tempOrders.map(serializeOrderPlatformFee);
+    const tempOrdersWithPlatformFee = tempOrders.map(serializeOrderAmounts);
     return res.status(200).json({
       success: true,
       count: tempOrdersWithPlatformFee.length,

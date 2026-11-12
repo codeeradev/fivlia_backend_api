@@ -33,9 +33,11 @@ test("website delivery endpoint returns configured defaults for an unlisted PIN"
     assert.equal(res.body.available, true);
     assert.equal(res.body.pincode, "125037");
     assert.equal(res.body.shippingCharge, 12);
+    assert.equal(res.body.deliveryCharge, 12);
     assert.equal(res.body.daysMin, 6);
     assert.equal(res.body.daysMax, 9);
     assert.equal(res.body.deliveryDays, "6-9");
+    assert.equal(res.body.estimatedDeliveryText, "6-9 days");
     assert.equal(res.body.codAllowed, true);
     assert.equal(res.body.ruleSource, "default");
   } finally {

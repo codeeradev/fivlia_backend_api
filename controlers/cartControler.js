@@ -1,4 +1,5 @@
 const { getLocalPlatformFee } = require("../utils/platformFee");
+const { roundMoney } = require("../utils/money");
 const { Cart, Discount } = require("../modals/cart");
 const { ZoneData } = require("../modals/cityZone");
 const Products = require("../modals/Product");
@@ -20,8 +21,7 @@ const {
   computeGlobalShippingCharge,
   formatGlobalDeliveryText,
   isGlobalCodAllowed,
-  getGlobalSettings,
-  getWebsiteGlobalSettings,
+  getGlobalDeliveryRule,
 } = require("../utils/globalDelivery");
 const {
   filterProductsByRequestedType,
@@ -178,14 +178,17 @@ exports.addCart = async (req, res) => {
     if (isGlobalCartStore) {
       const globalCodSetting = req.isWebsiteGlobalCart
         ? await SettingAdmin.findOne().lean()
-        : await SettingAdmin.findOne({}, { globalDeliveryRules: 1 }).lean();
+        : await SettingAdmin.findOne(
+            {},
+            { globalDeliveryRules: 1, globalDeliveryDefaults: 1 },
+          ).lean();
       const deliveryAddress = await Address.findOne({
         userId: user?._id,
         isDeleted: { $ne: true },
       }).sort({ default: -1, createdAt: -1 }).lean();
       if (req.isWebsiteGlobalCart) {
         const pincode = String(req.body.pincode || deliveryAddress?.pincode || "").trim();
-        paymentOption = getWebsiteGlobalSettings(globalCodSetting, pincode)?.codAllowed === true;
+        paymentOption = getGlobalDeliveryRule(globalCodSetting, pincode)?.codAllowed === true;
       } else {
         paymentOption = isGlobalCodAllowed(globalCodSetting, deliveryAddress?.pincode);
       }
@@ -425,9 +428,8 @@ exports.getCart = async (req, res) => {
         .lean();
     }
 
-    // The website's selected global PIN is separate from the customer's saved
-    // address. Keep the existing /getCart behavior for apps; only the
-    // website-specific route may use its selected PIN for global delivery.
+    // The website's selected global PIN may differ from the customer's saved
+    // address. Apps use the customer's selected/default saved address PIN.
     const websitePincode = req.isWebsiteGlobalCart
       ? String(req.query?.pincode || "").trim()
       : "";
@@ -438,9 +440,7 @@ exports.getCart = async (req, res) => {
       : await SettingAdmin.findOne().lean();
 
     const globalDeliveryRule = isGlobalStore
-      ? req.isWebsiteGlobalCart
-        ? getWebsiteGlobalSettings(settings, deliveryPincode)
-        : getGlobalSettings(settings, deliveryPincode)
+      ? getGlobalDeliveryRule(settings, deliveryPincode)
       : null;
 
     if (isGlobalStore && !globalDeliveryRule) {
@@ -569,11 +569,18 @@ exports.getCart = async (req, res) => {
       }
     }
 
+    deliveryCharge = roundMoney(deliveryCharge);
+    deliveryBaseCharge = roundMoney(deliveryBaseCharge);
+    const rawCartSubtotal = Number(offerContext.cartDiscount.finalSubtotal) || 0;
+    const cartSubtotal = roundMoney(rawCartSubtotal);
+    const totalAmount = roundMoney(rawCartSubtotal + platformFee + deliveryCharge);
+
     return res.status(200).json({
       status: true,
       message: "Cart items fetched successfully.",
       items: allCartItems,
       freeItems: freeProductItem ? [freeProductItem] : [],
+      subtotal: cartSubtotal,
       offerSummary: {
         cartDiscount: offerContext.cartDiscount.offer
           ? {
@@ -618,7 +625,7 @@ exports.getCart = async (req, res) => {
         totalSavings:
           offerContext.cartDiscount.discountAmount +
           (freeProductItem?.freeProductSavings || 0),
-        finalSubtotal: offerContext.cartDiscount.finalSubtotal,
+        finalSubtotal: cartSubtotal,
       },
       paymentOption: isGlobalStore
         ? isGlobalCodAllowed(settings, deliveryPincode, globalDeliveryRule)
@@ -629,11 +636,15 @@ exports.getCart = async (req, res) => {
         ? formatGlobalDeliveryText(settings, deliveryPincode, globalDeliveryRule)
         : null,
       deliveryPincode: isGlobalStore ? deliveryPincode : null,
+      deliveryRuleSource: isGlobalStore ? globalDeliveryRule.source : null,
       // Return the final fee for clients to display. Keep the percentage field
       // for older clients, but never require them to calculate the fee amount.
       platformFeeAmount: platformFee,
       platformFeePercent,
       deliveryCharge,
+      deliveryCharges: deliveryCharge,
+      totalAmount,
+      totalPrice: totalAmount,
       deliveryBaseCharge,
       deliveryChargeMode,
       deliveryDistanceKm,

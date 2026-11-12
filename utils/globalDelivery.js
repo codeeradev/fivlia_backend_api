@@ -10,9 +10,8 @@ const getGlobalSettings = (settings = {}, pincode) => {
     settings?.globalDeliveryRules?.find((rule) => rule.pincode === pin) || null
   );
 };
-// The website may use the admin default when no exact PIN rule exists.
-// Mobile/app callers continue using getGlobalSettings and exact rules only.
-const getWebsiteGlobalSettings = (settings = {}, pincode) => {
+// All global-order callers use an exact PIN rule first, then the admin default.
+const getGlobalDeliveryRule = (settings = {}, pincode) => {
   const pin = normalizePincode(pincode);
   if (!/^[1-9][0-9]{5}$/.test(pin)) return null;
   const exactRule = getGlobalSettings(settings, pin);
@@ -21,12 +20,14 @@ const getWebsiteGlobalSettings = (settings = {}, pincode) => {
   if (!defaults) return null;
   return { ...defaults, pincode: pin, source: "default" };
 };
+// Backward-compatible name used by website endpoints.
+const getWebsiteGlobalSettings = getGlobalDeliveryRule;
 const isGlobalCodAllowed = (settings, pincode, ruleOverride) =>
-  (ruleOverride === undefined ? getGlobalSettings(settings, pincode) : ruleOverride)
+  (ruleOverride === undefined ? getGlobalDeliveryRule(settings, pincode) : ruleOverride)
     ?.codAllowed === true;
 const computeGlobalShippingCharge = (itemsTotal, settings, pincode, ruleOverride) => {
   const rule = ruleOverride === undefined
-    ? getGlobalSettings(settings, pincode)
+    ? getGlobalDeliveryRule(settings, pincode)
     : ruleOverride;
   if (!rule)
     throw new Error("Global delivery is not available for this PIN code.");
@@ -34,7 +35,7 @@ const computeGlobalShippingCharge = (itemsTotal, settings, pincode, ruleOverride
 };
 const formatGlobalDeliveryText = (settings, pincode, ruleOverride) => {
   const rule = ruleOverride === undefined
-    ? getGlobalSettings(settings, pincode)
+    ? getGlobalDeliveryRule(settings, pincode)
     : ruleOverride;
   if (!rule) return null;
   return rule.daysMin === rule.daysMax
@@ -42,25 +43,32 @@ const formatGlobalDeliveryText = (settings, pincode, ruleOverride) => {
     : `${rule.daysMin}-${rule.daysMax} days`;
 };
 const buildGlobalEstimateEntry = (store, settings, pincode) => {
-  if (!getGlobalSettings(settings, pincode)) return null;
+  const rule = getGlobalDeliveryRule(settings, pincode);
+  if (!rule) return null;
+  const estimatedDeliveryText = formatGlobalDeliveryText(settings, pincode, rule);
   return {
     storeId: store._id,
     storeName: store.storeName,
     city: null,
     distance: "All India",
-    duration: formatGlobalDeliveryText(settings, pincode),
-    raw: { source: "global" },
+    duration: estimatedDeliveryText,
+    estimatedDeliveryText,
+    deliveryCharge: Number(rule.shippingCharge),
+    raw: { source: "global", deliveryRuleSource: rule.source },
   };
 };
 const buildWebsiteGlobalEstimateEntry = (store, settings, pincode) => {
-  const rule = getWebsiteGlobalSettings(settings, pincode);
+  const rule = getGlobalDeliveryRule(settings, pincode);
   if (!rule) return null;
+  const estimatedDeliveryText = formatGlobalDeliveryText(settings, pincode, rule);
   return {
     storeId: store._id,
     storeName: store.storeName,
     city: null,
     distance: "All India",
-    duration: formatGlobalDeliveryText(settings, pincode, rule),
+    duration: estimatedDeliveryText,
+    estimatedDeliveryText,
+    deliveryCharge: Number(rule.shippingCharge),
     raw: { source: "global", deliveryRuleSource: rule.source },
   };
 };
@@ -168,6 +176,7 @@ module.exports = {
   getDeliveryMode,
   getOrderScope,
   getGlobalSettings,
+  getGlobalDeliveryRule,
   getWebsiteGlobalSettings,
   isGlobalCodAllowed,
   computeGlobalShippingCharge,

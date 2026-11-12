@@ -8,7 +8,7 @@ const Category = require("../modals/category");
 const Brand = require("../modals/brand");
 const Banner = require("../modals/banner");
 const Type = require("../modals/type");
-const { getWebsiteGlobalSettings } = require("../utils/globalDelivery");
+const { getGlobalDeliveryRule } = require("../utils/globalDelivery");
 
 const INQUIRY_TYPES = new Set(["general", "seller", "delivery"]);
 const pageArgs = (query) => ({
@@ -22,9 +22,25 @@ exports.checkDelivery = async (req, res) => {
   if (!/^[1-9][0-9]{5}$/.test(pincode)) return res.status(400).json({ available: false, message: "Enter a valid six-digit PIN code." });
   try {
     const settings = await SettingAdmin.findOne().select("globalDeliveryRules globalDeliveryDefaults").lean();
-    const rule = getWebsiteGlobalSettings(settings, pincode);
+    const rule = getGlobalDeliveryRule(settings, pincode);
     if (!rule) return res.json({ available: false, pincode, message: "Global delivery is not available for this PIN code yet." });
-    return res.json({ available: true, pincode, shippingCharge: Number(rule.shippingCharge), daysMin: Number(rule.daysMin), daysMax: Number(rule.daysMax), deliveryDays: rule.daysMin === rule.daysMax ? `${rule.daysMin}` : `${rule.daysMin}-${rule.daysMax}`, codAllowed: rule.codAllowed === true, ruleSource: rule.source, message: "Global delivery is available for this PIN code." });
+    const deliveryDays = rule.daysMin === rule.daysMax
+      ? `${rule.daysMin}`
+      : `${rule.daysMin}-${rule.daysMax}`;
+    const deliveryCharge = Number(rule.shippingCharge);
+    return res.json({
+      available: true,
+      pincode,
+      shippingCharge: deliveryCharge,
+      deliveryCharge,
+      daysMin: Number(rule.daysMin),
+      daysMax: Number(rule.daysMax),
+      deliveryDays,
+      estimatedDeliveryText: `${deliveryDays} days`,
+      codAllowed: rule.codAllowed === true,
+      ruleSource: rule.source,
+      message: "Global delivery is available for this PIN code.",
+    });
   } catch (error) {
     console.error("Global delivery PIN check failed:", error);
     return res.status(500).json({ available: false, message: "Could not check delivery right now." });
