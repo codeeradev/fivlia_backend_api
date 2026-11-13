@@ -10,27 +10,10 @@ const registerDriverSocket = require("./socket/socket");
 const cors = require("cors");
 const {resumePendingDispatch} = require("./utils/resumePendingOrders");
 
-// require("./utils/telegram_logs");
-// const { initAgenda } = require('./config/agenda'); // ✅ your agenda setup
 require("./jobs/orderNotificationRetry");
 
 const app = express();
 app.set("etag", false);
-
-// app.use((req, res, next) => {
-//   const start = process.hrtime.bigint();
-
-//   res.on("finish", () => {
-//     const end = process.hrtime.bigint();
-//     const duration = Number(end - start) / 1_000_000; // ms
-
-//     console.log(
-//       `[${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration.toFixed(2)} ms`
-//     );
-//   });
-
-//   next();
-// });
 
 app.use(cors());
 
@@ -38,15 +21,21 @@ app.use(
   "/razorpay-webhook",
   express.raw({ type: "application/json" })
 );
+app.use(
+  "/cashfree-webhook",
+  express.raw({ type: "application/json" })
+);
+app.use(
+  "/fivlia/cashfree-webhook",
+  express.raw({ type: "application/json" })
+);
 
 app.use(express.json());
-// const key = fs.readFileSync('/etc/letsencrypt/live/api.fivlia.in/privkey.pem', 'utf8');
-// const cert = fs.readFileSync('/etc/letsencrypt/live/api.fivlia.in/cert.pem', 'utf8');
-// const server = https.createServer({ key, cert }, app);
-const server = http.createServer(app); // <-- create HTTP server
+
+const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*", // Set your frontend domain here in production
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
@@ -64,9 +53,6 @@ app.use("/food", foodRoutes);
 
 const startServer = async () => {
   const mongoConnection = await connectDb();
-
-  // const agenda = await initAgenda(mongoConnection);
-  // backgroundInvoice(agenda);
 
   const PORT = process.env.PORT || 8080;
   const host = process.env.HOST || "localhost";

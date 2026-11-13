@@ -36,8 +36,22 @@ const settingAdminSchema = new mongoose.Schema({
       live: String,
       secretKey: String,
       status: Boolean,
+      activeMode: { type: String, enum: ["test", "live"] },
     },
-    PhonePe: { test: String, live: String, secretKey: String, status: Boolean },
+    PhonePe: {
+      test: String,
+      live: String,
+      secretKey: String,
+      status: Boolean,
+      activeMode: { type: String, enum: ["test", "live"] },
+    },
+    Cashfree: {
+      test: { clientId: String, clientSecret: String },
+      live: { clientId: String, clientSecret: String },
+      status: { type: Boolean, default: false },
+      activeMode: { type: String, enum: ["test", "live"] },
+      easySplitEnabled: { type: Boolean, default: false },
+    },
   },
   PaymentGatewayStatus: Boolean,
   Map_Api: [

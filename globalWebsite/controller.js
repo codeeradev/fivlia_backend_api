@@ -185,10 +185,8 @@ exports.banners = async (req, res) => {
 
 exports.categories = async (_req, res) => {
   try {
-    const stores = await globalStores();
-    const { filter: globalFilter } = await globalProductFilter();
-    const productIds = await Product.distinct("category._id", globalFilter);
-    const filter = { status: true, _id: { $in: productIds } };
+    const typeIds = await globalTypeIds();
+    const filter = { status: true, typeId: { $in: typeIds } };
     const result = await Category.find(filter).sort({ sortOrder: 1, name: 1 }).lean();
     return res.json({ result, count: result.length });
   } catch (error) { return res.status(500).json({ message: "Could not load global categories." }); }

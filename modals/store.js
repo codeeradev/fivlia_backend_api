@@ -96,6 +96,14 @@ const storeScheema = new mongoose.Schema(
       ifsc: String,
       branch: String,
     },
+    cashfreeEasySplit: {
+      vendorId: { type: String, default: null, index: true },
+      status: { type: String, default: "NOT_REGISTERED" },
+      accountType: { type: String, default: null },
+      payoutMethod: { type: String, enum: ["bank", "upi", null], default: null },
+      lastSyncedAt: { type: Date, default: null },
+      registeredAt: { type: Date, default: null },
+    },
     advertisementImages: [{ type: String }],
     sellerSignature: { type: String },
     devices: [

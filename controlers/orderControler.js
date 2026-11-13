@@ -1,6 +1,22 @@
 const { getLocalPlatformFee, roundPlatformFeeAmount } = require("../utils/platformFee");
 const { roundMoney, calculatePayableTotal } = require("../utils/money");
 const { getSettingsForGlobalDelivery } = require("../utils/globalDeliverySettings");
+const {
+  createCashfreeOrder,
+  fetchCashfreeOrder,
+  getCashfreeCredentials,
+  isCashfreeOrderPaid,
+  normalizeCashfreePhone,
+  stableIdempotencyKey,
+  verifyCashfreeWebhookSignature,
+} = require("../utils/cashfreeService");
+const { calculateCashfreeVendorShare, minorToMajor } = require("../utils/cashfreeEasySplit");
+const CashfreeWebhookEvent = require("../modals/cashfreeWebhookEvent");
+const CashfreeRefund = require("../modals/cashfreeRefund");
+const {
+  applyCashfreeRefundWebhook,
+  cashfreeWebhookEventKey,
+} = require("./cashfreeEasySplitControler");
 
 const serializeOrderAmounts = (order) => {
   const data = order && typeof order.toObject === "function" ? order.toObject() : { ...(order || {}) };
@@ -276,6 +292,11 @@ exports.placeOrder = async (req, res) => {
 
     const storeScopeDoc = await Store.findById(storeId, {
       serviceScope: 1,
+      Authorized_Store: 1,
+      businessType: 1,
+      typeId: 1,
+      sellFood: 1,
+      cashfreeEasySplit: 1,
     }).lean();
     // The namespaced global storefront is authoritative for website orders;
     // regular app orders use the store's configured service scope.
@@ -801,6 +822,55 @@ exports.placeOrder = async (req, res) => {
         order: orderResponse,
       });
     } else {
+      const cashfreeConfig = chargesData?.PaymentGateways?.Cashfree;
+      const useCashfree =
+        req.isWebsiteGlobalOrder === true &&
+        paymentMode !== true &&
+        chargesData?.PaymentGatewayStatus === true &&
+        cashfreeConfig?.status === true;
+      const cashfreeMode = cashfreeConfig?.activeMode === "test" ? "test" : "live";
+      const taxSettingValue = String(chargesData?.foodSellerTaxPercent ?? "5").replace(/%$/, "");
+      const taxSettingNumber = Number(taxSettingValue);
+      const foodSellerTaxPercent = Number.isFinite(taxSettingNumber) ? taxSettingNumber : 5;
+      let cashfreeEasySplit = null;
+
+      if (useCashfree && cashfreeConfig?.easySplitEnabled === true) {
+        const vendorId = storeScopeDoc?.cashfreeEasySplit?.vendorId;
+        const vendorStatus = String(storeScopeDoc?.cashfreeEasySplit?.status || "").toUpperCase();
+        if (!vendorId || vendorStatus !== "ACTIVE") {
+          return res.status(409).json({
+            errorType: "cashfree_vendor_unavailable",
+            message: "This store is not active for Cashfree Easy Split. Complete vendor onboarding before accepting online payment.",
+          });
+        }
+        const allocation = calculateCashfreeVendorShare({
+          order: { items: orderItems, totalPrice, sellerSponsoredDeliveryPayout },
+          store: storeScopeDoc,
+          foodSellerTaxPercent,
+        });
+        if (allocation.vendorAmountMinor <= 0) {
+          return res.status(409).json({
+            errorType: "cashfree_vendor_share_invalid",
+            message: "This order has no positive vendor amount to split. Please review the item commission and delivery offer settings.",
+          });
+        }
+        cashfreeEasySplit = {
+          enabled: true,
+          vendorId,
+          vendorStatus,
+          vendorAmountMinor: allocation.vendorAmountMinor,
+          platformAmountMinor: allocation.platformAmountMinor,
+          itemTotalMinor: allocation.itemTotalMinor,
+          commissionMinor: allocation.commissionMinor,
+          foodTaxMinor: allocation.foodTaxMinor,
+          sellerSponsoredDeliveryMinor: allocation.sponsoredDeliveryMinor,
+          payableMinor: allocation.payableMinor,
+          status: "ORDER_SPLIT_REQUESTED",
+          requestedAt: new Date(),
+          providerSyncStatus: "PENDING",
+        };
+      }
+
       const tempOrder = await TempOrder.create({
         userId,
         orderId: nextOrderId,
@@ -824,7 +894,99 @@ exports.placeOrder = async (req, res) => {
         sellerSponsoredDeliveryPayout,
         offerSummary,
         ready_in_min,
+        foodSellerTaxPercent,
+        ...(cashfreeEasySplit ? { cashfreeEasySplit } : {}),
+        paymentGateway: useCashfree ? "cashfree" : "razorpay",
+        ...(useCashfree ? { paymentGatewayMode: cashfreeMode } : {}),
       });
+
+      if (useCashfree) {
+        const credentials = getCashfreeCredentials(
+          chargesData.PaymentGateways,
+          cashfreeMode,
+        );
+        const customer = await User.findById(userId).lean();
+        const customerPhone = normalizeCashfreePhone(
+          address.mobileNumber || customer?.mobileNumber,
+        );
+        if (!customerPhone) {
+          return res.status(400).json({
+            message: "A valid customer mobile number is required for Cashfree checkout.",
+          });
+        }
+
+        const origin = String(req.headers?.origin || "").replace(/\/$/, "");
+        const isLocalWebsite = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+        const websiteUrl = String(
+          process.env.FIVLIA_WEBSITE_URL ||
+            process.env.WEBSITE_URL ||
+            (isLocalWebsite ? origin : "https://fivlia.com"),
+        ).replace(/\/$/, "");
+        const orderId = `fivlia_${tempOrder._id}`;
+        const returnUrl = `${websiteUrl}/OrderCheckout?tempOrderId=${encodeURIComponent(String(tempOrder._id))}&cashfreeOrderId=${encodeURIComponent(orderId)}`;
+        const createOrderPayload = {
+          order_id: orderId,
+          order_amount: Number(Number(totalPrice).toFixed(2)),
+          order_currency: "INR",
+          customer_details: {
+            customer_id: String(userId),
+            customer_name: address.fullName || customer?.name || "Fivlia Customer",
+            customer_phone: customerPhone,
+            ...(customer?.email ? { customer_email: customer.email } : {}),
+          },
+          order_meta: {
+            return_url: returnUrl,
+            ...(process.env.CASHFREE_WEBHOOK_URL
+              ? { notify_url: process.env.CASHFREE_WEBHOOK_URL }
+              : {}),
+          },
+          order_note: `Fivlia order ${nextOrderId}`,
+          ...(cashfreeEasySplit ? {
+            // Cashfree's Create Order contract documents VendorSplit objects as
+            // { amount, vendor }; the merchant retains the undistributed balance.
+            order_splits: [{
+              amount: minorToMajor(cashfreeEasySplit.vendorAmountMinor),
+              vendor: cashfreeEasySplit.vendorId,
+            }],
+          } : {}),
+        };
+        const cashfreeResponse = await createCashfreeOrder(
+          credentials,
+          createOrderPayload,
+          stableIdempotencyKey(`cashfree-order:${tempOrder._id}`),
+        );
+
+        if (!cashfreeResponse?.order_id || !cashfreeResponse?.payment_session_id) {
+          throw new Error("Cashfree did not return a payment session.");
+        }
+
+        const updatedTempOrder = await TempOrder.findByIdAndUpdate(
+          tempOrder._id,
+          {
+            cashfreeOrderId: cashfreeResponse.order_id,
+            paymentGatewayOrderId: cashfreeResponse.order_id,
+            cashfreeStatus: cashfreeResponse.order_status || "ACTIVE",
+          },
+          { new: true },
+        );
+        const tempOrderResponse = serializeOrderAmounts(updatedTempOrder || tempOrder);
+        return res.status(200).json({
+          message: "Proceed to payment",
+          paymentGateway: "cashfree",
+          cashfreeMode,
+          tempOrderId: tempOrder._id,
+          cashfreeOrderId: cashfreeResponse.order_id,
+          paymentSessionId: cashfreeResponse.payment_session_id,
+          subtotal: itemsTotal,
+          deliveryPincode: isGlobalOrder ? address.pincode : null,
+          deliveryRuleSource: globalDeliveryRule?.source || null,
+          platformFeeAmount: tempOrderResponse.platformFeeAmount,
+          deliveryCharge: tempOrderResponse.deliveryCharge,
+          totalAmount: tempOrderResponse.totalAmount,
+          tempOrder: tempOrderResponse,
+        });
+      }
+
       const payResponse = await createRazorpayOrder(
         totalPrice,
         "INR",
@@ -960,9 +1122,115 @@ exports.razorpayWebhook = async (req, res) => {
   }
 };
 
+exports.cashfreeWebhook = async (req, res) => {
+  let eventRecord;
+  try {
+    const rawBody = req.body;
+    if (!Buffer.isBuffer(rawBody)) {
+      return res.status(400).json({ success: false, message: "Raw webhook body required." });
+    }
+
+    let body;
+    try {
+      body = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      return res.status(400).json({ success: false, message: "Invalid webhook payload." });
+    }
+
+    const cashfreeOrderId = body?.data?.order?.order_id || body?.data?.order_id || body?.order_id;
+    const refundId = body?.data?.refund?.refund_id || body?.data?.refund_details?.refund_id;
+    const tempOrder = cashfreeOrderId
+      ? await TempOrder.findOne({ cashfreeOrderId, paymentGateway: "cashfree" })
+      : null;
+    let order = cashfreeOrderId
+      ? await Order.findOne({ cashfreeOrderId, paymentGateway: "cashfree" })
+      : null;
+    if (!order && refundId) {
+      const refundRecord = await CashfreeRefund.findOne({ refundId }).lean();
+      if (refundRecord) order = await Order.findById(refundRecord.order);
+    }
+    const paymentMode = tempOrder?.paymentGatewayMode || order?.paymentGatewayMode;
+    if (!paymentMode) return res.status(200).json({ success: true });
+    const settings = await SettingAdmin.findOne().lean();
+    const credentials = getCashfreeCredentials(
+      settings?.PaymentGateways,
+      paymentMode,
+    );
+    const signatureIsValid = verifyCashfreeWebhookSignature({
+      rawBody,
+      timestamp: req.headers["x-webhook-timestamp"],
+      signature: req.headers["x-webhook-signature"],
+      secret: credentials.clientSecret,
+    });
+    if (!signatureIsValid) {
+      return res.status(400).json({ success: false, message: "Invalid Cashfree webhook signature." });
+    }
+
+    const eventKey = cashfreeWebhookEventKey(req.headers["x-webhook-timestamp"], rawBody);
+    eventRecord = await CashfreeWebhookEvent.findOne({ eventKey });
+    if (eventRecord?.processingStatus === "PROCESSED" || eventRecord?.processingStatus === "IGNORED") {
+      return res.status(200).json({ success: true, duplicate: true });
+    }
+    if (!eventRecord) {
+      try {
+        eventRecord = await CashfreeWebhookEvent.create({
+          eventKey,
+          eventType: String(body?.type || "UNKNOWN").slice(0, 100),
+          cashfreeOrderId: cashfreeOrderId || null,
+          processingStatus: "PROCESSING",
+        });
+      } catch (createError) {
+        if (createError?.code === 11000) return res.status(200).json({ success: true, duplicate: true });
+        throw createError;
+      }
+    } else {
+      eventRecord.processingStatus = "PROCESSING";
+      eventRecord.attempts = (eventRecord.attempts || 0) + 1;
+      eventRecord.lastError = null;
+      await eventRecord.save();
+    }
+
+    let processed = false;
+    if (tempOrder) {
+      await exports.verifyPayment(
+        {
+          body: {
+            tempOrderId: tempOrder._id,
+            cashfreeOrderId,
+            cashfreePaymentId: body?.data?.payment?.cf_payment_id || body?.data?.payment?.payment_id || null,
+          },
+          isCashfreeWebhook: true,
+        },
+        {
+          status: (statusCode) => ({
+            json: () => {
+              processed = statusCode < 500;
+            },
+          }),
+        },
+      );
+    }
+    const refundProcessed = await applyCashfreeRefundWebhook(body);
+    processed = processed || refundProcessed || Boolean(order);
+    eventRecord.processingStatus = processed ? "PROCESSED" : "IGNORED";
+    eventRecord.processedAt = new Date();
+    await eventRecord.save();
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("Cashfree webhook error:", error.message || error);
+    if (eventRecord) {
+      await CashfreeWebhookEvent.findByIdAndUpdate(eventRecord._id, {
+        processingStatus: "FAILED",
+        lastError: String(error?.message || "Webhook processing failed").slice(0, 250),
+      }).catch(() => {});
+    }
+    return res.status(500).json({ success: false });
+  }
+};
+
 exports.verifyPayment = async (req, res) => {
   try {
-    const { tempOrderId, paymentStatus, transactionId } = req.body;
+    const { tempOrderId, paymentStatus, transactionId, cashfreeOrderId } = req.body;
 
     console.log("tempOrderId", tempOrderId);
     // 1. Check if temp order exists
@@ -970,21 +1238,58 @@ exports.verifyPayment = async (req, res) => {
     if (!tempOrder)
       return res.status(404).json({ message: "Temp order not found" });
 
-    const paymentResult = await verifyRazorpayPayment(
-      transactionId,
-      tempOrder.razorpayOrderId,
-    );
+    let paymentResult;
+    let verifiedTransactionId = transactionId;
+    if (tempOrder.paymentGateway === "cashfree") {
+      if (!cashfreeOrderId || cashfreeOrderId !== tempOrder.cashfreeOrderId) {
+        return res.status(400).json({ status: false, message: "Cashfree order does not match." });
+      }
+      const settings = await SettingAdmin.findOne().lean();
+      const credentials = getCashfreeCredentials(
+        settings?.PaymentGateways,
+        tempOrder.paymentGatewayMode,
+      );
+      const cashfreeOrder = await fetchCashfreeOrder(credentials, tempOrder.cashfreeOrderId);
+      const paid = isCashfreeOrderPaid(cashfreeOrder, tempOrder.totalPrice);
+      paymentResult = {
+        success: paid,
+        status: cashfreeOrder?.order_status || "UNKNOWN",
+        raw: cashfreeOrder,
+      };
+      verifiedTransactionId = paid ? tempOrder.cashfreeOrderId : "";
+    } else {
+      paymentResult = await verifyRazorpayPayment(
+        transactionId,
+        tempOrder.razorpayOrderId,
+      );
+      verifiedTransactionId = transactionId || paymentResult?.raw?.id || "";
+    }
+
+    const normalizedCashfreeStatus = String(paymentResult.status || "").toUpperCase();
+    const cashfreePaymentStatus = paymentResult.success
+      ? "Successful"
+      : ["FAILED", "EXPIRED", "TERMINATED", "CANCELLED"].includes(normalizedCashfreeStatus)
+        ? "Failed"
+        : "Verification Pending";
 
     await TempOrder.findByIdAndUpdate(
       tempOrderId,
       {
-        transactionId: transactionId || paymentResult?.raw?.id || "",
-        paymentStatus: paymentResult.success
-          ? "Successful"
-          : "Verification Pending",
-
-        razorpayStatus: paymentResult.status,
-        razorpayResponse: paymentResult.raw || {},
+        transactionId: verifiedTransactionId,
+        paymentStatus: tempOrder.paymentGateway === "cashfree"
+          ? cashfreePaymentStatus
+          : paymentResult.success ? "Successful" : "Verification Pending",
+        ...(tempOrder.paymentGateway === "cashfree"
+          ? {
+              cashfreeStatus: paymentResult.status,
+              ...(req.isCashfreeWebhook && req.body.cashfreePaymentId
+                ? { cashfreePaymentId: String(req.body.cashfreePaymentId) }
+                : {}),
+            }
+          : {
+              razorpayStatus: paymentResult.status,
+              razorpayResponse: paymentResult.raw || {},
+            }),
       },
       { new: true },
     );
@@ -996,9 +1301,14 @@ exports.verifyPayment = async (req, res) => {
       });
     }
 
-    const existingOrder = await Order.findOne({
-      transactionId: transactionId || paymentResult?.raw?.id,
-    });
+    const existingOrder = await Order.findOne(
+      tempOrder.paymentGateway === "cashfree"
+        ? { $or: [
+            { transactionId: verifiedTransactionId },
+            { cashfreeOrderId: tempOrder.cashfreeOrderId },
+          ] }
+        : { transactionId: verifiedTransactionId },
+    );
 
     if (existingOrder) {
       const orderResponse = serializeOrderAmounts(existingOrder);
@@ -1042,7 +1352,19 @@ exports.verifyPayment = async (req, res) => {
       offerSummary: tempOrder.offerSummary || null,
 
       storeId: tempOrder.storeId,
-      transactionId: transactionId || paymentResult?.raw?.id || "",
+      transactionId: verifiedTransactionId || "",
+      paymentGateway: tempOrder.paymentGateway || "razorpay",
+      paymentGatewayOrderId: tempOrder.paymentGatewayOrderId || tempOrder.razorpayOrderId,
+      paymentGatewayMode: tempOrder.paymentGatewayMode,
+      cashfreeOrderId: tempOrder.cashfreeOrderId,
+      cashfreeStatus: paymentResult.status,
+      cashfreePaymentId: req.isCashfreeWebhook && req.body.cashfreePaymentId
+        ? String(req.body.cashfreePaymentId)
+        : null,
+      cashfreeEasySplit: tempOrder.cashfreeEasySplit || null,
+      cashfreeRefundReservedMinor: 0,
+      cashfreeRefundVendorReservedMinor: 0,
+      foodSellerTaxPercent: tempOrder.foodSellerTaxPercent,
       paymentStatus: "Successful",
       orderStatus: "Pending",
       ready_in_min: tempOrder.ready_in_min,
@@ -1050,7 +1372,23 @@ exports.verifyPayment = async (req, res) => {
       lastNotifyAt: null,
     };
 
-    const finalOrder = await Order.create(orderData);
+    let finalOrder;
+    try {
+      finalOrder = await Order.create(orderData);
+    } catch (createError) {
+      if (createError?.code !== 11000 || !tempOrder.cashfreeOrderId) throw createError;
+      const duplicateOrder = await Order.findOne({ cashfreeOrderId: tempOrder.cashfreeOrderId });
+      if (!duplicateOrder) throw createError;
+      const orderResponse = serializeOrderAmounts(duplicateOrder);
+      return res.status(200).json({
+        status: true,
+        message: "Order already exists",
+        platformFeeAmount: orderResponse.platformFeeAmount,
+        deliveryCharge: orderResponse.deliveryCharge,
+        totalAmount: orderResponse.totalAmount,
+        order: orderResponse,
+      });
+    }
 
     await telegramOrderLog("📦 ORDER PLACED", {
       orderId: finalOrder.orderId,
@@ -1128,7 +1466,7 @@ exports.verifyPayment = async (req, res) => {
 
     const orderResponse = serializeOrderAmounts(finalOrder);
     return res.status(200).json({
-      status: paymentStatus ? true : false,
+      status: paymentResult.success,
       message: "Payment verified. Order placed successfully.",
       platformFeeAmount: orderResponse.platformFeeAmount,
       deliveryCharge: orderResponse.deliveryCharge,

@@ -16,6 +16,7 @@ const sellerOrAdminAuth = require("../midllerware/sellerOrAdminAuth");
 const typeCategoryResolver = require("../midllerware/typeChecker.js");
 const attachStaffRole = require("../midllerware/attachStaffRole.js");
 const checkPermission = require("../midllerware/checkPermission.js");
+const cashfreeEasySplit = require("../controlers/cashfreeEasySplitControler");
 
 const accessKey = require("../midllerware/accessKey.js")
 
@@ -209,6 +210,7 @@ const {
   getDriver,
   editDriver,
   razorpayWebhook,
+  cashfreeWebhook,
   verifyPayment,
   getOrderDetails,
   deliveryStatus,
@@ -375,7 +377,21 @@ router.post("/placeOrder", placeOrder);
 router.post("/bulkOrder/:productId", verifyToken, bulkOrder);
 router.put("/update-bulk-orders/:id", updateBulkOrders);
 router.post("/razorpay-webhook", razorpayWebhook);
+router.post("/cashfree-webhook", cashfreeWebhook);
 router.post("/verifyPayment", verifyPayment);
+router.get("/admin/cashfree/vendors", attachStaffRole, checkPermission("STORE_VIEW"), cashfreeEasySplit.listAdminCashfreeVendors);
+router.get("/admin/cashfree/vendor-options", attachStaffRole, checkPermission("FINANCE_VIEW"), cashfreeEasySplit.listAdminCashfreeVendorOptions);
+router.post("/admin/cashfree/vendors/:storeId", attachStaffRole, checkPermission("STORE_ADD_EDIT"), cashfreeEasySplit.registerCashfreeVendor);
+router.put("/admin/cashfree/vendors/:storeId/details", attachStaffRole, checkPermission("STORE_ADD_EDIT"), cashfreeEasySplit.updateCashfreeVendorDetails);
+router.get("/admin/cashfree/vendors/:storeId/status", attachStaffRole, checkPermission("STORE_VIEW"), cashfreeEasySplit.syncCashfreeVendorStatus);
+router.put("/admin/cashfree/vendors/:storeId/status", attachStaffRole, checkPermission("STORE_ADD_EDIT"), cashfreeEasySplit.updateCashfreeVendorStatus);
+router.get("/admin/cashfree/payments", attachStaffRole, checkPermission("FINANCE_VIEW"), cashfreeEasySplit.listAdminCashfreePayments);
+router.get("/admin/cashfree/orders/:orderId/split", attachStaffRole, checkPermission("FINANCE_VIEW"), cashfreeEasySplit.syncCashfreeOrderSplit);
+router.post("/admin/cashfree/orders/:orderId/refunds", attachStaffRole, checkPermission("FINANCE_MANAGE"), cashfreeEasySplit.createCashfreeOrderRefund);
+router.post("/admin/cashfree/reconciliation/vendor", attachStaffRole, checkPermission("FINANCE_VIEW"), cashfreeEasySplit.getCashfreeVendorReconciliation);
+router.get("/admin/cashfree/transfers", attachStaffRole, checkPermission("FINANCE_VIEW"), cashfreeEasySplit.listAdminCashfreeTransfers);
+router.post("/admin/cashfree/vendors/:storeId/transfers", attachStaffRole, checkPermission("FINANCE_MANAGE"), cashfreeEasySplit.createCashfreeVendorTransfer);
+router.get("/seller/cashfree/financials", sellerOrAdminAuth, cashfreeEasySplit.getSellerCashfreeFinancials);
 router.post("/filter", filter);
 router.post("/createStore", upload, createStore);
 router.post("/Product/bulk", uploadCsv, bulkProductUpload);

@@ -10,6 +10,26 @@ const {
   withGlobalSettingDefaults,
 } = require("../utils/globalDelivery");
 const { validateShippingPlatforms } = require("../utils/shippingPlatforms");
+
+const sanitizeCashfreeSettings = (settings) => {
+  if (!settings) return settings;
+  const value = typeof settings.toObject === "function" ? settings.toObject() : { ...settings };
+  const paymentGateways = value.PaymentGateways;
+  if (!paymentGateways?.Cashfree) return value;
+
+  const cashfree = { ...paymentGateways.Cashfree };
+  for (const mode of ["test", "live"]) {
+    const modeSettings = cashfree[mode] || {};
+    cashfree[mode] = {
+      ...modeSettings,
+      clientSecretConfigured: Boolean(modeSettings.clientSecret),
+    };
+    delete cashfree[mode].clientSecret;
+  }
+  value.PaymentGateways = { ...paymentGateways, Cashfree: cashfree };
+  return value;
+};
+
 exports.getSettings = async (req, res) => {
   try {
     const settings = await SettingAdmin.findOne().lean();
@@ -19,7 +39,7 @@ exports.getSettings = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Settings", settings: { ...withGlobalSettingDefaults(settings), Platform_Fee_Fixed: settings.Platform_Fee_Fixed ?? 0 } });
+      .json({ message: "Settings", settings: sanitizeCashfreeSettings({ ...withGlobalSettingDefaults(settings), Platform_Fee_Fixed: settings.Platform_Fee_Fixed ?? 0 }) });
   } catch (error) {
     console.error("Get User Settings Error =>", error);
     return res
@@ -37,7 +57,7 @@ exports.settings = async (req, res) => {
     if (!settingsDoc) {
       return res.status(404).json({ message: "Settings not found" });
     }
-    const settings = withGlobalSettingDefaults(settingsDoc);
+    const settings = sanitizeCashfreeSettings(withGlobalSettingDefaults(settingsDoc));
     settings.Platform_Fee_Fixed = Number(settings.Platform_Fee_Fixed ?? 0);
 
     const pages = await Page.find({
@@ -99,7 +119,9 @@ exports.settings = async (req, res) => {
 
 exports.getSmsType = async (req, res) => {
   try {
-    const setting = (await SettingAdmin.find().lean()).map(withGlobalSettingDefaults);
+    const setting = (await SettingAdmin.find().lean())
+      .map(withGlobalSettingDefaults)
+      .map(sanitizeCashfreeSettings);
     return res.status(200).json({ message: "Setting", setting });
   } catch {
     console.error("Get User Settings Error =>", error);
@@ -121,6 +143,29 @@ exports.adminSetting = async (req, res) => {
     if (feeError) return res.status(400).json({ message: feeError });
 
     const currentSettings = await SettingAdmin.findOne().lean();
+
+    // The Admin form intentionally sends Cashfree secrets as write-only values.
+    // Preserve existing secrets when a field is left blank so changing gateway
+    // or test/live mode does not erase credentials.
+    const incomingCashfree = updateFields.PaymentGateways?.Cashfree;
+    if (incomingCashfree) {
+      const existingCashfree = currentSettings?.PaymentGateways?.Cashfree || {};
+      const mergedCashfree = { ...existingCashfree, ...incomingCashfree };
+      for (const mode of ["test", "live"]) {
+        const incomingMode = incomingCashfree[mode] || {};
+        const existingMode = existingCashfree[mode] || {};
+        const requestedSecret = String(incomingMode.clientSecret || "").trim();
+        mergedCashfree[mode] = {
+          ...existingMode,
+          ...incomingMode,
+          clientSecret: requestedSecret || existingMode.clientSecret || "",
+        };
+      }
+      updateFields.PaymentGateways = {
+        ...updateFields.PaymentGateways,
+        Cashfree: mergedCashfree,
+      };
+    }
 
     // Global (All India) settings: validate before anything is saved
     const globalCheck = validateGlobalSettings(updateFields, currentSettings);
@@ -186,7 +231,7 @@ exports.adminSetting = async (req, res) => {
 
     return res.status(200).json({
       message: "Admin settings updated successfully",
-      settings: updatedSetting,
+      settings: sanitizeCashfreeSettings(updatedSetting),
     });
   } catch (error) {
     console.error("Admin Settings Error =>", error);

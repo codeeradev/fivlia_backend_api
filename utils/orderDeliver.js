@@ -37,7 +37,7 @@ module.exports.deliverOrderCommon = async ({
   const store = storeBefore;
 
   const setting = await SettingAdmin.findOne().lean();
-  const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
+  const foodSellerTaxPercent = Number(order.foodSellerTaxPercent ?? setting?.foodSellerTaxPercent ?? 5);
   const {
     totalCommission,
     itemTotal,
@@ -49,6 +49,12 @@ module.exports.deliverOrderCommon = async ({
     foodSellerTaxPercent,
   });
 
+  const cashfreeVendorPaidDirectly =
+    order.paymentGateway === "cashfree" && order.cashfreeEasySplit?.enabled === true;
+
+  // Cashfree Easy Split pays the vendor directly. Do not also credit the
+  // legacy Fivlia wallet when this order is delivered.
+  if (!cashfreeVendorPaidDirectly) {
   // ===> Handle seller-sponsored free delivery payout
   const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
 
@@ -101,6 +107,7 @@ module.exports.deliverOrderCommon = async ({
     storeId: order.storeId,
     description: transactionDescription,
   });
+  }
 
   // 🏛️ Admin wallet commission
   if (!store.Authorized_Store && totalAdminDeduction > 0) {

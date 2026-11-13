@@ -425,7 +425,7 @@ exports.driverOrderStatus = async (req, res) => {
         const setting = await SettingAdmin.findOne().lean();
 
         // 1. Apply the extra 5% tax only for food sellers and keep old commission flow unchanged.
-        const foodSellerTaxPercent = Number(setting?.foodSellerTaxPercent || 5);
+        const foodSellerTaxPercent = Number(order.foodSellerTaxPercent ?? setting?.foodSellerTaxPercent ?? 5);
 
         const {
           totalCommission,
@@ -439,6 +439,12 @@ exports.driverOrderStatus = async (req, res) => {
           foodSellerTaxPercent,
         });
 
+        const cashfreeVendorPaidDirectly =
+          order.paymentGateway === "cashfree" && order.cashfreeEasySplit?.enabled === true;
+
+        // Cashfree Easy Split pays the vendor directly. Do not also credit the
+        // legacy Fivlia wallet when this order is delivered.
+        if (!cashfreeVendorPaidDirectly) {
         // ===> Handle seller-sponsored free delivery payout
         const sellerSponsoredPayout = order.sellerSponsoredDeliveryPayout || 0;
 
@@ -498,6 +504,7 @@ exports.driverOrderStatus = async (req, res) => {
           storeId: order.storeId,
           description: transactionDescription,
         });
+        }
         // console.log(data)
         // 2. Credit admin with the old commission plus the new food-seller tax in the same settlement step.
         if (!store.Authorized_Store && totalAdminDeduction > 0) {

@@ -48,6 +48,15 @@ const orderSchema = new mongoose.Schema(
     thermalInvoice: { type: String },
     deliveryPayout: Number,
     transactionId: String,
+    paymentGateway: { type: String, default: "razorpay" },
+    paymentGatewayOrderId: String,
+    paymentGatewayMode: { type: String, enum: ["test", "live"] },
+    cashfreeOrderId: String,
+    cashfreeStatus: String,
+    cashfreePaymentId: String,
+    cashfreeEasySplit: { type: mongoose.Schema.Types.Mixed, default: null },
+    cashfreeRefundReservedMinor: { type: Number, default: 0 },
+    cashfreeRefundVendorReservedMinor: { type: Number, default: 0 },
     deliverBy: String,
     note: String,
     instructionStatus: {
@@ -133,6 +142,7 @@ const orderSchema = new mongoose.Schema(
 // Dispatch and status queries use these fields on every offer/accept cycle.
 orderSchema.index({ orderId: 1 });
 orderSchema.index({ orderStatus: 1, "driver.driverId": 1 });
+orderSchema.index({ cashfreeOrderId: 1 }, { unique: true, sparse: true });
 
 // models/TempOrder.js
 
@@ -168,6 +178,15 @@ const TempOrderSchema = new mongoose.Schema(
     totalPrice: Number,
     deliveryPayout: Number,
     transactionId: { type: String },
+    paymentGateway: { type: String, default: "razorpay" },
+    paymentGatewayOrderId: String,
+    paymentGatewayMode: { type: String, enum: ["test", "live"] },
+    cashfreeOrderId: String,
+    cashfreeStatus: String,
+    cashfreePaymentId: String,
+    cashfreeEasySplit: { type: mongoose.Schema.Types.Mixed, default: null },
+    cashfreeRefundReservedMinor: { type: Number, default: 0 },
+    cashfreeRefundVendorReservedMinor: { type: Number, default: 0 },
     razorpayStatus: { type: String },
     razorpayResponse: { type: Object },
     razorpayOrderId: String,
@@ -197,6 +216,8 @@ const TempOrderSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+TempOrderSchema.index({ cashfreeOrderId: 1 }, { unique: true, sparse: true });
 
 module.exports = {
   Order: mongoose.model("Order", orderSchema),
